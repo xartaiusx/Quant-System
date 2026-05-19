@@ -383,6 +383,46 @@ engine loop. Common failures:
 - Missing bar fields: review the contract report before future strategy work.
 - Partial feed: review missing-symbol diagnostics in the frame context sample.
 
+## Offline Inert Strategy Runner
+
+```bash
+python -m trader.cli strategy-runner --symbols SPY,AAPL
+python -m trader.cli strategy-runner --symbols SPY,AAPL --alignment union
+python -m trader.cli strategy-runner --symbols SPY,AAPL --alignment intersection
+python -m trader.cli strategy-runner --symbols SPY,AAPL --bar-size "5 mins" --what-to-show TRADES
+scripts/run-strategy-runner.sh
+```
+
+Expected behavior:
+
+- opens no broker socket
+- loads local snapshots through the offline historical loader
+- builds an aligned feed with the broker-free data adapter
+- builds a strategy frame context for each feed frame
+- invokes only the no-op strategy diagnostic contract
+- records one diagnostic result per frame
+- writes `reports/strategy_runner_<timestamp>.json` and `.md`
+- updates `reports/latest_strategy_runner.json` and `.md`
+- places no orders and invokes no order APIs
+- does not perform real strategy evaluation, generate buy/sell/hold signals,
+  generate order intents, simulate orders, simulate fills, maintain portfolio
+  accounting, or compute P&L
+
+Workflow relationship:
+
+```text
+history-snapshot -> history-load -> backtest-feed -> backtest-run -> strategy-contract -> strategy-runner
+```
+
+`strategy-runner` exercises only the no-op contract. It is runner plumbing for a
+future explicitly approved strategy-evaluation milestone; it is not a trading
+decision engine. Common failures:
+
+- No snapshots found: run or review `history-index` and `history-load`.
+- Empty feed: inspect the snapshot and loader reports.
+- Failed feed: fix loader/feed errors before running the diagnostic path.
+- Partial feed: review missing-symbol summaries in the runner report.
+
 ## Dry-Run Plan
 
 ```bash
@@ -444,6 +484,6 @@ If `broker-probe` fails:
 
 ## Safe Next Milestones
 
-1. Add an inert strategy-runner proposal that keeps generated signals disabled by default.
+1. Review inert strategy-runner reports across partial and gapped datasets.
 2. Add read-only market-data subscription diagnostics behind explicit flags.
-3. Add a paper execution design document before enabling any paper submission.
+3. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

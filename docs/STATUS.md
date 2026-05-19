@@ -21,6 +21,7 @@
 - Milestone 8 implemented: broker-free backtest data feed scaffold with union/intersection alignment, missing-bar diagnostics, and feed reports.
 - Milestone 9 implemented: broker-free backtest engine skeleton with deterministic frame replay diagnostics and run reports.
 - Milestone 10 implemented: broker-free strategy interface contract scaffold with no-op frame diagnostics and contract reports.
+- Milestone 11 implemented: broker-free inert strategy runner scaffold with per-frame no-op diagnostics and runner reports.
 - Optional `ibapi` dependency check script.
 - Deterministic mock data.
 - Momentum and mean-reversion strategy modules.
@@ -50,6 +51,7 @@
 - Backtest feeds evaluating strategies, simulating orders, or calculating P&L.
 - Backtest runs evaluating strategies, simulating orders, calculating fills, maintaining portfolio accounting, or calculating P&L.
 - Strategy contract checks performing real signal generation, simulating orders, calculating fills, maintaining portfolio accounting, or calculating P&L.
+- Strategy runner checks performing real strategy evaluation, generating buy/sell/hold signals, generating order intents, simulating orders or fills, maintaining portfolio accounting, or calculating P&L.
 
 ## Current Blockers
 
@@ -67,9 +69,10 @@
 - Offline `backtest-feed` reads local historical datasets only, reports `broker_contacted=false`, and does not evaluate strategies, simulate orders, or compute P&L.
 - Offline `backtest-run` replays local feed frames only, reports `broker_contacted=false`, `strategy_evaluated=false`, `orders_simulated=false`, and `pnl_calculated=false`.
 - Offline `strategy-contract` validates no-op interface metadata and frame contexts only, reports `broker_contacted=false`, `evaluated=false`, `generated_signals=false`, `generated_orders=false`, `orders_simulated=false`, and `pnl_calculated=false`.
+- Offline `strategy-runner` routes local feed frames through no-op diagnostics only, reports `broker_contacted=false`, `diagnostic_only=true`, `noop_strategy_observed=true`, `real_strategy_evaluated=false`, `generated_signals=false`, `generated_orders=false`, `orders_simulated=false`, `fills_simulated=false`, `portfolio_accounting=false`, and `pnl_calculated=false`.
 
 ## Next Recommended Steps
 
-1. Add an inert strategy-runner proposal that keeps generated signals disabled by default.
-2. Review strategy contract reports across partial and gapped datasets before adding real evaluation.
+1. Review inert strategy-runner reports across partial and gapped datasets before adding real evaluation.
+2. Design an explicitly approved signal-evaluation milestone without order intents or execution.
 3. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

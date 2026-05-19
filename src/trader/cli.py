@@ -38,6 +38,8 @@ from trader.models import (
     HistoricalReadinessReport,
     HistoricalSnapshotLoadRequest,
     HistoricalSnapshotReport,
+    InertStrategyRunnerReport,
+    InertStrategyRunnerRequest,
     MarketDataDiagnosticReport,
     MarketDataRequestType,
     MarketQuote,
@@ -50,6 +52,7 @@ from trader.reporting.journal import Journal
 from trader.risk.rules import evaluate_trade_plans
 from trader.strategy import get_strategy
 from trader.strategy.interface import build_strategy_contract_report
+from trader.strategy.runner import build_inert_strategy_runner_report
 
 app = typer.Typer(
     help="Safety-first IBKR quantitative trading foundation. No command places orders.",
@@ -667,6 +670,95 @@ def strategy_contract(
         raise typer.Exit(code=1)
 
 
+@app.command("strategy-runner")
+def strategy_runner(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols to replay through no-op diagnostics."),
+    ] = "SPY,AAPL",
+    alignment: Annotated[
+        BacktestAlignmentMode,
+        typer.Option("--alignment", help="Timestamp alignment mode."),
+    ] = BacktestAlignmentMode.UNION,
+    bar_size: Annotated[
+        str | None,
+        typer.Option("--bar-size", help="Optional bar-size filter."),
+    ] = None,
+    what_to_show: Annotated[
+        str | None,
+        typer.Option("--what-to-show", help="Optional data-type filter."),
+    ] = None,
+    latest: Annotated[
+        bool,
+        typer.Option("--latest/--all", help="Load latest matching snapshot per symbol."),
+    ] = True,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict/--non-strict", help="Fail on malformed records."),
+    ] = False,
+    snapshot_timestamp: Annotated[
+        str | None,
+        typer.Option("--snapshot-timestamp", help="Optional YYYYMMDDTHHMMSSZ filter."),
+    ] = None,
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical snapshot root."),
+    ] = Path("data/historical"),
+) -> None:
+    """Run inert no-op strategy diagnostics over a broker-free feed."""
+
+    request = InertStrategyRunnerRequest(
+        symbols=parse_symbols(symbols),
+        alignment_mode=alignment,
+        requested_bar_size=bar_size,
+        requested_what_to_show=what_to_show,
+        latest=latest,
+        strict=strict,
+        snapshot_timestamp=snapshot_timestamp,
+        base_data_path=base_path.as_posix(),
+    )
+    loader_request = HistoricalSnapshotLoadRequest(
+        symbols=request.symbols,
+        bar_size=request.requested_bar_size,
+        what_to_show=request.requested_what_to_show,
+        latest=request.latest,
+        strict=request.strict,
+        snapshot_timestamp=request.snapshot_timestamp,
+        base_data_path=request.base_data_path,
+    )
+    loader_report = load_historical_snapshots(loader_request)
+    datasets = [
+        result.dataset
+        for result in loader_report.results
+        if result.dataset is not None
+    ]
+    feed = build_backtest_feed(datasets, alignment_mode=request.alignment_mode)
+    feed = feed.model_copy(
+        update={
+            "warnings": list(dict.fromkeys([*feed.warnings, *loader_report.warnings])),
+            "errors": list(dict.fromkeys([*feed.errors, *loader_report.errors])),
+        }
+    )
+    report = build_inert_strategy_runner_report(feed, request)
+    json_path, md_path = Journal().write_cycle("strategy_runner", _report_dict(report))
+
+    console.print("[bold]Broker-free inert strategy runner[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    console.print("Diagnostic-only no-op strategy contract path.")
+    console.print(
+        "No real strategy evaluation, signal generation, order simulation, fill "
+        "simulation, broker routing, portfolio accounting, or P&L calculation "
+        "was performed."
+    )
+    _print_strategy_runner_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("history-snapshot")
 def history_snapshot(
     symbols: Annotated[
@@ -1033,6 +1125,7 @@ def _report_dict(
         | HistoricalLoaderReport
         | HistoricalReadinessReport
         | HistoricalSnapshotReport
+        | InertStrategyRunnerReport
         | MarketDataDiagnosticReport
         | StrategyContractReport
     ),
@@ -1175,6 +1268,67 @@ def _print_strategy_contract_result(report: StrategyContractReport) -> None:
             console.print(f"- {escape(warning)}")
     if report.errors:
         console.print("[red]Strategy contract errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_strategy_runner_result(report: InertStrategyRunnerReport) -> None:
+    diagnostics = report.diagnostics
+    table = Table(title="Inert Strategy Runner")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Strategy", report.metadata.strategy_name)
+    table.add_row("Version", report.metadata.strategy_version)
+    table.add_row("Symbols", ", ".join(report.symbols_requested))
+    table.add_row("Alignment", _enum_value(report.request.alignment_mode))
+    table.add_row("Diagnostic only", str(report.diagnostic_only).lower())
+    table.add_row("No-op strategy observed", str(report.noop_strategy_observed).lower())
+    table.add_row(
+        "Real strategy evaluated",
+        str(report.real_strategy_evaluated).lower(),
+    )
+    table.add_row("Generated signals", str(report.generated_signals).lower())
+    table.add_row("Generated orders", str(report.generated_orders).lower())
+    table.add_row("Orders simulated", str(report.orders_simulated).lower())
+    table.add_row("Fills simulated", str(report.fills_simulated).lower())
+    table.add_row("P&L calculated", str(report.pnl_calculated).lower())
+    table.add_row("Portfolio accounting", str(report.portfolio_accounting).lower())
+    table.add_row("Broker contacted", str(report.broker_contacted).lower())
+    table.add_row("Order routing", "disabled")
+    table.add_row("Final status", report.final_status)
+    table.add_row("Frame count", str(diagnostics.frame_count))
+    table.add_row("Contexts built", str(diagnostics.contexts_built))
+    table.add_row("Diagnostics emitted", str(diagnostics.diagnostics_emitted))
+    table.add_row(
+        "First timestamp",
+        diagnostics.first_timestamp.isoformat() if diagnostics.first_timestamp else "n/a",
+    )
+    table.add_row(
+        "Last timestamp",
+        diagnostics.last_timestamp.isoformat() if diagnostics.last_timestamp else "n/a",
+    )
+    table.add_row(
+        "Frames with missing symbols",
+        str(diagnostics.missing_symbols_by_frame_count),
+    )
+    console.print(table)
+
+    missing_table = Table(title="Runner Missing Symbols")
+    missing_table.add_column("Symbol")
+    missing_table.add_column("Missing frames")
+    for symbol in diagnostics.symbols:
+        missing_table.add_row(
+            symbol,
+            str(diagnostics.missing_symbols_by_symbol.get(symbol, 0)),
+        )
+    console.print(missing_table)
+
+    if report.warnings:
+        console.print("[yellow]Strategy runner warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Strategy runner errors[/red]")
         for error in report.errors:
             console.print(f"- {escape(error)}")
 

@@ -23,6 +23,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Broker-free backtest data feed scaffold for aligning offline historical datasets.
 - Broker-free backtest engine skeleton for deterministic data-frame replay diagnostics.
 - Broker-free strategy interface contract scaffold with no-op diagnostics only.
+- Broker-free inert strategy runner scaffold that routes frames through no-op diagnostics only.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
 
@@ -40,6 +41,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Order simulation or P&L from offline snapshot datasets.
 - Fill simulation, portfolio accounting, or P&L from backtest runs.
 - Real strategy evaluation, signal generation, order simulation, or P&L from strategy-contract checks.
+- Real strategy evaluation, buy/sell/hold signal generation, order-intent generation, fill simulation, portfolio accounting, or P&L from strategy-runner checks.
 
 ## Safety Design
 
@@ -114,6 +116,8 @@ python -m trader.cli backtest-run --symbols SPY,AAPL
 python -m trader.cli backtest-run --symbols SPY,AAPL --alignment intersection
 python -m trader.cli strategy-contract --symbols SPY,AAPL
 python -m trader.cli strategy-contract --symbols SPY,AAPL --alignment intersection
+python -m trader.cli strategy-runner --symbols SPY,AAPL
+python -m trader.cli strategy-runner --symbols SPY,AAPL --alignment intersection
 scripts/check-ibapi.sh
 scripts/run-broker-preflight.sh
 python -m trader.cli account --mock
@@ -140,6 +144,7 @@ scripts/run-history-load.sh
 scripts/run-backtest-feed.sh
 scripts/run-backtest-run.sh
 scripts/run-strategy-contract.sh
+scripts/run-strategy-runner.sh
 ```
 
 ## TWS Paper Notes
@@ -178,6 +183,12 @@ compute P&L.
 strategy contract against local feed frames, writes contract reports, and does
 not contact IBKR, perform real strategy evaluation, generate signals, simulate
 orders, or compute P&L.
+
+`strategy-runner` is an offline inert runner scaffold. It routes local feed
+frames through the no-op strategy diagnostic contract, writes runner reports, and
+does not contact IBKR, evaluate real strategies, generate buy/sell/hold signals,
+create order intents, simulate orders or fills, perform portfolio accounting, or
+compute P&L.
 
 ## References
 

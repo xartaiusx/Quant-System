@@ -100,6 +100,14 @@ class BacktestRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class InertStrategyRunnerStatus(StrEnum):
+    """Offline inert strategy runner states for no-op diagnostics."""
+
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
 class Instrument(SerializableModel):
     """Tradable instrument descriptor."""
 
@@ -1300,6 +1308,160 @@ class StrategyContractReport(SerializableModel):
         "This command validates the strategy interface contract only. No real "
         "strategy evaluation, signal generation, order simulation, broker routing, "
         "or P&L calculation was performed."
+    )
+    final_status: str = "unknown"
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class InertStrategyRunnerRequest(SerializableModel):
+    """Offline inert no-op strategy runner request."""
+
+    symbols: list[str] = Field(default_factory=list)
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    requested_bar_size: str | None = None
+    requested_what_to_show: str | None = None
+    latest: bool = True
+    snapshot_timestamp: str | None = None
+    strict: bool = False
+    base_data_path: str = "data/historical"
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        return [symbol.strip().upper() for symbol in value if symbol.strip()]
+
+    @field_validator("requested_bar_size", "requested_what_to_show", "snapshot_timestamp")
+    @classmethod
+    def normalize_optional_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("requested_what_to_show")
+    @classmethod
+    def normalize_optional_what_to_show(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+
+class InertStrategyFrameResult(SerializableModel):
+    """Per-frame no-op strategy runner diagnostic result."""
+
+    strategy_name: str
+    strategy_version: str
+    timestamp: datetime
+    frame_index: int
+    available_symbols: list[str] = Field(default_factory=list)
+    missing_symbols: list[str] = Field(default_factory=list)
+    diagnostic: StrategyContractDiagnostic
+    diagnostic_only: bool = True
+    noop_strategy_observed: bool = True
+    real_strategy_evaluated: bool = False
+    generated_signals: bool = False
+    generated_orders: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+
+class InertStrategyRunnerDiagnostics(SerializableModel):
+    """Run-level diagnostics from the inert no-op strategy runner."""
+
+    strategy_name: str = "noop_contract"
+    strategy_version: str = "0.1.0"
+    symbols: list[str] = Field(default_factory=list)
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    feed_status: BacktestFeedStatus = BacktestFeedStatus.FAILED
+    runner_status: InertStrategyRunnerStatus = InertStrategyRunnerStatus.FAILED
+    frame_count: int = 0
+    contexts_built: int = 0
+    diagnostics_emitted: int = 0
+    first_timestamp: datetime | None = None
+    last_timestamp: datetime | None = None
+    missing_symbols_by_frame_count: int = 0
+    missing_symbols_by_symbol: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    diagnostic_only: bool = True
+    noop_strategy_observed: bool = True
+    real_strategy_evaluated: bool = False
+    generated_signals: bool = False
+    generated_orders: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+
+class InertStrategyRunnerResult(SerializableModel):
+    """Result of replaying feed frames through the no-op strategy contract."""
+
+    ok: bool
+    request: InertStrategyRunnerRequest
+    metadata: StrategyMetadata
+    feed_summary: BacktestDataFeedSummary | None = None
+    diagnostics: InertStrategyRunnerDiagnostics
+    frame_results: list[InertStrategyFrameResult] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    diagnostic_only: bool = True
+    noop_strategy_observed: bool = True
+    real_strategy_evaluated: bool = False
+    generated_signals: bool = False
+    generated_orders: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class InertStrategyRunnerReport(SerializableModel):
+    """Report for the broker-free inert strategy runner scaffold."""
+
+    title: str = "Broker-free Inert Strategy Runner"
+    report_type: str = "strategy_runner"
+    command: str = "strategy-runner"
+    ok: bool
+    request: InertStrategyRunnerRequest
+    metadata: StrategyMetadata
+    symbols_requested: list[str] = Field(default_factory=list)
+    feed_summary: BacktestDataFeedSummary | None = None
+    result: InertStrategyRunnerResult
+    diagnostics: InertStrategyRunnerDiagnostics
+    frame_results: list[InertStrategyFrameResult] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    diagnostic_only: bool = True
+    noop_strategy_observed: bool = True
+    real_strategy_evaluated: bool = False
+    generated_signals: bool = False
+    generated_orders: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This inert strategy runner report reads local historical snapshots only "
+        "and does not contact a broker."
+    )
+    no_execution_statement: str = (
+        "This run exercised the no-op strategy contract only. No real strategy "
+        "evaluation, signal generation, order simulation, broker routing, "
+        "portfolio accounting, or P&L calculation was performed."
     )
     final_status: str = "unknown"
     timestamp: datetime = Field(default_factory=utc_now)

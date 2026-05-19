@@ -95,6 +95,13 @@ It never contacts a broker, invokes order APIs, performs real signal generation,
 simulates orders, calculates fills, maintains portfolio accounting, computes
 P&L, submits to the paper executor, or routes execution.
 
+Milestone 11 adds a broker-free inert strategy runner scaffold. `strategy-runner`
+routes offline feed frames through the no-op strategy diagnostic contract only.
+It never contacts a broker, invokes order APIs, performs real strategy
+evaluation, generates buy/sell/hold signals, creates order intents, simulates
+orders, simulates fills, maintains portfolio accounting, computes P&L, submits
+to the paper executor, or routes execution.
+
 ## Sensitive Data
 
 Never commit:

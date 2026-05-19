@@ -873,3 +873,127 @@ Completion criteria:
 - Reports are written and state that no real strategy evaluation, signal generation, order simulation, broker routing, or P&L calculation was performed.
 - No broker calls or order APIs are added.
 - Paper execution remains blocked, live trading remains rejected, and generated reports remain ignored.
+
+## Milestone 11 - Broker-free inert strategy runner scaffold
+
+Baseline before edits:
+
+- Milestone 10 / `v0.8.0-broker-free-strategy-contract` defines the broker-free no-op strategy contract and `strategy-contract` CLI.
+- `backtest-run` and `strategy-contract` are offline-only and operate from local historical snapshots.
+- This milestone adds runner plumbing only. It must not evaluate real strategies, generate buy/sell/hold signals, create order intents, simulate orders or fills, calculate P&L, perform portfolio accounting, call brokers, activate paper execution, or enable live trading.
+- Unit tests must use fixture `BacktestDataFeed` objects or temporary offline snapshots and must not require IB Gateway or `ibapi`.
+
+Files expected to change:
+
+- `docs/IMPLEMENTATION_PLAN.md`
+- `src/trader/models.py`
+- `src/trader/strategy/runner.py`
+- `src/trader/cli.py`
+- `src/trader/reporting/reports.py`
+- `tests/test_strategy_runner.py`
+- `README.md`
+- `docs/RUNBOOK.md`
+- `docs/SAFETY.md`
+- `docs/STATUS.md`
+- `AGENTS.md`
+- `scripts/run-strategy-runner.sh`
+
+Inert runner design:
+
+- Consume a broker-free `BacktestDataFeed`.
+- Iterate feed frames in deterministic timestamp order.
+- Build a `StrategyFrameContext` for each frame using the existing no-op contract context helper.
+- Invoke only the `NoOpStrategyContract.observe()` diagnostic path.
+- Record per-frame diagnostic results and runner-level counts for frame count, contexts built, diagnostics emitted, first/last timestamp, and missing-symbol summaries.
+- Keep the runner path independent from `trader.broker`, `ibapi`, execution, portfolio, risk, and real signal-generating strategy modules.
+
+No-op strategy diagnostic flow:
+
+- The runner calls only the existing no-op strategy contract.
+- Each frame emits diagnostics that say the frame was observed.
+- Required report/result flags are fixed: `diagnostic_only=true`, `noop_strategy_observed=true`, `real_strategy_evaluated=false`, `generated_signals=false`, `generated_orders=false`, `orders_simulated=false`, `fills_simulated=false`, `pnl_calculated=false`, `portfolio_accounting=false`, `broker_contacted=false`, `order_routing_enabled=false`, and `no_order_guarantee=true`.
+- No real strategy hooks, signals, order intents, simulated fills, portfolio accounting, or P&L fields beyond explicit false safety flags are introduced.
+
+Frame context handling:
+
+- Preserve timestamp, frame index, available symbols, missing symbols, bars by symbol, feed status, alignment mode, feed frame count, and feed summary.
+- Missing symbols are recorded per frame and aggregated by symbol.
+- Partial feeds may run with warnings; failed or empty feeds fail cleanly with structured errors.
+- The runner must not mutate the source feed.
+
+Result and report models:
+
+- Add serializable models for `InertStrategyRunnerRequest`, `InertStrategyFrameResult`, `InertStrategyRunnerDiagnostics`, `InertStrategyRunnerResult`, and `InertStrategyRunnerReport`.
+- Include strategy metadata, requested symbols, alignment mode, counts, timestamps, missing-symbol summaries, warnings/errors, final status, and all required safety flags.
+
+CLI behavior:
+
+- Add `python -m trader.cli strategy-runner --symbols SPY,AAPL`.
+- Support `--alignment union`, `--alignment intersection`, `--bar-size`, and `--what-to-show`.
+- The command loads local snapshots through the offline historical loader, builds a broker-free feed, runs the inert no-op diagnostic runner, writes a report, and prints runner diagnostics.
+- The command must clearly state that it is diagnostic-only and does not perform real strategy evaluation.
+
+Reporting behavior:
+
+- Write `reports/strategy_runner_<timestamp>.json` and `.md`.
+- Maintain `reports/latest_strategy_runner.json` and `.md`.
+- Reports include symbols requested, snapshot criteria, alignment mode, source feed summary, strategy metadata, runner status, frame count, contexts built, diagnostics emitted, first/last timestamp, missing-symbol summaries, warnings/errors, and all safety flags.
+- Reports include the explicit statement: "This run exercised the no-op strategy contract only. No real strategy evaluation, signal generation, order simulation, broker routing, portfolio accounting, or P&L calculation was performed."
+
+Tests to add:
+
+- Runner runs on ready feed and handles partial feed warnings.
+- Runner fails cleanly on empty and failed feeds.
+- Runner builds one frame context and emits one diagnostic per frame.
+- Runner records first/last timestamp and missing symbols.
+- Result and report serialize cleanly.
+- CLI `strategy-runner` runs with fixture data.
+- Runner path has no broker or `ibapi` imports.
+- Runner path contains no forbidden order API usage and does not generate real signals, orders, fills, portfolio accounting, or P&L.
+- Required safety flags remain fixed.
+- Paper executor remains blocked and live ports remain rejected.
+
+Safety checks:
+
+- Do not add broker calls, socket connection attempts, `trader.broker` imports, `ibapi` imports, order APIs, real strategy evaluation, buy/sell/hold signal generation, order-intent generation, order simulation, fill simulation, P&L calculation, portfolio accounting, paper execution activation, or live trading.
+- Keep generated reports and generated snapshots ignored.
+
+Validation commands:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
+.venv/bin/mypy src
+.venv/bin/python -m trader.cli --help
+.venv/bin/python -m trader.cli status
+.venv/bin/python -m trader.cli history-index || true
+.venv/bin/python -m trader.cli history-load --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-feed --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-run --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli strategy-contract --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli strategy-runner --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli strategy-runner --symbols SPY,AAPL --alignment intersection || true
+scripts/run-strategy-runner.sh || true
+grep -R "placeOrder" -n src tests docs scripts || true
+grep -R "cancelOrder" -n src tests docs scripts || true
+grep -R "reqGlobalCancel" -n src tests docs scripts || true
+grep -R "ALLOW_PAPER_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "ALLOW_LIVE_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "4001\|7496" -n src tests docs scripts .env.example || true
+grep -R "trader.broker" -n src/trader/strategy src/trader/backtest tests/test_strategy_runner.py || true
+grep -R "IBKRReadOnlyClient\|ibapi" -n src/trader/strategy src/trader/backtest tests/test_strategy_runner.py || true
+grep -R "place_order\|submit_order\|order_intent\|fill\|portfolio\|pnl\|P&L\|profit\|loss" -n src/trader/strategy tests/test_strategy_runner.py || true
+grep -R "buy\|sell\|hold\|signal" -n src/trader/strategy/runner.py tests/test_strategy_runner.py || true
+git diff --check
+```
+
+Completion criteria:
+
+- Unit tests pass without IB Gateway.
+- Strategy runner tests use fixture feeds.
+- `strategy-runner` works offline with local snapshots when present.
+- No-op diagnostics run once per frame.
+- Reports are written and state that no real strategy evaluation, signal generation, order simulation, broker routing, portfolio accounting, or P&L calculation was performed.
+- No broker calls or order APIs are added.
+- No order-intent generation, fill simulation, P&L calculation, or portfolio accounting is added.
+- Paper execution remains blocked, live trading remains rejected, and generated reports remain ignored.
