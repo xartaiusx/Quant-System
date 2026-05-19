@@ -25,6 +25,7 @@ The current project is infrastructure only. It must support research, signal gen
 - Strategy interface scaffold commands must remain broker-free and must not generate real signals, simulate orders, or calculate P&L until explicitly approved in a future milestone.
 - Strategy runner commands must remain inert/no-op until a future milestone explicitly approves real signal generation. They must not generate orders, simulate fills, calculate P&L, or contact brokers.
 - Offline stress tests may generate synthetic fixture data only and must remain broker-free.
+- Signal contract commands must remain disabled-by-default and diagnostics-only until a future milestone explicitly approves signal generation. They must not generate order intents, simulate fills, calculate P&L, or contact brokers.
 - Do not commit `.env`, secrets, account numbers, API credentials, tokens, or sensitive logs.
 - Missing or invalid config must fail closed.
 

@@ -1115,3 +1115,131 @@ Completion criteria:
 - No broker calls or order APIs are added.
 - No real strategy evaluation, signal generation, order-intent generation, order simulation, fill simulation, P&L calculation, or portfolio accounting is added.
 - Paper execution remains blocked, live trading remains rejected, and generated reports remain ignored.
+
+## Milestone 13 - Broker-free signal contract scaffold
+
+Baseline before edits:
+
+- Milestone 12 / `v0.10.0-offline-fixture-stress-suite` completed broker-free stress coverage across loader, feed adapter, engine, strategy contract, and inert strategy runner paths.
+- The next approved step is contract design only: a disabled signal contract that validates context shape and emits diagnostics without producing trading outputs.
+- This milestone must not contact IBKR, import broker clients in the signal path, generate real signals, create order-intent outputs, simulate orders or fills, calculate P&L, perform portfolio accounting, activate paper execution, or enable live trading.
+- Unit tests must use fixture feed/frame objects or temporary synthetic snapshots and must not require IB Gateway or `ibapi`.
+
+Files expected to change:
+
+- `docs/IMPLEMENTATION_PLAN.md`
+- `src/trader/models.py`
+- `src/trader/strategy/signals.py`
+- `src/trader/cli.py`
+- `src/trader/reporting/reports.py`
+- `scripts/run-signal-contract.sh`
+- `tests/test_signal_contract.py`
+- `tests/test_offline_stress_signal_contract.py`
+- `README.md`
+- `docs/RUNBOOK.md`
+- `docs/SAFETY.md`
+- `docs/STATUS.md`
+- `AGENTS.md`
+
+Signal contract schema design:
+
+- Add serializable metadata for a disabled broker-free signal contract: name, version, description, supported symbols, supported bar sizes, required bar fields, `broker_required=false`, and `enabled=false`.
+- Add field requirement metadata so future evaluators can declare required bar fields without introducing trading actions.
+- Add a signal evaluation context that wraps a broker-free feed frame with timestamp, frame index, available symbols, missing symbols, bars by symbol, feed metadata, strategy metadata, and alignment mode.
+- Add per-frame signal contract diagnostics with fixed safety fields: `signal_evaluation_enabled=false`, `generated_signals=false`, `signal_count=0`, `generated_orders=false`, `orders_simulated=false`, `fills_simulated=false`, `pnl_calculated=false`, `portfolio_accounting=false`, `broker_contacted=false`, `order_routing_enabled=false`, and `no_order_guarantee=true`.
+
+Disabled signal evaluator design:
+
+- Implement `src/trader/strategy/signals.py` as a broker-free module that imports only offline feed/strategy contract models and helpers.
+- Provide `default_disabled_signal_contract_metadata()`, `build_signal_evaluation_context(...)`, `validate_signal_contract(...)`, `run_disabled_signal_contract_diagnostic(...)`, and `build_signal_contract_report(...)`.
+- The disabled evaluator validates metadata and required bar fields, records that signal evaluation is disabled, and emits diagnostics only.
+- The disabled evaluator must not mutate the input feed and must not produce signals, order intents, simulated orders, simulated fills, portfolio accounting, or P&L.
+
+Signal evaluation context model:
+
+- Preserve frame timestamp, frame index, available symbols, missing symbols, bars by symbol, feed symbols, alignment mode, feed status, feed frame count, feed summary, and strategy metadata.
+- Missing symbols remain explicit in context diagnostics.
+- Partial feeds may produce diagnostics with warnings; failed or empty feeds fail cleanly with structured errors.
+
+Diagnostics model:
+
+- Add serializable models for `SignalContractMetadata`, `SignalFieldRequirement`, `SignalEvaluationContext`, `SignalContractDiagnostic`, `SignalContractValidationRequest`, `SignalContractValidationResult`, and `SignalContractReport`.
+- Include request criteria, feed summary, a frame context sample, diagnostics, warning/error lists, final status, and all required false safety flags.
+- Reports include `signal_contract_validated=true` only when metadata validation succeeds.
+
+CLI behavior:
+
+- Add `python -m trader.cli signal-contract --symbols SPY,AAPL`.
+- Support `--alignment union`, `--alignment intersection`, `--bar-size`, `--what-to-show`, `--latest`, `--strict`, `--snapshot-timestamp`, and `--base-path`.
+- The command loads local snapshots through the offline historical loader, builds a broker-free feed, validates the disabled signal contract, writes a report, and prints diagnostic-only status.
+- The command must clearly state `signal_evaluation_enabled=false`, `generated_signals=false`, `signal_count=0`, `generated_orders=false`, `orders_simulated=false`, `fills_simulated=false`, `pnl_calculated=false`, `portfolio_accounting=false`, and `broker_contacted=false`.
+
+Reporting behavior:
+
+- Write `reports/signal_contract_<timestamp>.json` and `.md`.
+- Maintain `reports/latest_signal_contract.json` and `.md`.
+- Reports include signal contract metadata, symbols requested, feed summary, frame context sample, validation result, diagnostics, warnings/errors, and all required safety flags.
+- Reports include the explicit statement: "This command validates the signal contract only. Signal evaluation is disabled. No trading signals, order intents, order simulation, broker routing, fills, portfolio accounting, or P&L calculation were produced."
+
+Tests to add:
+
+- Signal contract metadata, field requirement, context, diagnostic, validation result, and report models serialize cleanly.
+- Disabled signal contract metadata validates.
+- Disabled signal contract accepts a frame context and emits diagnostics only.
+- Required safety flags remain fixed: no signal evaluation, no generated signals, zero signal count, no generated orders, no simulated orders, no simulated fills, no P&L, no portfolio accounting, no broker contact, order routing disabled, and no-order guarantee true.
+- Context builder preserves timestamps, available symbols, and missing symbols.
+- CLI `signal-contract` runs with fixture snapshot data.
+- Signal path has no broker or `ibapi` imports and no forbidden order API usage.
+- Paper executor remains blocked and live ports remain rejected.
+
+Stress tests:
+
+- Add `tests/test_offline_stress_signal_contract.py`.
+- Use existing synthetic fixture scenarios to prove partial feeds, missing symbols, duplicate/gapped fixture contexts, and diagnostic-only output.
+- Assert `signal_evaluation_enabled=false`, `generated_signals=false`, `signal_count=0`, `generated_orders=false`, `orders_simulated=false`, `fills_simulated=false`, `pnl_calculated=false`, `portfolio_accounting=false`, and `broker_contacted=false`.
+
+Safety checks:
+
+- Do not add broker calls, socket connection attempts, `trader.broker` imports, `ibapi` imports, order APIs, real signal generation, order-intent generation, order simulation, fill simulation, P&L calculation, portfolio accounting, paper execution activation, or live trading.
+- Keep generated reports and generated snapshots ignored.
+
+Validation commands:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
+.venv/bin/mypy src
+.venv/bin/python -m trader.cli --help
+.venv/bin/python -m trader.cli status
+.venv/bin/python -m trader.cli history-index || true
+.venv/bin/python -m trader.cli history-load --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-feed --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-run --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli strategy-contract --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli strategy-runner --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli signal-contract --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli signal-contract --symbols SPY,AAPL --alignment intersection || true
+scripts/run-signal-contract.sh || true
+grep -R "placeOrder" -n src tests docs scripts || true
+grep -R "cancelOrder" -n src tests docs scripts || true
+grep -R "reqGlobalCancel" -n src tests docs scripts || true
+grep -R "ALLOW_PAPER_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "ALLOW_LIVE_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "4001\|7496" -n src tests docs scripts .env.example || true
+grep -R "trader.broker" -n src/trader/strategy tests/test_signal_contract.py tests/test_offline_stress_signal_contract.py || true
+grep -R "IBKRReadOnlyClient\|ibapi" -n src/trader/strategy tests/test_signal_contract.py tests/test_offline_stress_signal_contract.py || true
+grep -R "place_order\|submit_order\|order_intent\|fill\|portfolio\|pnl\|P&L\|profit\|loss" -n src/trader/strategy tests/test_signal_contract.py tests/test_offline_stress_signal_contract.py || true
+grep -R "buy\|sell\|hold" -n src/trader/strategy/signals.py tests/test_signal_contract.py tests/test_offline_stress_signal_contract.py || true
+git diff --check
+```
+
+Completion criteria:
+
+- Unit tests pass without IB Gateway.
+- Signal contract tests use fixture frames/feeds.
+- `signal-contract` works offline with local snapshots when present.
+- Disabled signal contract emits diagnostics only.
+- Reports are written and state that signal evaluation is disabled and no trading outputs, broker routing, fills, portfolio accounting, or P&L were produced.
+- No broker calls or order APIs are added.
+- No real signal generation, order-intent generation, order simulation, fill simulation, P&L calculation, or portfolio accounting is added.
+- Paper execution remains blocked, live trading remains rejected, and generated reports remain ignored.

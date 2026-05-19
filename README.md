@@ -25,6 +25,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Broker-free strategy interface contract scaffold with no-op diagnostics only.
 - Broker-free inert strategy runner scaffold that routes frames through no-op diagnostics only.
 - Broker-free offline fixture stress tests for partial, gapped, duplicate, malformed, missing, and invalid historical datasets.
+- Broker-free disabled signal contract scaffold with diagnostics only.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
 
@@ -43,6 +44,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Fill simulation, portfolio accounting, or P&L from backtest runs.
 - Real strategy evaluation, signal generation, order simulation, or P&L from strategy-contract checks.
 - Real strategy evaluation, buy/sell/hold signal generation, order-intent generation, fill simulation, portfolio accounting, or P&L from strategy-runner checks.
+- Real signal evaluation, buy/sell/hold outputs, order intents, order simulation, fill simulation, portfolio accounting, or P&L from signal-contract checks.
 
 ## Safety Design
 
@@ -119,6 +121,8 @@ python -m trader.cli strategy-contract --symbols SPY,AAPL
 python -m trader.cli strategy-contract --symbols SPY,AAPL --alignment intersection
 python -m trader.cli strategy-runner --symbols SPY,AAPL
 python -m trader.cli strategy-runner --symbols SPY,AAPL --alignment intersection
+python -m trader.cli signal-contract --symbols SPY,AAPL
+python -m trader.cli signal-contract --symbols SPY,AAPL --alignment intersection
 scripts/check-ibapi.sh
 scripts/run-broker-preflight.sh
 python -m trader.cli account --mock
@@ -146,6 +150,7 @@ scripts/run-backtest-feed.sh
 scripts/run-backtest-run.sh
 scripts/run-strategy-contract.sh
 scripts/run-strategy-runner.sh
+scripts/run-signal-contract.sh
 ```
 
 ## TWS Paper Notes
@@ -191,9 +196,17 @@ does not contact IBKR, evaluate real strategies, generate buy/sell/hold signals,
 create order intents, simulate orders or fills, perform portfolio accounting, or
 compute P&L.
 
+`signal-contract` is an offline disabled contract scaffold. It validates the
+future signal-evaluation schema against local feed frames, writes contract
+reports, and does not contact IBKR, generate trading signals, create order
+intents, simulate orders or fills, perform portfolio accounting, or compute
+P&L. Reports always state `signal_evaluation_enabled=false` and
+`signal_count=0`.
+
 The offline fixture stress suite uses temporary synthetic historical snapshots
-to validate loader, feed, engine, strategy-contract, and strategy-runner behavior
-against partial, gapped, duplicate, malformed, missing, empty, and invalid data.
+to validate loader, feed, engine, strategy-contract, strategy-runner, and
+signal-contract behavior against partial, gapped, duplicate, malformed, missing,
+empty, and invalid data.
 It does not read broker data, contact IBKR, evaluate real strategies, generate
 signals, simulate orders or fills, perform portfolio accounting, or compute P&L.
 

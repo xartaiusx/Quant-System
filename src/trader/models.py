@@ -1313,6 +1313,205 @@ class StrategyContractReport(SerializableModel):
     timestamp: datetime = Field(default_factory=utc_now)
 
 
+class SignalFieldRequirement(SerializableModel):
+    """Required bar field metadata for a disabled signal contract."""
+
+    name: str
+    description: str = ""
+    required: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("signal field requirement name is required")
+        return normalized
+
+
+class SignalContractMetadata(SerializableModel):
+    """Metadata for the disabled broker-free signal contract scaffold."""
+
+    signal_contract_name: str
+    signal_contract_version: str = "0.0.0"
+    description: str = ""
+    supported_symbols: list[str] = Field(default_factory=list)
+    supported_bar_sizes: list[str] = Field(default_factory=lambda: ["5 mins"])
+    required_fields: list[SignalFieldRequirement] = Field(
+        default_factory=lambda: [
+            SignalFieldRequirement(name="open"),
+            SignalFieldRequirement(name="high"),
+            SignalFieldRequirement(name="low"),
+            SignalFieldRequirement(name="close"),
+            SignalFieldRequirement(name="volume"),
+        ]
+    )
+    broker_required: bool = False
+    enabled: bool = False
+
+    @field_validator("signal_contract_name", "signal_contract_version")
+    @classmethod
+    def normalize_metadata_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("signal contract metadata text fields cannot be empty")
+        return normalized
+
+    @field_validator("supported_symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        return [symbol.strip().upper() for symbol in value if symbol.strip()]
+
+    @field_validator("supported_bar_sizes")
+    @classmethod
+    def normalize_text_list(cls, value: list[str]) -> list[str]:
+        return [item.strip() for item in value if item.strip()]
+
+
+class SignalEvaluationContext(SerializableModel):
+    """Read-only frame context offered to the disabled signal contract."""
+
+    timestamp: datetime
+    frame_index: int
+    available_symbols: list[str] = Field(default_factory=list)
+    missing_symbols: list[str] = Field(default_factory=list)
+    bars_by_symbol: dict[str, BacktestBar | None] = Field(default_factory=dict)
+    feed_symbols: list[str] = Field(default_factory=list)
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    feed_status: BacktestFeedStatus = BacktestFeedStatus.FAILED
+    feed_frame_count: int = 0
+    feed_summary: BacktestDataFeedSummary | None = None
+    strategy_metadata: StrategyMetadata | None = None
+    signal_contract_metadata: SignalContractMetadata | None = None
+    source: str = "backtest_feed"
+
+
+class SignalContractDiagnostic(SerializableModel):
+    """Per-frame diagnostics from the disabled signal contract scaffold."""
+
+    signal_contract_name: str
+    signal_contract_version: str
+    timestamp: datetime
+    frame_index: int
+    available_symbols: list[str] = Field(default_factory=list)
+    missing_symbols: list[str] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    signal_contract_validated: bool = True
+    signal_evaluation_enabled: bool = False
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+
+class SignalContractValidationRequest(SerializableModel):
+    """Offline disabled signal contract validation request."""
+
+    symbols: list[str] = Field(default_factory=list)
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    requested_bar_size: str | None = None
+    requested_what_to_show: str | None = None
+    latest: bool = True
+    snapshot_timestamp: str | None = None
+    strict: bool = False
+    base_data_path: str = "data/historical"
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        return [symbol.strip().upper() for symbol in value if symbol.strip()]
+
+    @field_validator("requested_bar_size", "requested_what_to_show", "snapshot_timestamp")
+    @classmethod
+    def normalize_optional_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("requested_what_to_show")
+    @classmethod
+    def normalize_optional_what_to_show(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+
+class SignalContractValidationResult(SerializableModel):
+    """Result of an offline disabled signal contract validation run."""
+
+    ok: bool
+    request: SignalContractValidationRequest
+    metadata: SignalContractMetadata
+    feed_summary: BacktestDataFeedSummary | None = None
+    frame_context_sample: SignalEvaluationContext | None = None
+    diagnostics: list[SignalContractDiagnostic] = Field(default_factory=list)
+    contexts_observed: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    final_status: str = "unknown"
+    signal_contract_validated: bool = True
+    signal_evaluation_enabled: bool = False
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class SignalContractReport(SerializableModel):
+    """Report for the broker-free disabled signal contract scaffold."""
+
+    title: str = "Broker-free Signal Contract"
+    report_type: str = "signal_contract"
+    command: str = "signal-contract"
+    ok: bool
+    request: SignalContractValidationRequest
+    metadata: SignalContractMetadata
+    symbols_requested: list[str] = Field(default_factory=list)
+    feed_summary: BacktestDataFeedSummary | None = None
+    frame_context_sample: SignalEvaluationContext | None = None
+    result: SignalContractValidationResult
+    diagnostics: list[SignalContractDiagnostic] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    signal_contract_validated: bool = True
+    signal_evaluation_enabled: bool = False
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This signal contract report reads local historical snapshots only and "
+        "does not contact a broker."
+    )
+    no_execution_statement: str = (
+        "This command validates the signal contract only. Signal evaluation is "
+        "disabled. No trading signals, order intents, order simulation, broker "
+        "routing, fills, portfolio accounting, or P&L calculation were produced."
+    )
+    final_status: str = "unknown"
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
 class InertStrategyRunnerRequest(SerializableModel):
     """Offline inert no-op strategy runner request."""
 

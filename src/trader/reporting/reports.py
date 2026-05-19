@@ -29,6 +29,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return strategy_contract_markdown(payload)
     if payload.get("report_type") == "strategy_runner":
         return strategy_runner_markdown(payload)
+    if payload.get("report_type") == "signal_contract":
+        return signal_contract_markdown(payload)
 
     lines = [
         f"# {payload.get('title', 'Trading Report')}",
@@ -808,6 +810,100 @@ def strategy_runner_markdown(payload: Mapping[str, Any]) -> str:
     if diagnostics.get("symbols"):
         for symbol in diagnostics.get("symbols", []):
             lines.append(f"- `{symbol}` missing_frames=`{missing.get(symbol, 0)}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def signal_contract_markdown(payload: Mapping[str, Any]) -> str:
+    """Render a broker-free disabled signal contract report."""
+
+    request = payload.get("request", {})
+    metadata = payload.get("metadata", {})
+    result = payload.get("result", {})
+    feed_summary = payload.get("feed_summary") or {}
+    sample = payload.get("frame_context_sample") or {}
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+
+    required_fields = [
+        item.get("name", "")
+        for item in metadata.get("required_fields", [])
+        if isinstance(item, Mapping)
+    ]
+    lines = [
+        f"# {payload.get('title', 'Broker-free Signal Contract')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'signal-contract')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Signal contract: `{metadata.get('signal_contract_name', 'unknown')}`",
+        f"- Signal contract version: `{metadata.get('signal_contract_version', 'unknown')}`",
+        f"- Contract enabled: `{metadata.get('enabled', True)}`",
+        f"- Symbols requested: `{', '.join(payload.get('symbols_requested', []))}`",
+        f"- Alignment mode: `{request.get('alignment_mode', 'union')}`",
+        f"- Bar size filter: `{request.get('requested_bar_size')}`",
+        f"- What-to-show filter: `{request.get('requested_what_to_show')}`",
+        f"- Broker required: `{metadata.get('broker_required', True)}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
+        f"- Signal contract validated: `{payload.get('signal_contract_validated', False)}`",
+        f"- Signal evaluation enabled: `{payload.get('signal_evaluation_enabled', True)}`",
+        f"- Generated signals: `{payload.get('generated_signals', True)}`",
+        f"- Signal count: `{payload.get('signal_count', 0)}`",
+        f"- Generated orders: `{payload.get('generated_orders', True)}`",
+        f"- Orders simulated: `{payload.get('orders_simulated', True)}`",
+        f"- Fills simulated: `{payload.get('fills_simulated', True)}`",
+        f"- P&L calculated: `{payload.get('pnl_calculated', True)}`",
+        f"- Portfolio accounting: `{payload.get('portfolio_accounting', True)}`",
+        "",
+        "## Scope",
+        "",
+        str(
+            payload.get(
+                "no_order_guarantee_statement",
+                "This report reads local files only and no orders were routed.",
+            )
+        ),
+        "",
+        str(
+            payload.get(
+                "no_execution_statement",
+                "This command validates the signal contract only. Signal evaluation is "
+                "disabled. No trading signals, order intents, order simulation, broker "
+                "routing, fills, portfolio accounting, or P&L calculation were produced.",
+            )
+        ),
+        "",
+        "## Contract Summary",
+        "",
+        f"- Contexts observed: `{result.get('contexts_observed', 0)}`",
+        f"- Diagnostics: `{len(payload.get('diagnostics', []))}`",
+        f"- Required fields: `{', '.join(required_fields)}`",
+        f"- Supported symbols: `{', '.join(metadata.get('supported_symbols', []))}`",
+        f"- Supported bar sizes: `{', '.join(metadata.get('supported_bar_sizes', []))}`",
+        "",
+        "## Feed Summary",
+        "",
+        f"- Feed status: `{feed_summary.get('feed_status', 'unknown')}`",
+        f"- Feed frames: `{feed_summary.get('frame_count', 0)}`",
+        f"- Feed bars: `{feed_summary.get('total_bars', 0)}`",
+        "",
+        "## Frame Context Sample",
+        "",
+    ]
+    if sample:
+        lines.extend(
+            [
+                f"- Timestamp: `{sample.get('timestamp')}`",
+                f"- Frame index: `{sample.get('frame_index')}`",
+                f"- Available symbols: `{', '.join(sample.get('available_symbols', []))}`",
+                f"- Missing symbols: `{', '.join(sample.get('missing_symbols', []))}`",
+            ]
+        )
     else:
         lines.append("- None")
 

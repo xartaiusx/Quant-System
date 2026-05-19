@@ -23,6 +23,7 @@
 - Milestone 10 implemented: broker-free strategy interface contract scaffold with no-op frame diagnostics and contract reports.
 - Milestone 11 implemented: broker-free inert strategy runner scaffold with per-frame no-op diagnostics and runner reports.
 - Milestone 12 implemented: broker-free offline fixture stress suite covering partial, gapped, duplicate, malformed, missing, empty, and invalid historical datasets.
+- Milestone 13 implemented: broker-free disabled signal contract scaffold with diagnostics-only validation and signal-contract reports.
 - Optional `ibapi` dependency check script.
 - Deterministic mock data.
 - Momentum and mean-reversion strategy modules.
@@ -54,6 +55,7 @@
 - Strategy contract checks performing real signal generation, simulating orders, calculating fills, maintaining portfolio accounting, or calculating P&L.
 - Strategy runner checks performing real strategy evaluation, generating buy/sell/hold signals, generating order intents, simulating orders or fills, maintaining portfolio accounting, or calculating P&L.
 - Offline stress tests contacting brokers, using real broker data, evaluating real strategies, generating signals or order intents, simulating orders or fills, maintaining portfolio accounting, or calculating P&L.
+- Signal contract checks performing real signal evaluation, generating buy/sell/hold outputs, generating order intents, simulating orders or fills, maintaining portfolio accounting, or calculating P&L.
 
 ## Current Blockers
 
@@ -73,9 +75,10 @@
 - Offline `strategy-contract` validates no-op interface metadata and frame contexts only, reports `broker_contacted=false`, `evaluated=false`, `generated_signals=false`, `generated_orders=false`, `orders_simulated=false`, and `pnl_calculated=false`.
 - Offline `strategy-runner` routes local feed frames through no-op diagnostics only, reports `broker_contacted=false`, `diagnostic_only=true`, `noop_strategy_observed=true`, `real_strategy_evaluated=false`, `generated_signals=false`, `generated_orders=false`, `orders_simulated=false`, `fills_simulated=false`, `portfolio_accounting=false`, and `pnl_calculated=false`.
 - Offline stress fixtures validate loader, feed adapter, backtest engine, strategy contract, and inert runner behavior against synthetic edge-case datasets without contacting IBKR.
+- Offline `signal-contract` validates disabled signal schema and frame contexts only, reports `broker_contacted=false`, `signal_contract_validated=true`, `signal_evaluation_enabled=false`, `generated_signals=false`, `signal_count=0`, `generated_orders=false`, `orders_simulated=false`, `fills_simulated=false`, `portfolio_accounting=false`, and `pnl_calculated=false`.
 
 ## Next Recommended Steps
 
-1. Review the new stress suite coverage before adding real strategy evaluation.
+1. Review the disabled signal contract reports before adding real signal evaluation.
 2. Design an explicitly approved signal-evaluation milestone without order intents or execution.
 3. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

@@ -111,6 +111,13 @@ evaluation, generate signals, create order intents, simulate orders or fills,
 maintain portfolio accounting, compute P&L, submit to the paper executor, or
 route execution.
 
+Milestone 13 adds a broker-free disabled signal contract scaffold.
+`signal-contract` validates future signal-evaluation schema and diagnostics
+only. It never contacts a broker, invokes order APIs, performs real signal
+evaluation, generates buy/sell/hold outputs, creates order intents, simulates
+orders, simulates fills, maintains portfolio accounting, computes P&L, submits
+to the paper executor, or routes execution.
+
 ## Sensitive Data
 
 Never commit:

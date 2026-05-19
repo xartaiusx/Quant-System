@@ -423,6 +423,48 @@ decision engine. Common failures:
 - Failed feed: fix loader/feed errors before running the diagnostic path.
 - Partial feed: review missing-symbol summaries in the runner report.
 
+## Offline Signal Contract
+
+```bash
+python -m trader.cli signal-contract --symbols SPY,AAPL
+python -m trader.cli signal-contract --symbols SPY,AAPL --alignment union
+python -m trader.cli signal-contract --symbols SPY,AAPL --alignment intersection
+python -m trader.cli signal-contract --symbols SPY,AAPL --bar-size "5 mins" --what-to-show TRADES
+scripts/run-signal-contract.sh
+```
+
+Expected behavior:
+
+- opens no broker socket
+- loads local snapshots through the offline historical loader
+- builds an aligned feed with the broker-free data adapter
+- validates the disabled signal contract schema and required bar fields
+- records signal evaluation contexts and per-frame diagnostics
+- writes `reports/signal_contract_<timestamp>.json` and `.md`
+- updates `reports/latest_signal_contract.json` and `.md`
+- places no orders and invokes no order APIs
+- reports `signal_contract_validated=true`, `signal_evaluation_enabled=false`,
+  `generated_signals=false`, `signal_count=0`, `generated_orders=false`,
+  `orders_simulated=false`, `fills_simulated=false`, `portfolio_accounting=false`,
+  and `pnl_calculated=false`
+- does not perform real signal evaluation, generate trading signals, create
+  order intents, simulate orders or fills, maintain portfolio accounting, or
+  compute P&L
+
+Workflow relationship:
+
+```text
+history-snapshot -> history-load -> backtest-feed -> backtest-run -> strategy-contract -> strategy-runner -> signal-contract
+```
+
+`signal-contract` validates schema and diagnostics only. It is not connected to
+real strategy evaluation and does not produce trading outputs. Common failures:
+
+- No snapshots found: run or review `history-index` and `history-load`.
+- Empty feed: inspect the snapshot and loader reports.
+- Missing required bar fields: review the signal contract report before future signal work.
+- Partial feed: review missing-symbol summaries in the frame context sample.
+
 ## Offline Fixture Stress Tests
 
 ```bash
@@ -430,6 +472,7 @@ python -m pytest tests/test_offline_stress_loader.py
 python -m pytest tests/test_offline_stress_backtest_feed.py
 python -m pytest tests/test_offline_stress_backtest_engine.py
 python -m pytest tests/test_offline_stress_strategy_runner.py
+python -m pytest tests/test_offline_stress_signal_contract.py
 ```
 
 Expected behavior:
@@ -441,7 +484,7 @@ Expected behavior:
 - verifies loader diagnostics for malformed JSONL, missing manifests, missing bars files, duplicate timestamps, timestamp gaps, invalid OHLC, negative volume, and empty datasets
 - verifies `backtest-feed` union/intersection alignment and explicit missing-bar counts
 - verifies `backtest-run` ready, partial, and failed feed diagnostics
-- verifies `strategy-contract` and `strategy-runner` missing-symbol handling and no-op diagnostics
+- verifies `strategy-contract`, `strategy-runner`, and `signal-contract` missing-symbol handling and diagnostics-only behavior
 - places no orders and invokes no order APIs
 - does not perform real strategy evaluation, generate signals, generate order intents, simulate orders, simulate fills, maintain portfolio accounting, or compute P&L
 
