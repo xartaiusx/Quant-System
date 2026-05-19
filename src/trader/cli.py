@@ -17,7 +17,13 @@ from trader.config import ConfigError, TraderConfig, load_config
 from trader.data.snapshots import deterministic_history, deterministic_quotes, mock_positions
 from trader.data.universe import parse_symbols
 from trader.execution.router import ExecutionRouter
-from trader.models import BrokerDiagnosticReport, MarketQuote, RiskDecision
+from trader.models import (
+    BrokerDiagnosticReport,
+    MarketDataDiagnosticReport,
+    MarketDataRequestType,
+    MarketQuote,
+    RiskDecision,
+)
 from trader.portfolio.construction import build_trade_plans
 from trader.reporting.journal import Journal
 from trader.risk.rules import evaluate_trade_plans
@@ -77,6 +83,51 @@ def broker_probe(
     console.print("Order routing: disabled.")
     console.print("No order APIs invoked.")
     _print_broker_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("market-probe")
+def market_probe(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols to probe through IBKR read-only data APIs."),
+    ] = "SPY,AAPL",
+    data_type: Annotated[
+        MarketDataRequestType,
+        typer.Option("--data-type", help="IBKR market data type to request."),
+    ] = MarketDataRequestType.DELAYED,
+    historical: Annotated[
+        bool,
+        typer.Option(
+            "--historical/--no-historical",
+            help="Request a small read-only historical bar sample after quote diagnostics.",
+        ),
+    ] = False,
+    timeout: Annotated[
+        float | None,
+        typer.Option("--timeout", help="Override IBKR connect/request timeout seconds."),
+    ] = None,
+) -> None:
+    """Run read-only IBKR market-data diagnostics."""
+
+    config = _load_config_or_exit()
+    timeout = _validate_timeout_option(timeout)
+    selected_symbols = parse_symbols(symbols)
+    report = IBKRClient(config).market_data_diagnostic(
+        selected_symbols,
+        market_data_type=data_type,
+        include_historical=historical,
+        timeout=timeout,
+    )
+    json_path, md_path = Journal().write_cycle("market_probe", _report_dict(report))
+
+    console.print("[bold]Read-only market-data probe[/bold]")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    _print_market_data_result(report)
     console.print(f"JSON report: {json_path}")
     console.print(f"Markdown report: {md_path}")
     if not report.ok:
@@ -333,7 +384,7 @@ def _validate_timeout_option(timeout: float | None) -> float | None:
     return timeout
 
 
-def _report_dict(report: BrokerDiagnosticReport) -> dict[str, Any]:
+def _report_dict(report: BrokerDiagnosticReport | MarketDataDiagnosticReport) -> dict[str, Any]:
     return report.model_dump(mode="json")
 
 
@@ -381,6 +432,107 @@ def _print_broker_result(report: BrokerDiagnosticReport) -> None:
             console.print(f"- {escape(code + error.message)}")
 
 
+def _print_market_data_result(report: MarketDataDiagnosticReport) -> None:
+    table = Table(title="Market Data Connectivity")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Config mode", report.mode)
+    table.add_row("Host", report.host)
+    table.add_row("Port", str(report.port))
+    table.add_row("Client ID", str(report.client_id))
+    table.add_row("Broker kind", report.broker_kind)
+    table.add_row("ibapi import", "ok" if report.ibapi_available else "missing")
+    table.add_row("Connection attempted", str(report.connection_attempted))
+    table.add_row("Connected", str(report.connected))
+    table.add_row("Symbols", ", ".join(report.symbols_requested))
+    table.add_row("Requested data type", _enum_value(report.market_data_type_requested))
+    table.add_row("Historical requested", str(report.include_historical))
+    table.add_row("Final status", report.final_status)
+    table.add_row("Order routing", "disabled")
+    table.add_row("No order APIs invoked", "true")
+    console.print(table)
+
+    quote_table = Table(title="Quotes")
+    quote_table.add_column("Symbol")
+    quote_table.add_column("Resolved")
+    quote_table.add_column("Type")
+    quote_table.add_column("Bid")
+    quote_table.add_column("Ask")
+    quote_table.add_column("Last")
+    quote_table.add_column("Close")
+    quote_table.add_column("Bid Size")
+    quote_table.add_column("Ask Size")
+    quote_table.add_column("Last Size")
+    quote_table.add_column("Spread")
+    quote_table.add_column("Spread bps")
+    quote_table.add_column("Age")
+    quote_table.add_column("Stale")
+
+    resolutions = {item.symbol: item for item in report.contract_resolutions}
+    spreads = {item.symbol: item for item in report.spread_diagnostics}
+    quotes = {item.symbol: item for item in report.quote_snapshots}
+    for symbol in report.symbols_requested:
+        resolution = resolutions.get(symbol)
+        quote = quotes.get(symbol)
+        spread = spreads.get(symbol)
+        received_type = (
+            _enum_value(quote.market_data_type.received)
+            if quote and quote.market_data_type.received
+            else "n/a"
+        )
+        quote_age = (
+            str(quote.quote_age_seconds)
+            if quote and quote.quote_age_seconds is not None
+            else "n/a"
+        )
+        quote_table.add_row(
+            symbol,
+            str(bool(resolution and resolution.resolved)),
+            received_type,
+            str(quote.bid) if quote and quote.bid is not None else "n/a",
+            str(quote.ask) if quote and quote.ask is not None else "n/a",
+            str(quote.last) if quote and quote.last is not None else "n/a",
+            str(quote.close) if quote and quote.close is not None else "n/a",
+            str(quote.bid_size) if quote and quote.bid_size is not None else "n/a",
+            str(quote.ask_size) if quote and quote.ask_size is not None else "n/a",
+            str(quote.last_size) if quote and quote.last_size is not None else "n/a",
+            str(spread.spread) if spread and spread.spread is not None else "n/a",
+            str(spread.spread_bps) if spread and spread.spread_bps is not None else "n/a",
+            quote_age,
+            str(quote.stale) if quote else "n/a",
+        )
+    console.print(quote_table)
+
+    if report.include_historical:
+        history_table = Table(title="Historical Bars")
+        history_table.add_column("Symbol")
+        history_table.add_column("OK")
+        history_table.add_column("Bars")
+        history_table.add_column("Start")
+        history_table.add_column("End")
+        for item in report.historical_data:
+            history_table.add_row(
+                item.symbol,
+                str(item.ok),
+                str(item.historical_bars_count),
+                item.historical_start or "n/a",
+                item.historical_end or "n/a",
+            )
+        console.print(history_table)
+
+    if report.failure_stage:
+        console.print(f"Diagnostic stage: {report.failure_stage}")
+    if report.warnings:
+        console.print("[yellow]Warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Errors[/red]")
+        for error in report.errors:
+            code = f"IBKR {error.code}: " if error.code is not None else ""
+            console.print(f"- {escape(code + error.message)}")
+
+
 def _broker_next_step(report: BrokerDiagnosticReport) -> str:
     if report.failure_stage == "dependency_check":
         return "Install or repair ibapi, then rerun scripts/check-ibapi.sh."
@@ -401,6 +553,10 @@ def _broker_next_step(report: BrokerDiagnosticReport) -> str:
     if report.failure_stage == "config_validation":
         return "Fix rejected config before attempting a broker socket."
     return "Inspect errors and rerun after correcting the reported blocker."
+
+
+def _enum_value(value: object) -> str:
+    return str(getattr(value, "value", value))
 
 
 if __name__ == "__main__":

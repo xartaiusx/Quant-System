@@ -52,6 +52,15 @@ class ExecutionStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class MarketDataRequestType(StrEnum):
+    """IBKR market-data type names supported by read-only diagnostics."""
+
+    LIVE = "live"
+    FROZEN = "frozen"
+    DELAYED = "delayed"
+    DELAYED_FROZEN = "delayed_frozen"
+
+
 class Instrument(SerializableModel):
     """Tradable instrument descriptor."""
 
@@ -333,5 +342,134 @@ class BrokerDiagnosticReport(SerializableModel):
     no_order_guarantee: bool = True
     no_order_guarantee_statement: str = (
         "This broker probe uses read-only requests only and order routing is disabled."
+    )
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class ContractResolutionResult(SerializableModel):
+    """Result of resolving a read-only IBKR contract for market-data diagnostics."""
+
+    symbol: str
+    sec_type: str = "STK"
+    exchange: str = "SMART"
+    currency: str = "USD"
+    primary_exchange: str | None = None
+    contract_id: int | None = None
+    resolved: bool = False
+    ambiguous: bool = False
+    matching_contracts: int = 0
+    selected_contract_description: str | None = None
+    errors: list[BrokerErrorEvent] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MarketDataTick(SerializableModel):
+    """Captured IBKR market-data tick used to build a quote snapshot."""
+
+    symbol: str
+    req_id: int
+    tick_type: int
+    field: str
+    value: Decimal | str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class MarketDataTypeInfo(SerializableModel):
+    """Requested and callback-confirmed IBKR market-data type."""
+
+    requested: MarketDataRequestType
+    requested_code: int
+    received: MarketDataRequestType | None = None
+    received_code: int | None = None
+
+
+class QuoteSnapshot(SerializableModel):
+    """Read-only quote snapshot captured from IBKR market data callbacks."""
+
+    symbol: str
+    market_data_type: MarketDataTypeInfo
+    bid: Decimal | None = None
+    ask: Decimal | None = None
+    last: Decimal | None = None
+    close: Decimal | None = None
+    bid_size: Decimal | None = None
+    ask_size: Decimal | None = None
+    last_size: Decimal | None = None
+    quote_timestamp: datetime | None = None
+    quote_age_seconds: float | None = None
+    stale: bool = True
+    ticks: list[MarketDataTick] = Field(default_factory=list)
+    errors: list[BrokerErrorEvent] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SpreadDiagnostic(SerializableModel):
+    """Bid/ask spread and spread-bps diagnostics for a quote snapshot."""
+
+    symbol: str
+    has_bid_ask: bool = False
+    spread: Decimal | None = None
+    spread_bps: Decimal | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class HistoricalBar(SerializableModel):
+    """Small historical bar returned by a read-only IBKR request."""
+
+    symbol: str
+    timestamp: str
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal | None = None
+
+
+class HistoricalDataDiagnostic(SerializableModel):
+    """Historical-data request diagnostic for one symbol."""
+
+    symbol: str
+    requested: bool = False
+    ok: bool = False
+    bars: list[HistoricalBar] = Field(default_factory=list)
+    historical_bars_count: int = 0
+    historical_start: str | None = None
+    historical_end: str | None = None
+    errors: list[BrokerErrorEvent] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MarketDataDiagnosticReport(SerializableModel):
+    """Full read-only IBKR market-data diagnostic report."""
+
+    title: str = "Read-only Market Data Probe"
+    report_type: str = "market_probe"
+    ok: bool
+    mode: str
+    host: str
+    port: int
+    client_id: int
+    broker_kind: str
+    connected: bool
+    ibapi_available: bool
+    ibapi_import_error: str | None = None
+    connection_attempted: bool = False
+    failure_stage: str | None = None
+    symbols_requested: list[str] = Field(default_factory=list)
+    market_data_type_requested: MarketDataRequestType = MarketDataRequestType.DELAYED
+    market_data_type_requested_code: int = 3
+    include_historical: bool = False
+    contract_resolutions: list[ContractResolutionResult] = Field(default_factory=list)
+    quote_snapshots: list[QuoteSnapshot] = Field(default_factory=list)
+    spread_diagnostics: list[SpreadDiagnostic] = Field(default_factory=list)
+    historical_data: list[HistoricalDataDiagnostic] = Field(default_factory=list)
+    ibkr_messages: list[BrokerErrorEvent] = Field(default_factory=list)
+    errors: list[BrokerErrorEvent] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    order_routing_enabled: bool = False
+    final_status: str = "unknown"
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This market-data probe uses read-only data requests only and order routing is disabled."
     )
     timestamp: datetime = Field(default_factory=utc_now)

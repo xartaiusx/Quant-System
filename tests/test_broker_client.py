@@ -4,6 +4,7 @@ import threading
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -17,9 +18,14 @@ from trader.models import (
     BrokerDiagnosticReport,
     BrokerErrorEvent,
     ExecutionStatus,
+    HistoricalBar,
     ManagedAccountInfo,
+    MarketDataDiagnosticReport,
+    MarketDataRequestType,
+    MarketDataTick,
     TradeAction,
     TradePlan,
+    utc_now,
 )
 
 
@@ -30,15 +36,28 @@ class TimeoutFakeApp:
         self.managed_accounts_event = threading.Event()
         self.account_summary_event = threading.Event()
         self.positions_event = threading.Event()
+        self.contract_details_events: dict[int, threading.Event] = {}
+        self.market_data_events: dict[int, threading.Event] = {}
+        self.historical_data_events: dict[int, threading.Event] = {}
         self.server_time = None
         self.raw_server_time = None
         self.managed_accounts: list[str] = []
         self.account_summary: dict[str, dict[str, dict[str, str]]] = {}
         self.positions: list[dict[str, Any]] = []
+        self.contract_details: dict[int, list[Any]] = {}
+        self.market_data_types: dict[int, int] = {}
+        self.quote_ticks: dict[int, list[MarketDataTick]] = {}
+        self.quote_values: dict[int, dict[str, Decimal]] = {}
+        self.quote_timestamps: dict[int, datetime] = {}
+        self.historical_bars: dict[int, list[HistoricalBar]] = {}
+        self.historical_ranges: dict[int, tuple[str | None, str | None]] = {}
         self.errors: list[BrokerErrorEvent] = []
         self.warnings: list[str] = []
         self.connected = False
         self.current_time_requested = False
+        self.requested_market_data_type: int | None = None
+        self.cancelled_market_data: list[int] = []
+        self.cancelled_historical_data: list[int] = []
 
     def connect(self, _host: str, _port: int, _clientId: int) -> bool:
         self.connected = True
@@ -64,6 +83,44 @@ class TimeoutFakeApp:
 
     def reqPositions(self) -> None:
         return None
+
+    def reqContractDetails(self, reqId: int, _contract: object) -> None:
+        self.contract_details_events.setdefault(reqId, threading.Event()).set()
+
+    def reqMarketDataType(self, marketDataType: int) -> None:
+        self.requested_market_data_type = marketDataType
+
+    def reqMktData(
+        self,
+        reqId: int,
+        _contract: object,
+        _genericTickList: str,
+        _snapshot: bool,
+        _regulatorySnapshot: bool,
+        _mktDataOptions: list[Any],
+    ) -> None:
+        self.market_data_events.setdefault(reqId, threading.Event()).set()
+
+    def cancelMktData(self, reqId: int) -> None:
+        self.cancelled_market_data.append(reqId)
+
+    def reqHistoricalData(
+        self,
+        reqId: int,
+        _contract: object,
+        _endDateTime: str,
+        _durationStr: str,
+        _barSizeSetting: str,
+        _whatToShow: str,
+        _useRTH: int,
+        _formatDate: int,
+        _keepUpToDate: bool,
+        _chartOptions: list[Any],
+    ) -> None:
+        self.historical_data_events.setdefault(reqId, threading.Event()).set()
+
+    def cancelHistoricalData(self, reqId: int) -> None:
+        self.cancelled_historical_data.append(reqId)
 
 
 class SuccessFakeApp(TimeoutFakeApp):
@@ -119,6 +176,186 @@ class ErrorCallbackFakeApp(SuccessFakeApp):
         self.errors.append(
             BrokerErrorEvent(req_id=-1, code=502, message="test IBKR callback error")
         )
+
+
+def contract_detail(
+    *,
+    symbol: str = "SPY",
+    con_id: int = 1001,
+    primary_exchange: str = "ARCA",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        contract=SimpleNamespace(
+            conId=con_id,
+            symbol=symbol,
+            secType="STK",
+            exchange="SMART",
+            currency="USD",
+            primaryExchange=primary_exchange,
+        )
+    )
+
+
+class MarketDataSuccessFakeApp(TimeoutFakeApp):
+    def reqContractDetails(self, reqId: int, contract: object) -> None:
+        symbol = str(getattr(contract, "symbol", "SPY"))
+        primary = str(getattr(contract, "primaryExchange", "ARCA") or "ARCA")
+        self.contract_details[reqId] = [
+            contract_detail(symbol=symbol, con_id=1001, primary_exchange=primary)
+        ]
+        self.contract_details_events.setdefault(reqId, threading.Event()).set()
+
+    def reqMktData(
+        self,
+        reqId: int,
+        contract: object,
+        _genericTickList: str,
+        _snapshot: bool,
+        _regulatorySnapshot: bool,
+        _mktDataOptions: list[Any],
+    ) -> None:
+        symbol = str(getattr(contract, "symbol", "SPY"))
+        timestamp = utc_now()
+        self.market_data_types[reqId] = self.requested_market_data_type or 3
+        self.quote_values[reqId] = {
+            "bid": Decimal("500.10"),
+            "ask": Decimal("500.20"),
+            "last": Decimal("500.15"),
+            "close": Decimal("499.50"),
+            "bid_size": Decimal("100"),
+            "ask_size": Decimal("200"),
+            "last_size": Decimal("50"),
+        }
+        self.quote_timestamps[reqId] = timestamp
+        self.quote_ticks[reqId] = [
+            MarketDataTick(
+                symbol=symbol,
+                req_id=reqId,
+                tick_type=1,
+                field="bid",
+                value=Decimal("500.10"),
+                timestamp=timestamp,
+            )
+        ]
+        self.market_data_events.setdefault(reqId, threading.Event()).set()
+
+    def reqHistoricalData(
+        self,
+        reqId: int,
+        contract: object,
+        _endDateTime: str,
+        _durationStr: str,
+        _barSizeSetting: str,
+        _whatToShow: str,
+        _useRTH: int,
+        _formatDate: int,
+        keepUpToDate: bool,
+        _chartOptions: list[Any],
+    ) -> None:
+        assert keepUpToDate is False
+        symbol = str(getattr(contract, "symbol", "SPY"))
+        self.historical_bars[reqId] = [
+            HistoricalBar(
+                symbol=symbol,
+                timestamp="20260518  20:00:00",
+                open=Decimal("499"),
+                high=Decimal("501"),
+                low=Decimal("498"),
+                close=Decimal("500"),
+                volume=Decimal("1000"),
+            )
+        ]
+        self.historical_ranges[reqId] = ("20260518 09:30:00", "20260518 16:00:00")
+        self.historical_data_events.setdefault(reqId, threading.Event()).set()
+
+
+class AmbiguousContractFakeApp(MarketDataSuccessFakeApp):
+    def reqContractDetails(self, reqId: int, contract: object) -> None:
+        symbol = str(getattr(contract, "symbol", "SPY"))
+        self.contract_details[reqId] = [
+            contract_detail(symbol=symbol, con_id=1001, primary_exchange="ARCA"),
+            contract_detail(symbol=symbol, con_id=1002, primary_exchange="NYSE"),
+        ]
+        self.contract_details_events.setdefault(reqId, threading.Event()).set()
+
+
+class MissingContractFakeApp(MarketDataSuccessFakeApp):
+    def reqContractDetails(self, reqId: int, _contract: object) -> None:
+        self.errors.append(
+            BrokerErrorEvent(req_id=reqId, code=200, message="No security definition")
+        )
+        self.contract_details[reqId] = []
+        self.contract_details_events.setdefault(reqId, threading.Event()).set()
+
+
+class MissingBidAskFakeApp(MarketDataSuccessFakeApp):
+    def reqMktData(
+        self,
+        reqId: int,
+        _contract: object,
+        _genericTickList: str,
+        _snapshot: bool,
+        _regulatorySnapshot: bool,
+        _mktDataOptions: list[Any],
+    ) -> None:
+        self.market_data_types[reqId] = self.requested_market_data_type or 3
+        self.quote_values[reqId] = {"last": Decimal("500.15")}
+        self.quote_timestamps[reqId] = utc_now()
+        self.market_data_events.setdefault(reqId, threading.Event()).set()
+
+
+class StaleQuoteFakeApp(MarketDataSuccessFakeApp):
+    def reqMktData(
+        self,
+        reqId: int,
+        contract: object,
+        genericTickList: str,
+        snapshot: bool,
+        regulatorySnapshot: bool,
+        mktDataOptions: list[Any],
+    ) -> None:
+        super().reqMktData(
+            reqId,
+            contract,
+            genericTickList,
+            snapshot,
+            regulatorySnapshot,
+            mktDataOptions,
+        )
+        self.quote_timestamps[reqId] = datetime(2020, 1, 1, tzinfo=UTC)
+
+
+class PermissionErrorMarketDataFakeApp(MarketDataSuccessFakeApp):
+    def reqMktData(
+        self,
+        reqId: int,
+        _contract: object,
+        _genericTickList: str,
+        _snapshot: bool,
+        _regulatorySnapshot: bool,
+        _mktDataOptions: list[Any],
+    ) -> None:
+        self.errors.append(
+            BrokerErrorEvent(
+                req_id=reqId,
+                code=354,
+                message="Requested market data is not subscribed",
+            )
+        )
+        self.market_data_events.setdefault(reqId, threading.Event()).set()
+
+
+class MarketDataTimeoutFakeApp(MarketDataSuccessFakeApp):
+    def reqMktData(
+        self,
+        _reqId: int,
+        _contract: object,
+        _genericTickList: str,
+        _snapshot: bool,
+        _regulatorySnapshot: bool,
+        _mktDataOptions: list[Any],
+    ) -> None:
+        return None
 
 
 def test_ibapi_missing_path_fails_gracefully() -> None:
@@ -269,6 +506,221 @@ def test_broker_probe_success_with_mocked_read_only_callbacks() -> None:
     assert report.no_order_guarantee is True
 
 
+def test_contract_resolution_success() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = MarketDataSuccessFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    result = client.resolve_contract("SPY", timeout=0.1)
+
+    assert result.resolved is True
+    assert result.contract_id == 1001
+    assert result.primary_exchange == "ARCA"
+    client.disconnect()
+
+
+def test_contract_resolution_failure_is_structured() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = MissingContractFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    result = client.resolve_contract("BAD", timeout=0.1)
+
+    assert result.resolved is False
+    assert result.errors
+    assert result.errors[0].code == 200
+    assert "no security definition" in " ".join(result.warnings).lower()
+    client.disconnect()
+
+
+def test_multiple_contract_match_records_ambiguity_warning() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = AmbiguousContractFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    result = client.resolve_contract("SPY", timeout=0.1)
+
+    assert result.resolved is True
+    assert result.ambiguous is True
+    assert result.matching_contracts == 2
+    assert result.warnings
+    client.disconnect()
+
+
+def test_market_data_diagnostic_captures_delayed_type_ticks_spread_and_history() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = MarketDataSuccessFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    report = client.market_data_diagnostic(
+        ["SPY"],
+        market_data_type=MarketDataRequestType.DELAYED,
+        include_historical=True,
+        timeout=0.1,
+    )
+
+    assert report.ok is True
+    assert report.order_routing_enabled is False
+    assert report.no_order_guarantee is True
+    assert report.contract_resolutions[0].resolved is True
+    quote = report.quote_snapshots[0]
+    assert quote.market_data_type.requested_code == 3
+    assert quote.market_data_type.received_code == 3
+    assert quote.bid == Decimal("500.10")
+    assert quote.ask == Decimal("500.20")
+    assert quote.last == Decimal("500.15")
+    assert quote.close == Decimal("499.50")
+    assert quote.bid_size == Decimal("100")
+    assert quote.ask_size == Decimal("200")
+    assert quote.last_size == Decimal("50")
+    assert quote.stale is False
+    assert report.spread_diagnostics[0].spread == Decimal("0.10")
+    assert report.spread_diagnostics[0].spread_bps is not None
+    assert report.historical_data[0].ok is True
+    assert report.historical_data[0].historical_bars_count == 1
+    assert fake_app.cancelled_market_data
+    assert fake_app.cancelled_historical_data == []
+
+
+def test_market_data_missing_bid_ask_is_warning_not_crash() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = MissingBidAskFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    report = client.market_data_diagnostic(
+        ["SPY"],
+        market_data_type=MarketDataRequestType.DELAYED,
+        timeout=0.1,
+    )
+
+    assert report.ok is True
+    assert report.quote_snapshots[0].last == Decimal("500.15")
+    assert report.spread_diagnostics[0].has_bid_ask is False
+    assert any("bid/ask unavailable" in warning for warning in report.warnings)
+
+
+def test_stale_quote_detection() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = StaleQuoteFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    report = client.market_data_diagnostic(
+        ["SPY"],
+        market_data_type=MarketDataRequestType.DELAYED,
+        timeout=0.1,
+    )
+
+    assert report.quote_snapshots[0].stale is True
+    assert report.quote_snapshots[0].quote_age_seconds is not None
+
+
+def test_market_data_timeout_returns_structured_diagnostic() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = MarketDataTimeoutFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    report = client.market_data_diagnostic(
+        ["SPY"],
+        market_data_type=MarketDataRequestType.DELAYED,
+        timeout=0.01,
+    )
+
+    assert report.ok is False
+    assert report.contract_resolutions[0].resolved is True
+    assert "no marketDataType callback" in " ".join(report.warnings)
+    assert "no bid/ask/last/close ticks" in " ".join(report.warnings)
+    assert fake_app.cancelled_market_data
+
+
+def test_market_data_permission_error_is_recorded() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = PermissionErrorMarketDataFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    report = client.market_data_diagnostic(
+        ["SPY"],
+        market_data_type=MarketDataRequestType.LIVE,
+        timeout=0.1,
+    )
+
+    assert report.ok is False
+    assert report.errors
+    assert report.errors[0].code == 354
+    assert any("permission" in warning for warning in report.warnings)
+
+
+def test_non_fatal_farm_warnings_do_not_fail_market_probe_by_themselves() -> None:
+    app = _ReadOnlyIBKRApp()
+
+    for code in (2104, 2106, 2107, 2158, 10167):
+        app.error(-1, code, f"status {code}")
+
+    assert app.errors == []
+    assert len(app.warnings) == 5
+
+
+def test_market_data_report_serializes_to_json() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = MarketDataSuccessFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    report = client.market_data_diagnostic(
+        ["SPY"],
+        market_data_type=MarketDataRequestType.DELAYED,
+        include_historical=True,
+        timeout=0.1,
+    )
+
+    payload = report.model_dump(mode="json")
+    assert payload["report_type"] == "market_probe"
+    assert payload["quote_snapshots"][0]["bid"] == "500.10"
+
+
 def test_cli_preflight_runs_without_tws() -> None:
     runner = CliRunner()
 
@@ -353,11 +805,71 @@ def test_broker_probe_command_handles_mocked_success(
     assert (tmp_path / "reports" / "latest_broker_probe.json").exists()
 
 
+def test_market_probe_command_handles_mocked_success(
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    class FakeClient:
+        def __init__(self, _config: object) -> None:
+            return None
+
+        def market_data_diagnostic(
+            self,
+            symbols: list[str],
+            *,
+            market_data_type: MarketDataRequestType = MarketDataRequestType.DELAYED,
+            include_historical: bool = False,
+            timeout: float | None = None,
+        ) -> MarketDataDiagnosticReport:
+            del timeout
+            return MarketDataDiagnosticReport(
+                ok=True,
+                mode="paper",
+                host="127.0.0.1",
+                port=4002,
+                client_id=101,
+                broker_kind="ib_gateway",
+                connected=True,
+                ibapi_available=True,
+                connection_attempted=True,
+                symbols_requested=symbols,
+                market_data_type_requested=market_data_type,
+                market_data_type_requested_code=3,
+                include_historical=include_historical,
+                final_status="connected",
+            )
+
+    monkeypatch.setattr(cli, "IBKRClient", FakeClient)
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.app,
+        ["market-probe", "--symbols", "SPY,AAPL", "--data-type", "delayed"],
+    )
+
+    assert result.exit_code == 0
+    assert "Read-only market-data probe" in result.output
+    assert "No order APIs invoked" in result.output
+    assert (tmp_path / "reports" / "latest_market_probe.json").exists()
+
+
 def test_read_only_broker_code_does_not_call_order_apis() -> None:
-    source = Path("src/trader/broker/ibkr_client.py").read_text()
+    source = "\n".join(
+        path.read_text()
+        for path in [
+            Path("src/trader/broker/ibkr_client.py"),
+            Path("src/trader/cli.py"),
+            Path("scripts/run-market-probe.sh"),
+        ]
+        if path.exists()
+    )
 
     assert "placeOrder" not in source
     assert "cancelOrder" not in source
+    assert "reqGlobalCancel" not in source
+    assert "exerciseOptions" not in source
+    assert "replaceFA" not in source
 
 
 def test_live_ports_still_rejected() -> None:

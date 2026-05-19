@@ -10,6 +10,12 @@ Milestone 2 adds a broker socket probe, but it is read-only. It may request curr
 
 Milestone 3 adds setup checks and clearer readiness diagnostics for the official IBKR Python API dependency. It does not add execution capability. Broker-probe reports must continue to include `order_routing_enabled=false`, `no_order_guarantee=true`, and a clear failure stage when setup or connectivity is incomplete.
 
+Milestone 5 adds read-only market-data diagnostics. `market-probe` may resolve
+contracts, request market-data type, collect quote ticks, and request a small
+historical-bar sample. It does not place, modify, or cancel orders. `cancelMktData`
+and `cancelHistoricalData` are permitted only as data-request cleanup operations;
+`cancelOrder` remains forbidden.
+
 ## Live Trading Disabled
 
 Live trading is impossible in this version by design:
@@ -53,6 +59,10 @@ The initial risk engine blocks:
 Read-Only API in TWS is still recommended as a belt-and-suspenders control because it prevents API orders at the TWS setting level.
 
 The read-only broker probe does not change `ALLOW_PAPER_ORDERS`, does not submit to the paper executor, and does not make paper order activation possible.
+
+The read-only market-data probe does not change `ALLOW_PAPER_ORDERS`, does not
+submit to the paper executor, and does not feed strategy, portfolio, risk, or
+execution automation.
 
 ## Sensitive Data
 

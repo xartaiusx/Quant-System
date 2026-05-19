@@ -8,9 +8,12 @@ This repo opens a socket only when explicitly asked to run a read-only probe:
 
 ```bash
 python -m trader.cli broker-probe
+python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
 ```
 
 The probe requests current server time and managed accounts. Account identifiers are masked in CLI output and reports.
+The market-data probe requests contract details, market-data type, quote ticks,
+and optional small historical-bar samples. It does not route orders.
 
 ## IBKR API Dependency
 
@@ -79,6 +82,7 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - Socket failures report `failure_stage=socket_connect`.
 - Request timeouts report `failure_stage=timeout`.
 - Successful probes report current server time and masked managed accounts when returned.
+- `market-probe` defaults to delayed data and writes `market_probe` reports.
 - Paper execution remains blocked by the refusing paper executor.
 - Live trading remains impossible.
 
@@ -95,6 +99,9 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - Read-only mode is acceptable and recommended for this milestone.
 - In Python `ibapi`, a falsy `connect()` return does not by itself prove failure; the probe waits for readiness callbacks and the current-time response.
 - IBKR farm-status warnings such as `2104`, `2106`, `2107`, and `2158` are informational for this probe. They do not mean current-time connectivity failed.
+- Live market data requires IBKR permissions/subscriptions. Delayed data is acceptable for early diagnostics and is the default.
+- Missing bid/ask values can occur outside market hours or when permissions are unavailable; the report records this as diagnostics rather than pretending mock data is broker data.
+- IB Gateway paper uses port `4002`; live Gateway port `4001` remains rejected.
 
 ## Probe Commands
 
@@ -107,6 +114,8 @@ scripts/run-broker-preflight.sh --timeout 10
 scripts/run-broker-probe.sh --timeout 10
 python -m trader.cli account --connect
 python -m trader.cli positions --connect
+python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
+python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
 ```
 
 `account --connect` and `positions --connect` are read-only. If the broker is unavailable, they clearly fall back to mock data instead of pretending mock data came from TWS or Gateway.

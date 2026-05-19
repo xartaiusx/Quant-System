@@ -25,14 +25,26 @@ from trader.models import (
     BrokerDiagnosticReport,
     BrokerErrorEvent,
     BrokerTimeProbe,
+    ContractResolutionResult,
+    HistoricalBar,
+    HistoricalDataDiagnostic,
     ManagedAccountInfo,
+    MarketDataDiagnosticReport,
+    MarketDataRequestType,
+    MarketDataTick,
+    MarketDataTypeInfo,
+    QuoteSnapshot,
+    SpreadDiagnostic,
+    utc_now,
 )
 
 try:
     _client_module = importlib.import_module("ibapi.client")
+    _contract_module = importlib.import_module("ibapi.contract")
     _wrapper_module = importlib.import_module("ibapi.wrapper")
     _IBAPI_IMPORT_ERROR: BaseException | None = None
     _IBAPI_ECLIENT: Any = _client_module.EClient
+    _IBAPI_CONTRACT: Any = _contract_module.Contract
     _IBAPI_EWRAPPER: Any = _wrapper_module.EWrapper
 except Exception as exc:  # pragma: no cover - exercised through injected availability tests
     _IBAPI_IMPORT_ERROR = exc
@@ -59,6 +71,7 @@ except Exception as exc:  # pragma: no cover - exercised through injected availa
             return None
 
     _IBAPI_ECLIENT = _MissingEClient
+    _IBAPI_CONTRACT = None
     _IBAPI_EWRAPPER = _MissingEWrapper
 
 
@@ -69,8 +82,48 @@ IBKR_PORT_NOTES = {
     "ib_gateway_live_disabled": 4001,
 }
 
-_INFORMATIONAL_ERROR_CODES = {2104, 2106, 2107, 2158}
+_INFORMATIONAL_ERROR_CODES = {2104, 2106, 2107, 2158, 10167}
+_CONTRACT_ERROR_CODES = {200}
+_MARKET_DATA_PERMISSION_CODES = {354, 10167}
 _ACCOUNT_SUMMARY_TAGS = "NetLiquidation,TotalCashValue,BuyingPower,DailyPnL"
+_DEFAULT_HISTORICAL_DURATION = "1 D"
+_DEFAULT_HISTORICAL_BAR_SIZE = "5 mins"
+_DEFAULT_HISTORICAL_WHAT_TO_SHOW = "TRADES"
+_MARKET_DATA_TYPE_CODES = {
+    "live": 1,
+    "frozen": 2,
+    "delayed": 3,
+    "delayed_frozen": 4,
+}
+_MARKET_DATA_TYPE_BY_CODE = {
+    code: name for name, code in _MARKET_DATA_TYPE_CODES.items()
+}
+_PRIMARY_EXCHANGE_HINTS = {
+    "SPY": "ARCA",
+    "QQQ": "NASDAQ",
+    "AAPL": "NASDAQ",
+    "MSFT": "NASDAQ",
+    "NVDA": "NASDAQ",
+}
+_PRICE_TICK_FIELDS = {
+    1: "bid",
+    2: "ask",
+    4: "last",
+    9: "close",
+    66: "bid",
+    67: "ask",
+    68: "last",
+    75: "close",
+}
+_SIZE_TICK_FIELDS = {
+    0: "bid_size",
+    3: "ask_size",
+    5: "last_size",
+    69: "bid_size",
+    70: "ask_size",
+    71: "last_size",
+}
+_QUOTE_STALE_AFTER_SECONDS = 900
 _NO_ORDER_WARNING = "No order APIs invoked; order routing: disabled"
 
 
@@ -82,11 +135,21 @@ class ReadOnlyAppProtocol(Protocol):
     managed_accounts_event: threading.Event
     account_summary_event: threading.Event
     positions_event: threading.Event
+    contract_details_events: dict[int, threading.Event]
+    market_data_events: dict[int, threading.Event]
+    historical_data_events: dict[int, threading.Event]
     server_time: datetime | None
     raw_server_time: int | None
     managed_accounts: list[str]
     account_summary: dict[str, dict[str, dict[str, str]]]
     positions: list[dict[str, Any]]
+    contract_details: dict[int, list[Any]]
+    market_data_types: dict[int, int]
+    quote_ticks: dict[int, list[MarketDataTick]]
+    quote_values: dict[int, dict[str, Decimal]]
+    quote_timestamps: dict[int, datetime]
+    historical_bars: dict[int, list[HistoricalBar]]
+    historical_ranges: dict[int, tuple[str | None, str | None]]
     errors: list[BrokerErrorEvent]
     warnings: list[str]
 
@@ -114,6 +177,44 @@ class ReadOnlyAppProtocol(Protocol):
     def reqPositions(self) -> None:
         raise NotImplementedError
 
+    def reqContractDetails(self, reqId: int, contract: object) -> None:
+        raise NotImplementedError
+
+    def reqMarketDataType(self, marketDataType: int) -> None:
+        raise NotImplementedError
+
+    def reqMktData(
+        self,
+        reqId: int,
+        contract: object,
+        genericTickList: str,
+        snapshot: bool,
+        regulatorySnapshot: bool,
+        mktDataOptions: list[Any],
+    ) -> None:
+        raise NotImplementedError
+
+    def cancelMktData(self, reqId: int) -> None:
+        raise NotImplementedError
+
+    def reqHistoricalData(
+        self,
+        reqId: int,
+        contract: object,
+        endDateTime: str,
+        durationStr: str,
+        barSizeSetting: str,
+        whatToShow: str,
+        useRTH: int,
+        formatDate: int,
+        keepUpToDate: bool,
+        chartOptions: list[Any],
+    ) -> None:
+        raise NotImplementedError
+
+    def cancelHistoricalData(self, reqId: int) -> None:
+        raise NotImplementedError
+
 
 class _ReadOnlyIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
     """IBKR API app that records read-only callbacks into thread-safe state."""
@@ -131,6 +232,16 @@ class _ReadOnlyIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
         self.managed_accounts: list[str] = []
         self.account_summary: dict[str, dict[str, dict[str, str]]] = {}
         self.positions: list[dict[str, Any]] = []
+        self.contract_details_events: dict[int, threading.Event] = {}
+        self.market_data_events: dict[int, threading.Event] = {}
+        self.historical_data_events: dict[int, threading.Event] = {}
+        self.contract_details: dict[int, list[Any]] = {}
+        self.market_data_types: dict[int, int] = {}
+        self.quote_ticks: dict[int, list[MarketDataTick]] = {}
+        self.quote_values: dict[int, dict[str, Decimal]] = {}
+        self.quote_timestamps: dict[int, datetime] = {}
+        self.historical_bars: dict[int, list[HistoricalBar]] = {}
+        self.historical_ranges: dict[int, tuple[str | None, str | None]] = {}
         self.errors: list[BrokerErrorEvent] = []
         self.warnings: list[str] = []
         self._lock = threading.Lock()
@@ -188,6 +299,104 @@ class _ReadOnlyIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
 
     def positionEnd(self) -> None:  # noqa: N802 - IBKR callback name
         self.positions_event.set()
+
+    def contractDetails(self, reqId: int, contractDetails: object) -> None:  # noqa: N802
+        with self._lock:
+            self.contract_details.setdefault(reqId, []).append(contractDetails)
+
+    def contractDetailsEnd(self, reqId: int) -> None:  # noqa: N802
+        self.contract_details_events.setdefault(reqId, threading.Event()).set()
+
+    def marketDataType(self, reqId: int, marketDataType: int) -> None:  # noqa: N802
+        with self._lock:
+            self.market_data_types[reqId] = marketDataType
+        self.market_data_events.setdefault(reqId, threading.Event()).set()
+
+    def tickPrice(  # noqa: N802 - IBKR callback name
+        self,
+        reqId: int,
+        tickType: int,
+        price: float,
+        _attrib: object,
+    ) -> None:
+        field = _PRICE_TICK_FIELDS.get(tickType)
+        if field is None or price <= 0:
+            return
+        timestamp = utc_now()
+        value = Decimal(str(price))
+        with self._lock:
+            self.quote_values.setdefault(reqId, {})[field] = value
+            self.quote_timestamps[reqId] = timestamp
+            self.quote_ticks.setdefault(reqId, []).append(
+                MarketDataTick(
+                    symbol="",
+                    req_id=reqId,
+                    tick_type=tickType,
+                    field=field,
+                    value=value,
+                    timestamp=timestamp,
+                )
+            )
+        self.market_data_events.setdefault(reqId, threading.Event()).set()
+
+    def tickSize(self, reqId: int, tickType: int, size: Decimal | float | int) -> None:  # noqa: N802
+        field = _SIZE_TICK_FIELDS.get(tickType)
+        if field is None:
+            return
+        timestamp = utc_now()
+        value = Decimal(str(size))
+        with self._lock:
+            self.quote_values.setdefault(reqId, {})[field] = value
+            self.quote_timestamps[reqId] = timestamp
+            self.quote_ticks.setdefault(reqId, []).append(
+                MarketDataTick(
+                    symbol="",
+                    req_id=reqId,
+                    tick_type=tickType,
+                    field=field,
+                    value=value,
+                    timestamp=timestamp,
+                )
+            )
+        self.market_data_events.setdefault(reqId, threading.Event()).set()
+
+    def tickString(self, reqId: int, tickType: int, value: str) -> None:  # noqa: N802
+        with self._lock:
+            self.quote_ticks.setdefault(reqId, []).append(
+                MarketDataTick(
+                    symbol="",
+                    req_id=reqId,
+                    tick_type=tickType,
+                    field="string",
+                    value=value,
+                    timestamp=utc_now(),
+                )
+            )
+
+    def historicalData(self, reqId: int, bar: object) -> None:  # noqa: N802
+        symbol = ""
+        volume_raw = getattr(bar, "volume", None)
+        with self._lock:
+            self.historical_bars.setdefault(reqId, []).append(
+                HistoricalBar(
+                    symbol=symbol,
+                    timestamp=str(getattr(bar, "date", "")),
+                    open=Decimal(str(getattr(bar, "open", "0"))),
+                    high=Decimal(str(getattr(bar, "high", "0"))),
+                    low=Decimal(str(getattr(bar, "low", "0"))),
+                    close=Decimal(str(getattr(bar, "close", "0"))),
+                    volume=Decimal(str(volume_raw)) if volume_raw is not None else None,
+                )
+            )
+
+    def historicalDataEnd(self, reqId: int, start: str, end: str) -> None:  # noqa: N802
+        with self._lock:
+            self.historical_ranges[reqId] = (start, end)
+        self.historical_data_events.setdefault(reqId, threading.Event()).set()
+
+    def connectionClosed(self) -> None:  # noqa: N802
+        with self._lock:
+            self.warnings.append("IBKR connection closed")
 
     def error(  # noqa: N802 - IBKR callback name
         self,
@@ -254,6 +463,8 @@ class IBKRClient:
         self._client_warnings: list[str] = []
         self._connection_attempted = False
         self._failure_stage: str | None = None
+        self._request_id = 10_000
+        self._request_id_lock = threading.Lock()
 
     @staticmethod
     def ibapi_available() -> bool:
@@ -514,6 +725,240 @@ class IBKRClient:
 
         return list(app.positions)
 
+    def resolve_contract(
+        self,
+        symbol: str,
+        *,
+        timeout: float | None = None,
+    ) -> ContractResolutionResult:
+        """Resolve a SMART/USD stock contract without requesting orders."""
+
+        status = self.connect(timeout=timeout)
+        if not status.connected:
+            return ContractResolutionResult(
+                symbol=symbol.strip().upper(),
+                resolved=False,
+                errors=list(status.errors),
+                warnings=list(status.warnings),
+            )
+
+        app = self._require_app()
+        _contract, result = self._resolve_contract_connected(
+            app,
+            symbol.strip().upper(),
+            timeout=timeout,
+        )
+        return result
+
+    def request_quote_snapshot(
+        self,
+        symbols: list[str],
+        *,
+        market_data_type: MarketDataRequestType = MarketDataRequestType.DELAYED,
+        timeout: float | None = None,
+    ) -> list[QuoteSnapshot]:
+        """Request read-only quote snapshots for symbols."""
+
+        status = self.connect(timeout=timeout)
+        if not status.connected:
+            return []
+
+        app = self._require_app()
+        quotes: list[QuoteSnapshot] = []
+        for symbol in symbols:
+            contract, resolution = self._resolve_contract_connected(
+                app,
+                symbol.strip().upper(),
+                timeout=timeout,
+            )
+            if contract is None or not resolution.resolved:
+                continue
+            quote, _spread = self._request_quote_snapshot_connected(
+                app,
+                symbol.strip().upper(),
+                contract,
+                market_data_type=market_data_type,
+                timeout=timeout,
+            )
+            quotes.append(quote)
+        return quotes
+
+    def request_historical_bars(
+        self,
+        symbol: str,
+        *,
+        timeout: float | None = None,
+    ) -> HistoricalDataDiagnostic:
+        """Request a small read-only historical bars sample for one symbol."""
+
+        status = self.connect(timeout=timeout)
+        if not status.connected:
+            return HistoricalDataDiagnostic(
+                symbol=symbol.strip().upper(),
+                requested=False,
+                ok=False,
+                errors=list(status.errors),
+                warnings=list(status.warnings),
+            )
+
+        app = self._require_app()
+        contract, resolution = self._resolve_contract_connected(
+            app,
+            symbol.strip().upper(),
+            timeout=timeout,
+        )
+        if contract is None or not resolution.resolved:
+            return HistoricalDataDiagnostic(
+                symbol=symbol.strip().upper(),
+                requested=False,
+                ok=False,
+                errors=list(resolution.errors),
+                warnings=list(resolution.warnings),
+            )
+        return self._request_historical_bars_connected(
+            app,
+            symbol.strip().upper(),
+            contract,
+            timeout=timeout,
+        )
+
+    def market_data_diagnostic(
+        self,
+        symbols: list[str],
+        *,
+        market_data_type: MarketDataRequestType = MarketDataRequestType.DELAYED,
+        include_historical: bool = False,
+        timeout: float | None = None,
+    ) -> MarketDataDiagnosticReport:
+        """Run a read-only contract, quote, spread, and optional historical diagnostic."""
+
+        self._clear_events()
+        normalized_symbols = [symbol.strip().upper() for symbol in symbols if symbol.strip()]
+        contract_resolutions: list[ContractResolutionResult] = []
+        quote_snapshots: list[QuoteSnapshot] = []
+        spread_diagnostics: list[SpreadDiagnostic] = []
+        historical_data: list[HistoricalDataDiagnostic] = []
+        connected_before_disconnect = False
+
+        try:
+            status = self.connect(timeout=timeout)
+            if not status.connected:
+                return self._market_data_report(
+                    ok=False,
+                    connected=False,
+                    symbols=normalized_symbols,
+                    market_data_type=market_data_type,
+                    include_historical=include_historical,
+                    final_status="failed",
+                    errors=list(status.errors),
+                    warnings=list(status.warnings),
+                )
+
+            app = self._require_app()
+            for symbol in normalized_symbols:
+                contract, resolution = self._resolve_contract_connected(
+                    app,
+                    symbol,
+                    timeout=timeout,
+                )
+                contract_resolutions.append(resolution)
+                if contract is None or not resolution.resolved:
+                    continue
+
+                quote, spread = self._request_quote_snapshot_connected(
+                    app,
+                    symbol,
+                    contract,
+                    market_data_type=market_data_type,
+                    timeout=timeout,
+                )
+                quote_snapshots.append(quote)
+                spread_diagnostics.append(spread)
+
+                if include_historical:
+                    historical_data.append(
+                        self._request_historical_bars_connected(
+                            app,
+                            symbol,
+                            contract,
+                            timeout=timeout,
+                        )
+                    )
+        except KeyboardInterrupt:
+            self._record_error("market-data probe interrupted by keyboard", failure_stage="unknown")
+        finally:
+            self._collect_app_events()
+            connected_before_disconnect = self.is_connected()
+            self.disconnect()
+
+        errors = list(self._client_errors)
+        warnings = list(
+            dict.fromkeys(
+                [
+                    *self._client_warnings,
+                    *[
+                        warning
+                        for item in contract_resolutions
+                        for warning in item.warnings
+                    ],
+                    *[warning for item in quote_snapshots for warning in item.warnings],
+                    *[warning for item in spread_diagnostics for warning in item.warnings],
+                    *[warning for item in historical_data for warning in item.warnings],
+                    "TWS Read-Only API setting is not directly detectable by this probe",
+                    _NO_ORDER_WARNING,
+                ]
+            )
+        )
+        resolved_any = any(item.resolved for item in contract_resolutions)
+        market_data_type_any = any(
+            quote.market_data_type.received_code is not None for quote in quote_snapshots
+        )
+        quote_any = any(
+            quote.bid is not None
+            or quote.ask is not None
+            or quote.last is not None
+            or quote.close is not None
+            for quote in quote_snapshots
+        )
+        historical_any = any(item.ok for item in historical_data)
+        ok = bool(connected_before_disconnect and resolved_any and (
+            market_data_type_any or quote_any or historical_any
+        ))
+        final_status = "connected" if ok and not errors else "partial" if ok else "failed"
+
+        return MarketDataDiagnosticReport(
+            ok=ok,
+            mode=self.connection_config.mode,
+            host=self.connection_config.host,
+            port=self.connection_config.port,
+            client_id=self.connection_config.client_id,
+            broker_kind=self.connection_config.broker_kind,
+            connected=connected_before_disconnect,
+            ibapi_available=self.ibapi_is_available,
+            ibapi_import_error=self.ibapi_import_error(),
+            connection_attempted=self._connection_attempted,
+            failure_stage=self._failure_stage,
+            symbols_requested=normalized_symbols,
+            market_data_type_requested=market_data_type,
+            market_data_type_requested_code=_MARKET_DATA_TYPE_CODES[market_data_type.value],
+            include_historical=include_historical,
+            contract_resolutions=contract_resolutions,
+            quote_snapshots=quote_snapshots,
+            spread_diagnostics=spread_diagnostics,
+            historical_data=historical_data,
+            ibkr_messages=[
+                *errors,
+                *[
+                    BrokerErrorEvent(message=warning, source="ibkr_warning")
+                    for warning in warnings
+                    if warning.startswith("IBKR ")
+                ],
+            ],
+            errors=errors,
+            warnings=warnings,
+            final_status=final_status,
+        )
+
     def preflight(
         self,
         *,
@@ -623,6 +1068,336 @@ class IBKRClient:
             final_status="connected" if ok else "failed",
         )
 
+    def _resolve_contract_connected(
+        self,
+        app: ReadOnlyAppProtocol,
+        symbol: str,
+        *,
+        timeout: float | None = None,
+    ) -> tuple[object | None, ContractResolutionResult]:
+        request_timeout = timeout or self.connection_config.request_timeout_seconds
+        req_id = self._next_request_id()
+        event = threading.Event()
+        app.contract_details_events[req_id] = event
+        app.contract_details[req_id] = []
+        contract = _make_stock_contract(symbol)
+        primary_exchange = getattr(contract, "primaryExchange", None) or None
+
+        try:
+            app.reqContractDetails(req_id, contract)
+        except RuntimeError as exc:
+            message = f"contract resolution request failed for {symbol}: {exc}"
+            self._record_error(message, req_id=req_id, failure_stage="contract_resolution")
+            return None, ContractResolutionResult(
+                symbol=symbol,
+                primary_exchange=primary_exchange,
+                resolved=False,
+                errors=[BrokerErrorEvent(req_id=req_id, message=message)],
+            )
+
+        if not event.wait(request_timeout):
+            self._collect_app_events()
+            message = (
+                f"contract resolution timed out for {symbol} "
+                f"after {request_timeout:g} seconds"
+            )
+            self._record_error(message, req_id=req_id, failure_stage="timeout")
+            return None, ContractResolutionResult(
+                symbol=symbol,
+                primary_exchange=primary_exchange,
+                resolved=False,
+                errors=self._errors_for_req(req_id),
+                warnings=[message],
+            )
+
+        self._collect_app_events()
+        details = list(app.contract_details.get(req_id, []))
+        req_errors = self._errors_for_req(req_id)
+        if not details:
+            missing_warnings = [f"no contract details returned for {symbol}"]
+            if any(error.code in _CONTRACT_ERROR_CODES for error in req_errors):
+                missing_warnings.append(
+                    "IBKR reported no security definition for the requested contract"
+                )
+            return None, ContractResolutionResult(
+                symbol=symbol,
+                primary_exchange=primary_exchange,
+                resolved=False,
+                errors=req_errors,
+                warnings=missing_warnings,
+            )
+
+        selected = _select_contract_details(details, primary_exchange=primary_exchange)
+        selected_contract = getattr(selected, "contract", selected)
+        selected_primary = str(getattr(selected_contract, "primaryExchange", "") or "") or None
+        selected_exchange = str(getattr(selected_contract, "exchange", "SMART") or "SMART")
+        selected_currency = str(getattr(selected_contract, "currency", "USD") or "USD")
+        selected_sec_type = str(getattr(selected_contract, "secType", "STK") or "STK")
+        resolution_warnings: list[str] = []
+        ambiguous = len(details) > 1
+        if ambiguous:
+            resolution_warnings.append(
+                f"{symbol} resolved to {len(details)} contracts; selected "
+                f"{_contract_description(selected_contract)}"
+            )
+
+        return selected_contract, ContractResolutionResult(
+            symbol=symbol,
+            sec_type=selected_sec_type,
+            exchange=selected_exchange,
+            currency=selected_currency,
+            primary_exchange=selected_primary,
+            contract_id=_contract_id(selected_contract),
+            resolved=True,
+            ambiguous=ambiguous,
+            matching_contracts=len(details),
+            selected_contract_description=_contract_description(selected_contract),
+            errors=req_errors,
+            warnings=resolution_warnings,
+        )
+
+    def _request_quote_snapshot_connected(
+        self,
+        app: ReadOnlyAppProtocol,
+        symbol: str,
+        contract: object,
+        *,
+        market_data_type: MarketDataRequestType,
+        timeout: float | None = None,
+    ) -> tuple[QuoteSnapshot, SpreadDiagnostic]:
+        request_timeout = timeout or self.connection_config.request_timeout_seconds
+        req_id = self._next_request_id()
+        event = threading.Event()
+        app.market_data_events[req_id] = event
+        app.quote_values[req_id] = {}
+        app.quote_ticks[req_id] = []
+        requested_code = _MARKET_DATA_TYPE_CODES[market_data_type.value]
+
+        try:
+            app.reqMarketDataType(requested_code)
+            app.reqMktData(req_id, contract, "", False, False, [])
+        except RuntimeError as exc:
+            message = f"market-data request failed for {symbol}: {exc}"
+            self._record_error(message, req_id=req_id, failure_stage="market_data_request")
+            quote = self._quote_snapshot_from_app(
+                app,
+                symbol,
+                req_id,
+                market_data_type=market_data_type,
+                warning=message,
+            )
+            return quote, _spread_for_quote(quote)
+
+        try:
+            deadline = time.monotonic() + request_timeout
+            while time.monotonic() < deadline:
+                values = app.quote_values.get(req_id, {})
+                received_type = app.market_data_types.get(req_id)
+                if received_type is not None and any(
+                    key in values for key in ("bid", "ask", "last", "close")
+                ):
+                    break
+                remaining = deadline - time.monotonic()
+                event.wait(timeout=min(0.25, max(0, remaining)))
+                event.clear()
+        finally:
+            with suppress(OSError, RuntimeError):
+                app.cancelMktData(req_id)
+
+        self._collect_app_events()
+        quote = self._quote_snapshot_from_app(
+            app,
+            symbol,
+            req_id,
+            market_data_type=market_data_type,
+        )
+        spread = _spread_for_quote(quote)
+        return quote, spread
+
+    def _request_historical_bars_connected(
+        self,
+        app: ReadOnlyAppProtocol,
+        symbol: str,
+        contract: object,
+        *,
+        timeout: float | None = None,
+    ) -> HistoricalDataDiagnostic:
+        request_timeout = timeout or self.connection_config.request_timeout_seconds
+        req_id = self._next_request_id()
+        event = threading.Event()
+        app.historical_data_events[req_id] = event
+        app.historical_bars[req_id] = []
+
+        try:
+            app.reqHistoricalData(
+                req_id,
+                contract,
+                "",
+                _DEFAULT_HISTORICAL_DURATION,
+                _DEFAULT_HISTORICAL_BAR_SIZE,
+                _DEFAULT_HISTORICAL_WHAT_TO_SHOW,
+                1,
+                1,
+                False,
+                [],
+            )
+        except RuntimeError as exc:
+            message = f"historical-data request failed for {symbol}: {exc}"
+            self._record_error(message, req_id=req_id, failure_stage="historical_data_request")
+            return HistoricalDataDiagnostic(
+                symbol=symbol,
+                requested=True,
+                ok=False,
+                errors=[BrokerErrorEvent(req_id=req_id, message=message)],
+            )
+
+        completed = False
+        try:
+            completed = event.wait(request_timeout)
+        finally:
+            if not completed:
+                with suppress(OSError, RuntimeError):
+                    app.cancelHistoricalData(req_id)
+
+        self._collect_app_events()
+        bars = [
+            bar.model_copy(update={"symbol": symbol})
+            for bar in app.historical_bars.get(req_id, [])
+        ]
+        start, end = app.historical_ranges.get(req_id, (None, None))
+        warnings: list[str] = []
+        errors = self._errors_for_req(req_id)
+        if not completed:
+            message = (
+                f"historical-data request timed out for {symbol} "
+                f"after {request_timeout:g} seconds"
+            )
+            warnings.append(message)
+            self._record_error(message, req_id=req_id, failure_stage="timeout")
+            errors = self._errors_for_req(req_id)
+        elif not bars:
+            warnings.append(f"historical-data request completed for {symbol} with no bars")
+
+        return HistoricalDataDiagnostic(
+            symbol=symbol,
+            requested=True,
+            ok=bool(completed and bars),
+            bars=bars,
+            historical_bars_count=len(bars),
+            historical_start=start,
+            historical_end=end,
+            errors=errors,
+            warnings=warnings,
+        )
+
+    def _quote_snapshot_from_app(
+        self,
+        app: ReadOnlyAppProtocol,
+        symbol: str,
+        req_id: int,
+        *,
+        market_data_type: MarketDataRequestType,
+        warning: str | None = None,
+    ) -> QuoteSnapshot:
+        values = app.quote_values.get(req_id, {})
+        timestamp = app.quote_timestamps.get(req_id)
+        age = round((utc_now() - timestamp).total_seconds(), 2) if timestamp else None
+        received_code = app.market_data_types.get(req_id)
+        received_name = _MARKET_DATA_TYPE_BY_CODE.get(received_code or -1)
+        warnings: list[str] = []
+        if warning:
+            warnings.append(warning)
+        if received_code is None:
+            warnings.append(f"no marketDataType callback received for {symbol}")
+        if not any(key in values for key in ("bid", "ask", "last", "close")):
+            warnings.append(f"no bid/ask/last/close ticks received for {symbol}")
+        if "bid" not in values or "ask" not in values:
+            warnings.append(f"bid/ask unavailable for {symbol}")
+        if market_data_type == MarketDataRequestType.LIVE and not values:
+            warnings.append("live data unavailable; retry with --data-type delayed")
+        if any(
+            error.code in _MARKET_DATA_PERMISSION_CODES
+            for error in self._errors_for_req(req_id)
+        ):
+            warnings.append("IBKR reported market-data permission/subscription issue")
+
+        stale = age is None or age > _QUOTE_STALE_AFTER_SECONDS
+        ticks = [
+            tick.model_copy(update={"symbol": symbol})
+            for tick in app.quote_ticks.get(req_id, [])
+        ]
+        return QuoteSnapshot(
+            symbol=symbol,
+            market_data_type=MarketDataTypeInfo(
+                requested=market_data_type,
+                requested_code=_MARKET_DATA_TYPE_CODES[market_data_type.value],
+                received=MarketDataRequestType(received_name) if received_name else None,
+                received_code=received_code,
+            ),
+            bid=values.get("bid"),
+            ask=values.get("ask"),
+            last=values.get("last"),
+            close=values.get("close"),
+            bid_size=values.get("bid_size"),
+            ask_size=values.get("ask_size"),
+            last_size=values.get("last_size"),
+            quote_timestamp=timestamp,
+            quote_age_seconds=age,
+            stale=stale,
+            ticks=ticks,
+            errors=self._errors_for_req(req_id),
+            warnings=warnings,
+        )
+
+    def _market_data_report(
+        self,
+        *,
+        ok: bool,
+        connected: bool,
+        symbols: list[str],
+        market_data_type: MarketDataRequestType,
+        include_historical: bool,
+        final_status: str,
+        errors: list[BrokerErrorEvent],
+        warnings: list[str],
+    ) -> MarketDataDiagnosticReport:
+        return MarketDataDiagnosticReport(
+            ok=ok,
+            mode=self.connection_config.mode,
+            host=self.connection_config.host,
+            port=self.connection_config.port,
+            client_id=self.connection_config.client_id,
+            broker_kind=self.connection_config.broker_kind,
+            connected=connected,
+            ibapi_available=self.ibapi_is_available,
+            ibapi_import_error=self.ibapi_import_error(),
+            connection_attempted=self._connection_attempted,
+            failure_stage=self._failure_stage,
+            symbols_requested=symbols,
+            market_data_type_requested=market_data_type,
+            market_data_type_requested_code=_MARKET_DATA_TYPE_CODES[market_data_type.value],
+            include_historical=include_historical,
+            ibkr_messages=[
+                *errors,
+                *[
+                    BrokerErrorEvent(message=warning, source="ibkr_warning")
+                    for warning in warnings
+                    if warning.startswith("IBKR ")
+                ],
+            ],
+            errors=errors,
+            warnings=list(
+                dict.fromkeys(
+                    [
+                        *warnings,
+                        "TWS Read-Only API setting is not directly detectable by this probe",
+                        _NO_ORDER_WARNING,
+                    ]
+                )
+            ),
+            final_status=final_status,
+        )
+
     def _require_app(self) -> ReadOnlyAppProtocol:
         if self._app is None:
             raise RuntimeError("IBKR app is not connected")
@@ -672,6 +1447,14 @@ class IBKRClient:
         self._connection_attempted = False
         self._failure_stage = None
 
+    def _next_request_id(self) -> int:
+        with self._request_id_lock:
+            self._request_id += 1
+            return self._request_id
+
+    def _errors_for_req(self, req_id: int) -> list[BrokerErrorEvent]:
+        return [error for error in self._client_errors if error.req_id in {req_id, -1}]
+
     def _wait_for_connection_ready(
         self,
         app: ReadOnlyAppProtocol,
@@ -702,3 +1485,76 @@ def _first_error(errors: list[BrokerErrorEvent]) -> str | None:
     if not errors:
         return None
     return errors[0].message
+
+
+def _make_stock_contract(symbol: str) -> object:
+    if _IBAPI_CONTRACT is None:
+        raise RuntimeError("ibapi Contract class is unavailable")
+    contract = _IBAPI_CONTRACT()
+    contract.symbol = symbol
+    contract.secType = "STK"
+    contract.exchange = "SMART"
+    contract.currency = "USD"
+    if primary_exchange := _PRIMARY_EXCHANGE_HINTS.get(symbol):
+        contract.primaryExchange = primary_exchange
+    return contract
+
+
+def _select_contract_details(details: list[Any], *, primary_exchange: str | None) -> Any:
+    def score(detail: Any) -> tuple[int, int, int, int]:
+        contract = getattr(detail, "contract", detail)
+        sec_type = str(getattr(contract, "secType", "") or "")
+        currency = str(getattr(contract, "currency", "") or "")
+        exchange = str(getattr(contract, "exchange", "") or "")
+        selected_primary = str(getattr(contract, "primaryExchange", "") or "")
+        return (
+            1 if sec_type == "STK" else 0,
+            1 if currency == "USD" else 0,
+            1 if primary_exchange and selected_primary == primary_exchange else 0,
+            1 if exchange == "SMART" else 0,
+        )
+
+    return sorted(details, key=score, reverse=True)[0]
+
+
+def _contract_id(contract: object) -> int | None:
+    raw_con_id = getattr(contract, "conId", None)
+    if raw_con_id is None:
+        return None
+    try:
+        con_id = int(raw_con_id)
+    except (TypeError, ValueError):
+        return None
+    return con_id if con_id > 0 else None
+
+
+def _contract_description(contract: object) -> str:
+    pieces = [
+        str(getattr(contract, "symbol", "") or "unknown"),
+        str(getattr(contract, "secType", "") or "unknown"),
+        str(getattr(contract, "exchange", "") or "unknown"),
+        str(getattr(contract, "primaryExchange", "") or ""),
+        str(getattr(contract, "currency", "") or "unknown"),
+        f"conId={_contract_id(contract) or 'unknown'}",
+    ]
+    return " ".join(piece for piece in pieces if piece)
+
+
+def _spread_for_quote(quote: QuoteSnapshot) -> SpreadDiagnostic:
+    warnings: list[str] = []
+    if quote.bid is None or quote.ask is None:
+        warnings.append(f"spread unavailable for {quote.symbol}; bid/ask missing")
+        return SpreadDiagnostic(symbol=quote.symbol, has_bid_ask=False, warnings=warnings)
+
+    spread = quote.ask - quote.bid
+    mid = (quote.ask + quote.bid) / Decimal("2")
+    spread_bps = (spread / mid) * Decimal("10000") if mid > 0 else None
+    if spread < 0:
+        warnings.append(f"negative spread for {quote.symbol}; ask below bid")
+    return SpreadDiagnostic(
+        symbol=quote.symbol,
+        has_bid_ask=True,
+        spread=spread,
+        spread_bps=spread_bps,
+        warnings=warnings,
+    )

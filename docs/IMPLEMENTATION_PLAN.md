@@ -117,3 +117,150 @@ Completion criteria:
 - Mocked successful broker probe proves read-only current-time and managed-account handling without TWS.
 - CLI output and reports say order routing is disabled and no order APIs are invoked.
 - Tests, lint, typecheck, CLI smoke, broker-probe, helper scripts, and whitespace checks pass.
+
+## Milestone 5 - Read-only market-data diagnostics
+
+Baseline before edits:
+
+- Milestone 4 / v0.2.0 completed the read-only IB Gateway broker-probe lifecycle.
+- IB Gateway paper is expected on `IBKR_HOST=127.0.0.1`, `IBKR_PORT=4002`, `BROKER_KIND=ib_gateway`, `TRADING_MODE=paper`.
+- `ALLOW_PAPER_ORDERS=false` and `ALLOW_LIVE_ORDERS=false` remain hard safety defaults.
+- Broker-probe must pass before live market-data diagnostics are attempted.
+- Unit tests must not require TWS or IB Gateway.
+
+Exact files expected to change:
+
+- `docs/IMPLEMENTATION_PLAN.md`
+- `src/trader/models.py`
+- `src/trader/broker/ibkr_client.py`
+- `src/trader/cli.py`
+- `tests/test_broker_client.py`
+- `README.md`
+- `docs/RUNBOOK.md`
+- `docs/BROKER_SETUP.md`
+- `docs/SAFETY.md`
+- `docs/STATUS.md`
+- `AGENTS.md`
+- `scripts/run-market-probe.sh`
+
+IBKR API calls to use:
+
+- `reqContractDetails`
+- `reqMarketDataType`
+- `reqMktData`
+- `cancelMktData`
+- `reqHistoricalData`
+- `cancelHistoricalData`
+- `disconnect`
+
+IBKR API calls explicitly forbidden:
+
+- `placeOrder`
+- `cancelOrder`
+- `reqGlobalCancel`
+- `exerciseOptions`
+- `replaceFA`
+- any order submission, order modification, order cancellation, or market-order API.
+
+Callbacks to capture:
+
+- `contractDetails`
+- `contractDetailsEnd`
+- `marketDataType`
+- `tickPrice`
+- `tickSize`
+- `tickString` when useful
+- `historicalData`
+- `historicalDataEnd`
+- `error`
+- `connectionClosed` when available
+
+New models to add in `src/trader/models.py`:
+
+- `ContractResolutionResult`
+- `MarketDataTick`
+- `MarketDataTypeInfo`
+- `QuoteSnapshot`
+- `SpreadDiagnostic`
+- `HistoricalBar`
+- `HistoricalDataDiagnostic`
+- `MarketDataDiagnosticReport`
+
+CLI behavior:
+
+- Add `python -m trader.cli market-probe`.
+- Default symbols: `SPY,AAPL`.
+- Default market data type: `delayed`.
+- Supported data types: `live`, `frozen`, `delayed`, `delayed_frozen`.
+- Map data types to IBKR codes: `live=1`, `frozen=2`, `delayed=3`, `delayed_frozen=4`.
+- Do not request live data unless the user explicitly passes `--data-type live`.
+- Add `--historical` for a small read-only historical bar request.
+- Add `--timeout` for bounded connection/request waits.
+- CLI output must show connection/config status, requested symbols/data type, contract resolution, received market-data type, bid/ask/last/close and sizes when available, spread and spread bps when available, quote timestamp/age/staleness, historical bar count, warnings/errors, report paths, and no-order guarantees.
+
+Reporting behavior:
+
+- Write `reports/market_probe_<timestamp>.json` and `.md`.
+- Update `reports/latest_market_probe.json` and `.md`.
+- Include config mode, host, port, client id, broker kind, symbols, requested data type, contract resolution, quote snapshots, spread diagnostics, historical summary, IBKR warnings/errors, final status, `order_routing_enabled=false`, and `no_order_guarantee=true`.
+- Do not include secrets, full account identifiers, or broker credentials.
+
+Read-only broker implementation:
+
+- Reuse the existing `IBKRClient` connection lifecycle and safety checks.
+- Add bounded contract resolution for SMART/USD stock contracts with optional primary exchange hints for `SPY`, `QQQ`, `AAPL`, `MSFT`, and `NVDA`.
+- Continue probing remaining symbols when one symbol fails.
+- Track active ticker and historical request ids and clean them up with `cancelMktData` and `cancelHistoricalData`.
+- Keep historical defaults small: duration `1 D`, bar size `5 mins`, `TRADES`, `useRTH=1`, `keepUpToDate=false`.
+- Treat IBKR farm/status codes `2104`, `2106`, `2107`, and `2158` as non-fatal warnings.
+- Record permission, contract, timeout, and disconnect failures as structured diagnostics.
+
+Tests to add:
+
+- Market probe static scan proves no forbidden order APIs are called.
+- Contract resolution success, failure, and ambiguity warning.
+- Delayed market-data type request path and callback capture.
+- Bid/ask/last/close tick aggregation and size capture.
+- Spread and spread-bps calculation.
+- Stale quote detection and missing bid/ask handling.
+- Historical bars collection and `historicalDataEnd` completion.
+- Timeout returns structured diagnostics.
+- Non-fatal warnings do not fail the probe by themselves.
+- Fatal contract/permission errors are recorded clearly.
+- Report serialization.
+- CLI `market-probe` runs with a mocked broker.
+- Live ports remain rejected.
+- Paper executor remains blocked.
+
+Safety checks to preserve:
+
+- No order APIs are added or invoked.
+- `ALLOW_PAPER_ORDERS` remains `false` by default.
+- `ALLOW_LIVE_ORDERS=true` remains rejected.
+- Live ports `4001` and `7496` remain rejected and must not be used for connection attempts.
+- Market-data diagnostics are explicit CLI actions only.
+- Strategy, portfolio, risk, and execution paths must not consume broker market-data diagnostics automatically.
+
+Validation commands:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
+.venv/bin/mypy src
+.venv/bin/python -m trader.cli --help
+.venv/bin/python -m trader.cli status
+.venv/bin/python -m trader.cli broker-probe
+.venv/bin/python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed || true
+.venv/bin/python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical || true
+scripts/run-market-probe.sh || true
+git diff --check
+```
+
+Completion criteria:
+
+- Unit tests pass without TWS or IB Gateway.
+- Broker-probe still succeeds when IB Gateway paper is running on `4002`.
+- Market-probe writes JSON and Markdown reports.
+- At least contract resolution plus one data path succeeds: quote data, market-data-type callback, or historical bars.
+- Failures are structured and diagnostic.
+- Order routing remains disabled, no-order guarantee remains true, paper execution remains blocked, and live trading remains rejected.

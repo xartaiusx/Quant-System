@@ -16,6 +16,8 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Refusing paper executor stub.
 - Read-only IBKR TWS / IB Gateway broker probe with current-time diagnostics.
 - Masked managed-account discovery when the broker API is reachable.
+- Read-only IBKR market-data diagnostics for contract resolution, delayed quote capture,
+  spread checks, quote freshness, and small historical-bar samples.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
 
@@ -27,7 +29,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Market orders.
 - Profit optimization.
 - Production-grade backtesting.
-- Real-time market-data subscriptions.
+- Trading decisions from live broker market data.
 
 ## Safety Design
 
@@ -89,6 +91,8 @@ python -m trader.cli status
 python -m trader.cli preflight
 python -m trader.cli preflight --connect
 python -m trader.cli broker-probe
+python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
+python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
 scripts/check-ibapi.sh
 scripts/run-broker-preflight.sh
 python -m trader.cli account --mock
@@ -109,6 +113,7 @@ scripts/run-broker-preflight.sh
 scripts/run-broker-probe.sh
 scripts/run-dry-plan.sh
 scripts/run-market-probe.sh
+scripts/run-market-probe.sh --symbols SPY,AAPL,NVDA --data-type delayed --historical
 ```
 
 ## TWS Paper Notes
@@ -120,6 +125,10 @@ IB Gateway paper is documented as `4002`; IB Gateway live is documented as `4001
 `broker-probe` opens a local read-only API socket only to request current server time and masked managed-account identifiers. It does not enable paper execution, does not route orders, and writes `reports/broker_probe_<timestamp>.json` plus `.md`.
 
 Broker-probe reports include `connection_attempted`, `failure_stage`, `ibapi_available`, `ibapi_import_error`, `order_routing_enabled=false`, and `no_order_guarantee=true`.
+
+`market-probe` is also read-only. It may call IBKR contract, market-data, and
+historical-data request APIs, then cleans up data requests with `cancelMktData`
+and `cancelHistoricalData`. It does not submit, modify, or cancel orders.
 
 ## References
 

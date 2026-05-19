@@ -6,4 +6,8 @@ if [[ -x ".venv/bin/python" ]]; then
   PYTHON_BIN=".venv/bin/python"
 fi
 
-"${PYTHON_BIN}" -m trader.cli probe --symbols SPY,QQQ,AAPL
+if [[ "$#" -eq 0 ]]; then
+  set -- --symbols SPY,AAPL --data-type delayed
+fi
+
+"${PYTHON_BIN}" -m trader.cli market-probe "$@"

@@ -138,6 +138,44 @@ reports/latest_broker_probe.json
 reports/latest_broker_probe.md
 ```
 
+## Read-Only Market-Data Diagnostics
+
+```bash
+python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --timeout 15
+python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
+scripts/run-market-probe.sh
+```
+
+Expected behavior:
+
+- connects through the same safe broker lifecycle as `broker-probe`
+- defaults to delayed data
+- resolves SMART/USD stock contracts
+- requests market-data type before quote ticks
+- captures bid, ask, last, close, sizes, quote timestamp, spread, spread bps, and staleness when available
+- optionally requests a small historical-bar sample
+- cleans up data subscriptions with `cancelMktData` and `cancelHistoricalData`
+- places no orders and invokes no order APIs
+
+Reports are written to:
+
+```text
+reports/market_probe_<timestamp>.json
+reports/market_probe_<timestamp>.md
+reports/latest_market_probe.json
+reports/latest_market_probe.md
+```
+
+Common outcomes:
+
+- No market-data subscription: retry with `--data-type delayed`, or change account permissions manually if live data is required.
+- IBKR `10167`: live market data is not subscribed and IBKR is displaying delayed data; this is expected in delayed diagnostics when quote data still arrives.
+- Delayed data unavailable: confirm IBKR delayed-data settings and try during market hours.
+- Contract ambiguity: the probe selects a listed USD equity match and records an ambiguity warning.
+- Missing bid/ask outside market hours: the probe may still capture last, close, market-data type, or historical bars.
+- Stale quotes: quote age is reported and stale quotes are flagged.
+- Historical data pacing or permission issue: the historical section records IBKR errors or timeout diagnostics.
+
 ## Dry-Run Plan
 
 ```bash
