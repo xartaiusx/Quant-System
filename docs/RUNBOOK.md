@@ -194,6 +194,8 @@ If `broker-probe` fails:
 - Try a unique `IBKR_CLIENT_ID` if another API client is connected.
 - Keep the host on `127.0.0.1` or `localhost`.
 - Remember that market data subscriptions are not required for current-time probing.
+- The Python `ibapi` `connect()` call may return `None` even when the API session is healthy; readiness is confirmed by callbacks such as `connectAck`, `nextValidId`, or a successful current-time response.
+- IBKR farm-status messages such as `2104`, `2106`, `2107`, and `2158` are non-fatal for the current-time probe. `2107` means the historical-data farm is inactive until needed and should not block this read-only check.
 
 ## Safe Next Milestones
 

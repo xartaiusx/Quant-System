@@ -93,6 +93,8 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - `ibapi` is missing; install with `python -m pip install -e ".[dev,broker]"`.
 - Market data subscriptions are not required for the current-time probe.
 - Read-only mode is acceptable and recommended for this milestone.
+- In Python `ibapi`, a falsy `connect()` return does not by itself prove failure; the probe waits for readiness callbacks and the current-time response.
+- IBKR farm-status warnings such as `2104`, `2106`, `2107`, and `2158` are informational for this probe. They do not mean current-time connectivity failed.
 
 ## Probe Commands
 

@@ -13,6 +13,7 @@ import socket
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -68,7 +69,7 @@ IBKR_PORT_NOTES = {
     "ib_gateway_live_disabled": 4001,
 }
 
-_INFORMATIONAL_ERROR_CODES = {2104, 2106, 2158}
+_INFORMATIONAL_ERROR_CODES = {2104, 2106, 2107, 2158}
 _ACCOUNT_SUMMARY_TAGS = "NetLiquidation,TotalCashValue,BuyingPower,DailyPnL"
 _NO_ORDER_WARNING = "No order APIs invoked; order routing: disabled"
 
@@ -76,6 +77,7 @@ _NO_ORDER_WARNING = "No order APIs invoked; order routing: disabled"
 class ReadOnlyAppProtocol(Protocol):
     """Small protocol covering the subset of `EClient` used by this probe."""
 
+    connection_ready_event: threading.Event
     current_time_event: threading.Event
     managed_accounts_event: threading.Event
     account_summary_event: threading.Event
@@ -119,6 +121,7 @@ class _ReadOnlyIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
     def __init__(self) -> None:
         _IBAPI_EWRAPPER.__init__(self)
         _IBAPI_ECLIENT.__init__(self, self)
+        self.connection_ready_event = threading.Event()
         self.current_time_event = threading.Event()
         self.managed_accounts_event = threading.Event()
         self.account_summary_event = threading.Event()
@@ -131,6 +134,12 @@ class _ReadOnlyIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
         self.errors: list[BrokerErrorEvent] = []
         self.warnings: list[str] = []
         self._lock = threading.Lock()
+
+    def connectAck(self) -> None:  # noqa: N802 - IBKR callback name
+        self.connection_ready_event.set()
+
+    def nextValidId(self, _orderId: int) -> None:  # noqa: N802 - IBKR callback name
+        self.connection_ready_event.set()
 
     def currentTime(self, time_: int) -> None:  # noqa: N802 - IBKR callback name
         with self._lock:
@@ -312,14 +321,14 @@ class IBKRClient:
         original_timeout = socket.getdefaulttimeout()
         socket.setdefaulttimeout(connect_timeout)
         try:
-            connected = bool(
-                app.connect(
-                    self.connection_config.host,
-                    self.connection_config.port,
-                    self.connection_config.client_id,
-                )
+            connect_result = app.connect(
+                self.connection_config.host,
+                self.connection_config.port,
+                self.connection_config.client_id,
             )
         except (OSError, RuntimeError) as exc:
+            with suppress(OSError, RuntimeError):
+                app.disconnect()
             self._record_error(
                 f"IBKR API connection failed: {exc}",
                 failure_stage="socket_connect",
@@ -328,13 +337,6 @@ class IBKRClient:
         finally:
             socket.setdefaulttimeout(original_timeout)
 
-        if not connected:
-            self._record_error(
-                "IBKR API connection returned false",
-                failure_stage="socket_connect",
-            )
-            return self._status(ok=False, connected=False)
-
         self._app = app
         self._thread = threading.Thread(
             target=app.run,
@@ -342,7 +344,31 @@ class IBKRClient:
             daemon=True,
         )
         self._thread.start()
-        time.sleep(0.05)
+
+        try:
+            ready = self._wait_for_connection_ready(app, connect_timeout)
+        except KeyboardInterrupt:
+            self._record_error(
+                "IBKR API connection interrupted by keyboard",
+                failure_stage="unknown",
+            )
+            self.disconnect()
+            raise
+
+        if not ready:
+            message = (
+                "IBKR API connection did not become ready after "
+                f"{connect_timeout:g} seconds"
+            )
+            if connect_result is False:
+                message = (
+                    "IBKR API connect returned false and no readiness callback "
+                    f"arrived after {connect_timeout:g} seconds"
+                )
+            self._record_error(message, failure_stage="timeout")
+            self.disconnect()
+            return self._status(ok=False, connected=False)
+
         return self._status(ok=True, connected=self.is_connected())
 
     def disconnect(self) -> None:
@@ -645,6 +671,26 @@ class IBKRClient:
         self._client_warnings.clear()
         self._connection_attempted = False
         self._failure_stage = None
+
+    def _wait_for_connection_ready(
+        self,
+        app: ReadOnlyAppProtocol,
+        timeout: float,
+    ) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if app.connection_ready_event.is_set():
+                self._collect_app_events()
+                return True
+            if self.is_connected():
+                self._collect_app_events()
+                return True
+            remaining = deadline - time.monotonic()
+            app.connection_ready_event.wait(timeout=min(0.05, max(0, remaining)))
+            self._collect_app_events()
+
+        self._collect_app_events()
+        return app.connection_ready_event.is_set() or self.is_connected()
 
 
 def _probe_socket(host: str, port: int, timeout: float) -> None:

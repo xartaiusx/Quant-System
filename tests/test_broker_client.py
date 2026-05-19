@@ -6,11 +6,12 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
 import trader.cli as cli
-from trader.broker.ibkr_client import IBKRClient
-from trader.config import load_config
+from trader.broker.ibkr_client import IBKRClient, _ReadOnlyIBKRApp
+from trader.config import ConfigError, load_config
 from trader.execution.paper_executor import PaperExecutor
 from trader.models import (
     BrokerDiagnosticReport,
@@ -24,6 +25,7 @@ from trader.models import (
 
 class TimeoutFakeApp:
     def __init__(self) -> None:
+        self.connection_ready_event = threading.Event()
         self.current_time_event = threading.Event()
         self.managed_accounts_event = threading.Event()
         self.account_summary_event = threading.Event()
@@ -76,6 +78,49 @@ class SuccessFakeApp(TimeoutFakeApp):
         self.managed_accounts_event.set()
 
 
+class FalsyConnectSuccessFakeApp(SuccessFakeApp):
+    def connect(self, _host: str, _port: int, _clientId: int) -> Any:
+        self.connected = False
+        return None
+
+    def run(self) -> None:
+        self.connected = True
+        self.connection_ready_event.set()
+
+
+class NextValidIdReadyFakeApp(TimeoutFakeApp):
+    def __init__(self) -> None:
+        super().__init__()
+        self.next_valid_id: int | None = None
+
+    def connect(self, _host: str, _port: int, _clientId: int) -> Any:
+        self.connected = False
+        return None
+
+    def nextValidId(self, order_id: int) -> None:  # noqa: N802 - mirrors IBKR callback
+        self.next_valid_id = order_id
+        self.connected = True
+        self.connection_ready_event.set()
+
+    def run(self) -> None:
+        self.nextValidId(42)
+
+
+class ConnectionTimeoutFakeApp(TimeoutFakeApp):
+    def connect(self, _host: str, _port: int, _clientId: int) -> Any:
+        self.connected = False
+        return None
+
+
+class ErrorCallbackFakeApp(SuccessFakeApp):
+    def run(self) -> None:
+        self.connected = True
+        self.connection_ready_event.set()
+        self.errors.append(
+            BrokerErrorEvent(req_id=-1, code=502, message="test IBKR callback error")
+        )
+
+
 def test_ibapi_missing_path_fails_gracefully() -> None:
     config = load_config(env={}, load_dotenv_file=False)
     client = IBKRClient(config, ibapi_available=False)
@@ -90,6 +135,63 @@ def test_ibapi_missing_path_fails_gracefully() -> None:
     assert report.no_order_guarantee is True
     assert report.errors
     assert "ibapi is not installed" in report.errors[0].message
+
+
+def test_connect_falsy_return_succeeds_when_readiness_callback_arrives() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = FalsyConnectSuccessFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    report = client.diagnostic_report(timeout=0.1)
+
+    assert report.ok is True
+    assert report.connected is True
+    assert report.server_time == datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    assert report.failure_stage is None
+
+
+def test_next_valid_id_callback_marks_connection_ready() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = NextValidIdReadyFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    status = client.connect(timeout=0.1)
+
+    assert status.ok is True
+    assert status.connected is True
+    assert fake_app.next_valid_id == 42
+    assert status.failure_stage is None
+    client.disconnect()
+
+
+def test_connection_readiness_timeout_returns_structured_failure() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = ConnectionTimeoutFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    status = client.connect(timeout=0.01)
+
+    assert status.ok is False
+    assert status.connected is False
+    assert status.connection_attempted is True
+    assert status.failure_stage == "timeout"
+    assert status.errors
+    assert "did not become ready" in status.errors[0].message
 
 
 def test_broker_probe_timeout_returns_structured_failure() -> None:
@@ -112,6 +214,35 @@ def test_broker_probe_timeout_returns_structured_failure() -> None:
     assert report.errors
     assert "timed out" in report.errors[0].message
     assert report.order_routing_enabled is False
+
+
+def test_ibkr_error_callback_is_recorded() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = ErrorCallbackFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    report = client.diagnostic_report(timeout=0.1)
+
+    assert report.ok is False
+    assert report.errors
+    assert report.errors[0].code == 502
+    assert report.errors[0].message == "test IBKR callback error"
+
+
+def test_ibkr_2107_is_non_fatal_warning() -> None:
+    app = _ReadOnlyIBKRApp()
+
+    app.error(-1, 2107, "HMDS data farm connection is inactive but should be available")
+
+    assert app.errors == []
+    assert app.warnings == [
+        "IBKR 2107: HMDS data farm connection is inactive but should be available"
+    ]
 
 
 def test_broker_probe_success_with_mocked_read_only_callbacks() -> None:
@@ -222,10 +353,19 @@ def test_broker_probe_command_handles_mocked_success(
     assert (tmp_path / "reports" / "latest_broker_probe.json").exists()
 
 
-def test_read_only_broker_code_does_not_call_place_order() -> None:
+def test_read_only_broker_code_does_not_call_order_apis() -> None:
     source = Path("src/trader/broker/ibkr_client.py").read_text()
 
     assert "placeOrder" not in source
+    assert "cancelOrder" not in source
+
+
+def test_live_ports_still_rejected() -> None:
+    with pytest.raises(ConfigError):
+        load_config(env={"IBKR_PORT": "7496"}, load_dotenv_file=False)
+
+    with pytest.raises(ConfigError):
+        load_config(env={"IBKR_PORT": "4001"}, load_dotenv_file=False)
 
 
 def test_paper_executor_still_refuses_submission() -> None:

@@ -13,6 +13,8 @@
 - IBKR broker adapter with optional read-only TWS / IB Gateway current-time probe.
 - Masked managed-account discovery and broker-probe JSON/Markdown reports.
 - Milestone 3 broker readiness diagnostics with `connection_attempted`, `failure_stage`, `ibapi_import_error`, and `no_order_guarantee=true`.
+- Broker-probe connection readiness based on IBKR callbacks and current-time response, not only the Python `ibapi` `connect()` return value.
+- Non-fatal IBKR farm-status messages, including `2107`, are reported as warnings for current-time probing.
 - Optional `ibapi` dependency check script.
 - Deterministic mock data.
 - Momentum and mean-reversion strategy modules.
@@ -39,13 +41,18 @@
 
 ## Current Blockers
 
-- Before a real broker connection: `ibapi` must be installed and importable.
-- Before market-data diagnostics: a successful read-only current-time broker probe is required.
 - Paper execution remains blocked by `PaperExecutor`.
 - Live trading remains impossible.
 
+## Current Local Validation
+
+- `ibapi` is installed and importable in this checkout's `.venv`.
+- IB Gateway paper on `127.0.0.1:4002` accepted a read-only broker probe.
+- Latest successful broker-probe returned current server time, masked managed-account output, `order_routing_enabled=false`, and `no_order_guarantee=true`.
+- Before market-data diagnostics in a new environment, rerun a successful read-only current-time broker probe.
+
 ## Next Recommended Steps
 
-1. Install the optional broker extra and run a real paper TWS / IB Gateway `broker-probe`.
-2. Add read-only market-data subscription diagnostics behind explicit flags after a successful current-time probe.
+1. Add read-only market-data subscription diagnostics behind explicit flags.
+2. Add historical-data snapshot ingestion with clear subscription/readiness diagnostics.
 3. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.
