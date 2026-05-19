@@ -224,6 +224,55 @@ Common outcomes:
 - Outside market hours: latest RTH bars may still be valid; readiness focuses on stored bar quality.
 - Gateway disconnected: the CLI fails cleanly with connection diagnostics.
 
+## Offline Historical Loader
+
+```bash
+python -m trader.cli history-index
+python -m trader.cli history-load --symbols SPY,AAPL
+python -m trader.cli history-load --symbols SPY,AAPL --bar-size "5 mins" --what-to-show TRADES
+python -m trader.cli history-load --symbols SPY,AAPL --strict
+python -m trader.cli history-inspect --symbol SPY
+scripts/run-history-load.sh
+```
+
+Expected behavior:
+
+- opens no broker socket
+- does not import broker clients or require `ibapi`
+- discovers ignored JSONL snapshots and manifests under `data/historical/`
+- selects the latest matching snapshot per symbol by default
+- supports symbol, bar-size, what-to-show, and timestamp filters
+- normalizes bars into in-memory datasets with parsed timestamps, numeric OHLCV, typical price, dollar volume, and interval seconds
+- validates duplicates, gaps, malformed lines, invalid OHLC, negative volume, bar-count mismatches, empty datasets, and stale snapshots
+- writes index/load reports under `reports/`
+- places no orders and invokes no order APIs
+
+Reports are written to:
+
+```text
+reports/history_index_<timestamp>.json
+reports/history_index_<timestamp>.md
+reports/latest_history_index.json
+reports/latest_history_index.md
+reports/history_load_<timestamp>.json
+reports/history_load_<timestamp>.md
+reports/latest_history_load.json
+reports/latest_history_load.md
+```
+
+Generate snapshots first with `history-snapshot` if `history-index` reports no
+local files. Non-strict loading keeps good bars and reports malformed lines as a
+partial load; `--strict` marks malformed records as failed. Common failures:
+
+- No snapshots found: run a bounded `history-snapshot` request first.
+- Missing manifest: regenerate the snapshot pair.
+- Missing bars file: remove the orphan manifest or regenerate the pair.
+- Malformed JSONL line: inspect the line number in the loader report.
+- Bar-count mismatch: compare the manifest `bar_count` with loaded JSONL records.
+- Duplicate timestamps or timestamp gaps: treat the dataset as partial until reviewed.
+- Invalid OHLC or negative volume: treat the dataset as failed for simulation input.
+- Stale snapshot: refresh historical data when a current dataset is required.
+
 ## Dry-Run Plan
 
 ```bash
@@ -285,6 +334,6 @@ If `broker-probe` fails:
 
 ## Safe Next Milestones
 
-1. Add historical-data snapshot ingestion with stale-data and subscription diagnostics.
+1. Add a broker-free backtest data adapter proposal for offline datasets.
 2. Add read-only market-data subscription diagnostics behind explicit flags.
 3. Add a paper execution design document before enabling any paper submission.

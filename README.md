@@ -19,6 +19,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Read-only IBKR market-data diagnostics for contract resolution, delayed quote capture,
   spread checks, quote freshness, and small historical-bar samples.
 - Read-only historical snapshot ingestion and readiness reports for future simulation inputs.
+- Broker-free offline historical snapshot indexing and loading for future simulation inputs.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
 
@@ -32,6 +33,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Production-grade backtesting.
 - Trading decisions from live broker market data.
 - Strategy evaluation from broker historical snapshots.
+- Backtest strategy evaluation from offline snapshot datasets.
 
 ## Safety Design
 
@@ -97,6 +99,9 @@ python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
 python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
 python -m trader.cli history-readiness --latest
+python -m trader.cli history-index
+python -m trader.cli history-load --symbols SPY,AAPL
+python -m trader.cli history-inspect --symbol SPY
 scripts/check-ibapi.sh
 scripts/run-broker-preflight.sh
 python -m trader.cli account --mock
@@ -119,6 +124,7 @@ scripts/run-dry-plan.sh
 scripts/run-market-probe.sh
 scripts/run-market-probe.sh --symbols SPY,AAPL,NVDA --data-type delayed --historical
 scripts/run-history-snapshot.sh
+scripts/run-history-load.sh
 ```
 
 ## TWS Paper Notes
@@ -139,6 +145,10 @@ and `cancelHistoricalData`. It does not submit, modify, or cancel orders.
 historical bars, stores local JSONL snapshots under `data/historical/`, writes
 matching manifests, and produces readiness reports for future backtesting and
 simulation work. The snapshots are generated artifacts and are ignored by Git.
+
+`history-index`, `history-load`, and `history-inspect` are offline-only. They
+read local snapshot JSONL and manifest files, normalize bars into reusable
+datasets, write loader reports, and do not contact IBKR or import broker clients.
 
 ## References
 

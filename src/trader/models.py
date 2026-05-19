@@ -69,6 +69,14 @@ class HistoricalReadinessStatus(StrEnum):
     FAILED = "failed"
 
 
+class HistoricalLoadStatus(StrEnum):
+    """Offline historical snapshot load states."""
+
+    LOADED = "loaded"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
 class Instrument(SerializableModel):
     """Tradable instrument descriptor."""
 
@@ -654,6 +662,178 @@ class HistoricalReadinessReport(SerializableModel):
     no_order_guarantee_statement: str = (
         "This readiness report reads local historical snapshots only and order routing is disabled."
     )
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class HistoricalSnapshotIndexEntry(SerializableModel):
+    """Discovered offline historical snapshot file pair."""
+
+    symbol: str
+    bar_size: str
+    what_to_show: str
+    snapshot_timestamp: str
+    bars_path: str
+    manifest_path: str
+    generated_at: datetime | None = None
+    bars_count: int | None = None
+    manifest_bar_count: int | None = None
+    source: str = "offline_snapshot"
+
+
+class HistoricalSnapshotLoadRequest(SerializableModel):
+    """Offline historical snapshot load request."""
+
+    symbols: list[str] = Field(default_factory=list)
+    bar_size: str | None = None
+    what_to_show: str | None = None
+    latest: bool = True
+    snapshot_timestamp: str | None = None
+    strict: bool = False
+    base_data_path: str = "data/historical"
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        return [symbol.strip().upper() for symbol in value if symbol.strip()]
+
+    @field_validator("bar_size", "what_to_show", "snapshot_timestamp")
+    @classmethod
+    def normalize_optional_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("what_to_show")
+    @classmethod
+    def normalize_optional_what_to_show(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+
+class HistoricalLoadIssue(SerializableModel):
+    """One issue found while loading offline historical snapshots."""
+
+    symbol: str | None = None
+    severity: str
+    code: str
+    message: str
+    path: str | None = None
+    line_number: int | None = None
+    timestamp: str | None = None
+
+
+class HistoricalLoadedBar(SerializableModel):
+    """Normalized in-memory bar loaded from an offline snapshot."""
+
+    symbol: str
+    contract_id: int | None = None
+    timestamp: datetime
+    raw_timestamp: str
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal | None = None
+    wap: Decimal | None = None
+    bar_count: int | None = None
+    typical_price: Decimal
+    dollar_volume: Decimal | None = None
+    interval_seconds: float | None = None
+    source: str = "offline_snapshot"
+    duration: str
+    bar_size: str
+    what_to_show: str
+    use_rth: int
+
+
+class HistoricalDatasetSummary(SerializableModel):
+    """Quality summary for one loaded offline historical dataset."""
+
+    symbol: str
+    bar_size: str
+    what_to_show: str
+    snapshot_timestamp: str | None = None
+    bars_path: str | None = None
+    manifest_path: str | None = None
+    bars_count: int = 0
+    first_timestamp: datetime | None = None
+    last_timestamp: datetime | None = None
+    duplicate_timestamps_count: int = 0
+    missing_gap_count: int = 0
+    largest_gap_seconds: float | None = None
+    malformed_line_count: int = 0
+    invalid_ohlc_count: int = 0
+    negative_volume_count: int = 0
+    stale_snapshot: bool = False
+    manifest_bar_count: int | None = None
+    manifest_matches_bars: bool = False
+    load_status: HistoricalLoadStatus = HistoricalLoadStatus.FAILED
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    source: str = "offline_snapshot"
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+
+class HistoricalLoadedDataset(SerializableModel):
+    """Loaded offline historical dataset for future simulation inputs."""
+
+    symbol: str
+    bar_size: str
+    what_to_show: str
+    snapshot_timestamp: str
+    bars_path: str
+    manifest_path: str
+    bars: list[HistoricalLoadedBar] = Field(default_factory=list)
+    summary: HistoricalDatasetSummary
+    issues: list[HistoricalLoadIssue] = Field(default_factory=list)
+    source: str = "offline_snapshot"
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+
+class HistoricalLoadResult(SerializableModel):
+    """Per-symbol offline historical snapshot load result."""
+
+    symbol: str
+    request: HistoricalSnapshotLoadRequest
+    index_entry: HistoricalSnapshotIndexEntry | None = None
+    dataset: HistoricalLoadedDataset | None = None
+    summary: HistoricalDatasetSummary | None = None
+    issues: list[HistoricalLoadIssue] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    load_status: HistoricalLoadStatus = HistoricalLoadStatus.FAILED
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+
+class HistoricalLoaderReport(SerializableModel):
+    """Offline historical loader report for index and load commands."""
+
+    title: str = "Offline Historical Snapshot Loader"
+    report_type: str = "history_load"
+    command: str
+    ok: bool
+    request: HistoricalSnapshotLoadRequest
+    base_data_path: str
+    symbols_requested: list[str] = Field(default_factory=list)
+    snapshots_discovered: list[HistoricalSnapshotIndexEntry] = Field(default_factory=list)
+    results: list[HistoricalLoadResult] = Field(default_factory=list)
+    summaries: list[HistoricalDatasetSummary] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This offline loader reads local historical snapshot files only and does not "
+        "contact a broker."
+    )
+    final_status: str = "unknown"
     timestamp: datetime = Field(default_factory=utc_now)
 
 

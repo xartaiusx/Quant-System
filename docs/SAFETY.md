@@ -73,6 +73,11 @@ The historical snapshot commands do not change `ALLOW_PAPER_ORDERS`, do not
 submit to the paper executor, and do not feed automated strategy evaluation or
 execution.
 
+Milestone 7 adds offline historical snapshot indexing and loading. `history-index`,
+`history-load`, and `history-inspect` read local files under `data/historical/`
+only. They do not import broker clients, open sockets, request IBKR data, place
+orders, or route execution.
+
 ## Sensitive Data
 
 Never commit:

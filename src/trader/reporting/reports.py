@@ -17,6 +17,10 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return history_snapshot_markdown(payload)
     if payload.get("report_type") == "history_readiness":
         return history_readiness_markdown(payload)
+    if payload.get("report_type") == "history_index":
+        return history_index_markdown(payload)
+    if payload.get("report_type") == "history_load":
+        return history_load_markdown(payload)
 
     lines = [
         f"# {payload.get('title', 'Trading Report')}",
@@ -374,3 +378,124 @@ def history_readiness_markdown(payload: Mapping[str, Any]) -> str:
         lines.append("- None")
 
     return "\n".join(lines) + "\n"
+
+
+def history_index_markdown(payload: Mapping[str, Any]) -> str:
+    """Render an offline historical snapshot index report."""
+
+    entries = payload.get("snapshots_discovered", [])
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    request = payload.get("request", {})
+    lines = [
+        f"# {payload.get('title', 'Offline Historical Snapshot Index')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'history-index')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Base data path: `{payload.get('base_data_path', 'data/historical')}`",
+        f"- Symbols requested: `{', '.join(payload.get('symbols_requested', []))}`",
+        f"- Bar size filter: `{request.get('bar_size')}`",
+        f"- What-to-show filter: `{request.get('what_to_show')}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
+        "",
+        "## No-Order Guarantee",
+        "",
+        str(
+            payload.get(
+                "no_order_guarantee_statement",
+                "This offline report reads local files only and no orders were routed.",
+            )
+        ),
+        "",
+        "No order APIs invoked.",
+        "",
+        "## Snapshots",
+        "",
+    ]
+    if entries:
+        for entry in entries:
+            lines.append(
+                "- "
+                f"`{entry.get('symbol')}` `{entry.get('bar_size')}` "
+                f"`{entry.get('what_to_show')}` snapshot=`{entry.get('snapshot_timestamp')}` "
+                f"manifest_bars=`{entry.get('manifest_bar_count')}` "
+                f"bars=`{entry.get('bars_path')}`"
+            )
+    else:
+        lines.append("- None")
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def history_load_markdown(payload: Mapping[str, Any]) -> str:
+    """Render an offline historical snapshot load report."""
+
+    summaries = payload.get("summaries", [])
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    request = payload.get("request", {})
+    lines = [
+        f"# {payload.get('title', 'Offline Historical Snapshot Loader')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'history-load')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Base data path: `{payload.get('base_data_path', 'data/historical')}`",
+        f"- Symbols requested: `{', '.join(payload.get('symbols_requested', []))}`",
+        f"- Latest only: `{request.get('latest')}`",
+        f"- Strict: `{request.get('strict')}`",
+        f"- Bar size filter: `{request.get('bar_size')}`",
+        f"- What-to-show filter: `{request.get('what_to_show')}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
+        "",
+        "## No-Order Guarantee",
+        "",
+        str(
+            payload.get(
+                "no_order_guarantee_statement",
+                "This offline report reads local files only and no orders were routed.",
+            )
+        ),
+        "",
+        "No order APIs invoked.",
+        "",
+        "## Datasets",
+        "",
+    ]
+    if summaries:
+        for summary in summaries:
+            lines.append(
+                "- "
+                f"`{summary.get('symbol')}` status=`{summary.get('load_status')}` "
+                f"bars=`{summary.get('bars_count')}` "
+                f"first=`{summary.get('first_timestamp')}` "
+                f"last=`{summary.get('last_timestamp')}` "
+                f"duplicates=`{summary.get('duplicate_timestamps_count')}` "
+                f"gaps=`{summary.get('missing_gap_count')}` "
+                f"malformed=`{summary.get('malformed_line_count')}` "
+                f"invalid_ohlc=`{summary.get('invalid_ohlc_count')}` "
+                f"negative_volume=`{summary.get('negative_volume_count')}`"
+            )
+    else:
+        lines.append("- None")
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def _warnings_and_errors(warnings: list[Any], errors: list[Any]) -> list[str]:
+    lines = ["", "## Warnings", ""]
+    if warnings:
+        lines.extend(f"- {warning}" for warning in warnings)
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Errors", ""])
+    if errors:
+        lines.extend(f"- {error}" for error in errors)
+    else:
+        lines.append("- None")
+    return lines

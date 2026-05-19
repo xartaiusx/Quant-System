@@ -17,6 +17,7 @@
 - Non-fatal IBKR farm-status messages, including `2107`, are reported as warnings for current-time probing.
 - Milestone 5 implemented: read-only IBKR market-data diagnostics for contract resolution, market-data type, quote ticks, spread/freshness checks, and optional historical bars.
 - Milestone 6 implemented: read-only historical snapshot ingestion, local JSONL/manifests, and readiness reporting for future simulation inputs.
+- Milestone 7 implemented: broker-free offline historical snapshot indexing, loading, normalization, validation, and loader reports.
 - Optional `ibapi` dependency check script.
 - Deterministic mock data.
 - Momentum and mean-reversion strategy modules.
@@ -42,6 +43,7 @@
 - Broker order routing from read-only probe commands.
 - Broker market-data diagnostics feeding automated execution.
 - Historical snapshots feeding automated execution.
+- Offline historical datasets feeding automated execution.
 
 ## Current Blockers
 
@@ -55,9 +57,10 @@
 - Latest successful broker-probe returned current server time, masked managed-account output, `order_routing_enabled=false`, and `no_order_guarantee=true`.
 - Before market-data diagnostics in a new environment, rerun a successful read-only current-time broker probe.
 - Market-data and historical snapshot diagnostics may still be limited by IBKR data permissions, delayed-data availability, market hours, or pacing.
+- Offline `history-index`, `history-load`, and `history-inspect` read local files only and do not contact IBKR.
 
 ## Next Recommended Steps
 
-1. Review historical readiness reports across market hours and outside market hours.
-2. Add offline historical snapshot loaders for future backtest scaffolding.
+1. Review offline loader reports across clean, partial, and malformed fixture datasets.
+2. Add a broker-free backtest data adapter proposal before strategy evaluation consumes offline datasets.
 3. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

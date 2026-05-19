@@ -395,3 +395,120 @@ Completion criteria:
 - Per-symbol readiness is `ready`, `partial`, or `failed` with structured warnings/errors.
 - No order APIs are added or invoked.
 - Paper execution remains blocked, live trading remains rejected, and generated snapshots/reports remain ignored.
+
+## Milestone 7 - Offline historical snapshot loader and data adapter
+
+Baseline before edits:
+
+- Milestone 6 / `v0.4.0-readonly-history-snapshots` stores ignored JSONL bars and manifests under `data/historical/`.
+- This milestone is broker-free and must not contact IBKR, import broker clients from loader code, or require IB Gateway.
+- `ALLOW_PAPER_ORDERS=false`, `ALLOW_LIVE_ORDERS=false`, live-mode rejection, and live-port rejection remain unchanged.
+- Unit tests must use fixture snapshot data and must not require `ibapi`, TWS, or IB Gateway.
+
+Files expected to change:
+
+- `docs/IMPLEMENTATION_PLAN.md`
+- `src/trader/models.py`
+- `src/trader/data/historical_loader.py`
+- `src/trader/cli.py`
+- `src/trader/reporting/reports.py`
+- `tests/test_historical_loader.py`
+- `README.md`
+- `docs/RUNBOOK.md`
+- `docs/SAFETY.md`
+- `docs/STATUS.md`
+- `AGENTS.md`
+- `scripts/run-history-load.sh`
+
+Loader design:
+
+- Build a standard-library offline loader around stored snapshot JSONL and manifest files.
+- Discover manifests and bars under `data/historical/<symbol>/<bar_size>/<what_to_show>/`.
+- Load manifests first, then resolve and parse their matching bars files.
+- Keep malformed lines as structured issues in non-strict mode and fail the dataset in strict mode.
+- Normalize loaded bars into reusable in-memory records with parsed timestamps, numeric OHLCV values, typical price, dollar volume, and inferred interval seconds when possible.
+
+Manifest discovery design:
+
+- Scan `*_manifest.json` files beneath the historical root.
+- Derive symbol, bar-size slug, what-to-show, and timestamp from the path and filename.
+- Validate that the matching bars path exists and that manifest metadata is consistent with requested filters.
+- Do not assume real local snapshots exist in tests; fixtures must create temporary manifests and JSONL files.
+
+Latest snapshot selection rules:
+
+- Default `history-load` behavior selects the latest matching snapshot per symbol.
+- Selection can filter by `--symbols`, `--bar-size`, and `--what-to-show`.
+- An explicit `--snapshot-timestamp` selects only that timestamp.
+- Latest ordering prefers manifest `generated_at`, with path timestamp as a fallback.
+
+Data validation rules:
+
+- Required fields must be present for each bar.
+- Timestamps must parse and datasets must be sorted after normalization.
+- Duplicate timestamps, timestamp gaps, invalid OHLC, negative volume, empty datasets, stale snapshots, malformed JSONL lines, missing files, and bar-count mismatches produce structured diagnostics.
+- Non-strict mode may return `partial` datasets; strict mode turns malformed or invalid records into failed loads.
+
+Normalized dataset model:
+
+- Add serializable models for snapshot index entries, load requests, normalized loaded bars, datasets, load issues, per-symbol load results, dataset summaries, and loader reports.
+- Every loader report must include `broker_contacted=false`, `order_routing_enabled=false`, and `no_order_guarantee=true`.
+
+CLI commands:
+
+- `python -m trader.cli history-index`
+- `python -m trader.cli history-load --symbols SPY,AAPL`
+- `python -m trader.cli history-load --symbols SPY,AAPL --bar-size "5 mins" --what-to-show TRADES`
+- `python -m trader.cli history-load --symbols SPY,AAPL --latest`
+- `python -m trader.cli history-load --symbols SPY,AAPL --strict`
+- `python -m trader.cli history-inspect --symbol SPY`
+
+Reporting behavior:
+
+- Write `reports/history_index_<timestamp>.json` and `.md`.
+- Write `reports/history_load_<timestamp>.json` and `.md`.
+- Maintain `reports/latest_history_index.json`, `.md`, `reports/latest_history_load.json`, and `.md`.
+- Reports include requested symbols, base data path, selection filters, discovered snapshots, loaded datasets, validation issues, `broker_contacted=false`, `order_routing_enabled=false`, and `no_order_guarantee=true`.
+
+Tests to add:
+
+- Snapshot discovery, no-snapshot handling, latest selection, symbol/bar-size/what-to-show filtering, manifest loading, valid JSONL loading, missing manifest, missing bars file, malformed JSONL handling in strict and non-strict mode, duplicate timestamps, timestamp gaps, invalid OHLC, negative volume, bar-count mismatch, dataset summary, report serialization, CLI `history-index`, CLI `history-load`, CLI `history-inspect`, loader path no-broker import scan, no-order API scan, live-port rejection, and paper-executor refusal.
+
+Safety checks:
+
+- Do not add broker calls, socket connection attempts, order APIs, paper execution activation, or live trading.
+- Confirm loader code and tests do not import `trader.broker`, `IBKRReadOnlyClient`, or `ibapi`.
+- Keep generated reports and generated snapshots ignored.
+
+Validation commands:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
+.venv/bin/mypy src
+.venv/bin/python -m trader.cli --help
+.venv/bin/python -m trader.cli status
+.venv/bin/python -m trader.cli history-index || true
+.venv/bin/python -m trader.cli history-load --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli history-inspect --symbol SPY || true
+scripts/run-history-load.sh || true
+grep -R "placeOrder" -n src tests docs scripts || true
+grep -R "cancelOrder" -n src tests docs scripts || true
+grep -R "reqGlobalCancel" -n src tests docs scripts || true
+grep -R "ALLOW_PAPER_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "ALLOW_LIVE_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "4001\|7496" -n src tests docs scripts .env.example || true
+grep -R "trader.broker" -n src/trader/data tests/test_historical_loader.py || true
+grep -R "IBKRReadOnlyClient\|ibapi" -n src/trader/data tests/test_historical_loader.py || true
+git diff --check
+```
+
+Completion criteria:
+
+- Unit tests pass without IB Gateway.
+- Loader tests use fixture snapshot data.
+- `history-index`, `history-load`, and `history-inspect` work offline.
+- Reports are written for local snapshot discovery and loading.
+- Missing or malformed data produces structured diagnostics.
+- No broker calls or order APIs are added.
+- Paper execution remains blocked, live trading remains rejected, and generated reports/snapshots remain ignored.

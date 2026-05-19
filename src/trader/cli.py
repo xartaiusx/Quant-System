@@ -12,20 +12,24 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from trader.broker.account import AccountClient
-from trader.broker.ibkr_client import IBKRClient
 from trader.config import ConfigError, TraderConfig, load_config
 from trader.data.historical import (
     attach_snapshot_paths,
     build_readiness_report,
     write_historical_snapshot_result,
 )
+from trader.data.historical_loader import (
+    build_history_index_report,
+    load_historical_snapshots,
+)
 from trader.data.snapshots import deterministic_history, deterministic_quotes, mock_positions
 from trader.data.universe import parse_symbols
 from trader.execution.router import ExecutionRouter
 from trader.models import (
     BrokerDiagnosticReport,
+    HistoricalLoaderReport,
     HistoricalReadinessReport,
+    HistoricalSnapshotLoadRequest,
     HistoricalSnapshotReport,
     MarketDataDiagnosticReport,
     MarketDataRequestType,
@@ -42,6 +46,31 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+AccountClient: Any = None
+IBKRClient: Any = None
+
+
+def _ibkr_client(config: TraderConfig) -> Any:
+    """Create the IBKR client lazily so offline commands do not import broker code."""
+
+    global IBKRClient
+    if IBKRClient is None:
+        from trader.broker.ibkr_client import IBKRClient as ImportedIBKRClient
+
+        IBKRClient = ImportedIBKRClient
+    return IBKRClient(config)
+
+
+def _account_client(config: TraderConfig) -> Any:
+    """Create the account client lazily so offline commands stay broker-free."""
+
+    global AccountClient
+    if AccountClient is None:
+        from trader.broker.account import AccountClient as ImportedAccountClient
+
+        AccountClient = ImportedAccountClient
+    return AccountClient(config)
 
 
 @app.command()
@@ -62,7 +91,7 @@ def preflight(
 
     config = _load_config_or_exit()
     timeout = _validate_timeout_option(timeout)
-    result = IBKRClient(config).preflight(attempt_connection=connect, timeout=timeout)
+    result = _ibkr_client(config).preflight(attempt_connection=connect, timeout=timeout)
     console.print("[bold]Broker preflight[/bold]")
     console.print("Config: passed.")
     console.print(f"Connection probe: {'attempted' if connect else 'skipped'}.")
@@ -84,7 +113,7 @@ def broker_probe(
 
     config = _load_config_or_exit()
     timeout = _validate_timeout_option(timeout)
-    report = IBKRClient(config).diagnostic_report(timeout=timeout)
+    report = _ibkr_client(config).diagnostic_report(timeout=timeout)
     json_path, md_path = Journal().write_cycle("broker_probe", _report_dict(report))
 
     console.print("[bold]Read-only broker probe[/bold]")
@@ -124,7 +153,7 @@ def market_probe(
     config = _load_config_or_exit()
     timeout = _validate_timeout_option(timeout)
     selected_symbols = parse_symbols(symbols)
-    report = IBKRClient(config).market_data_diagnostic(
+    report = _ibkr_client(config).market_data_diagnostic(
         selected_symbols,
         market_data_type=data_type,
         include_historical=historical,
@@ -223,6 +252,163 @@ def history_readiness(
         raise typer.Exit(code=1)
 
 
+@app.command("history-index")
+def history_index(
+    symbols: Annotated[
+        str | None,
+        typer.Option(help="Optional comma-separated symbols to index."),
+    ] = None,
+    bar_size: Annotated[
+        str | None,
+        typer.Option("--bar-size", help="Optional bar-size filter."),
+    ] = None,
+    what_to_show: Annotated[
+        str | None,
+        typer.Option("--what-to-show", help="Optional data-type filter."),
+    ] = None,
+    snapshot_timestamp: Annotated[
+        str | None,
+        typer.Option("--snapshot-timestamp", help="Optional YYYYMMDDTHHMMSSZ filter."),
+    ] = None,
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical snapshot root."),
+    ] = Path("data/historical"),
+) -> None:
+    """Index local historical snapshots without importing broker clients."""
+
+    selected_symbols = _parse_optional_symbols(symbols)
+    report = build_history_index_report(
+        base_dir=base_path,
+        symbols=selected_symbols,
+        bar_size=bar_size,
+        what_to_show=what_to_show,
+        snapshot_timestamp=snapshot_timestamp,
+    )
+    json_path, md_path = Journal().write_cycle("history_index", _report_dict(report))
+
+    console.print("[bold]Offline historical snapshot index[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    _print_history_index_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("history-load")
+def history_load(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols to load from local snapshots."),
+    ] = "SPY,AAPL",
+    bar_size: Annotated[
+        str | None,
+        typer.Option("--bar-size", help="Optional bar-size filter."),
+    ] = None,
+    what_to_show: Annotated[
+        str | None,
+        typer.Option("--what-to-show", help="Optional data-type filter."),
+    ] = None,
+    latest: Annotated[
+        bool,
+        typer.Option("--latest/--all", help="Load latest matching snapshot per symbol."),
+    ] = True,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict/--non-strict", help="Fail on malformed records."),
+    ] = False,
+    snapshot_timestamp: Annotated[
+        str | None,
+        typer.Option("--snapshot-timestamp", help="Optional YYYYMMDDTHHMMSSZ filter."),
+    ] = None,
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical snapshot root."),
+    ] = Path("data/historical"),
+) -> None:
+    """Load local historical snapshots into normalized offline datasets."""
+
+    request = HistoricalSnapshotLoadRequest(
+        symbols=parse_symbols(symbols),
+        bar_size=bar_size,
+        what_to_show=what_to_show,
+        latest=latest,
+        strict=strict,
+        snapshot_timestamp=snapshot_timestamp,
+        base_data_path=base_path.as_posix(),
+    )
+    report = load_historical_snapshots(request)
+    json_path, md_path = Journal().write_cycle("history_load", _report_dict(report))
+
+    console.print("[bold]Offline historical snapshot load[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    _print_history_load_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("history-inspect")
+def history_inspect(
+    symbol: Annotated[
+        str,
+        typer.Option("--symbol", help="Symbol to inspect from local snapshots."),
+    ],
+    bar_size: Annotated[
+        str | None,
+        typer.Option("--bar-size", help="Optional bar-size filter."),
+    ] = None,
+    what_to_show: Annotated[
+        str | None,
+        typer.Option("--what-to-show", help="Optional data-type filter."),
+    ] = None,
+    snapshot_timestamp: Annotated[
+        str | None,
+        typer.Option("--snapshot-timestamp", help="Optional YYYYMMDDTHHMMSSZ filter."),
+    ] = None,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict/--non-strict", help="Fail on malformed records."),
+    ] = False,
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical snapshot root."),
+    ] = Path("data/historical"),
+) -> None:
+    """Inspect one local historical snapshot dataset offline."""
+
+    selected = parse_symbols([symbol])
+    request = HistoricalSnapshotLoadRequest(
+        symbols=selected,
+        bar_size=bar_size,
+        what_to_show=what_to_show,
+        latest=True,
+        strict=strict,
+        snapshot_timestamp=snapshot_timestamp,
+        base_data_path=base_path.as_posix(),
+    )
+    report = load_historical_snapshots(request).model_copy(
+        update={"command": "history-inspect"}
+    )
+    json_path, md_path = Journal().write_cycle("history_load", _report_dict(report))
+
+    console.print("[bold]Offline historical snapshot inspect[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    _print_history_load_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("history-snapshot")
 def history_snapshot(
     symbols: Annotated[
@@ -311,7 +497,7 @@ def account(
     config = _load_config_or_exit()
     timeout = _validate_timeout_option(timeout)
     if connect:
-        report = IBKRClient(config).diagnostic_report(
+        report = _ibkr_client(config).diagnostic_report(
             timeout=timeout,
             include_managed_accounts=True,
             include_account=True,
@@ -325,7 +511,7 @@ def account(
             "[yellow]Broker account snapshot unavailable; falling back to mock data.[/yellow]"
         )
 
-    snapshot = AccountClient(config).snapshot()
+    snapshot = _account_client(config).snapshot()
     console.print("[bold]Account snapshot[/bold]")
     console.print("Source: mock data; this is not broker account data; no orders placed.")
     console.print_json(
@@ -359,7 +545,7 @@ def positions(
     config = _load_config_or_exit()
     timeout = _validate_timeout_option(timeout)
     if connect:
-        report = IBKRClient(config).diagnostic_report(
+        report = _ibkr_client(config).diagnostic_report(
             timeout=timeout,
             include_managed_accounts=True,
             include_positions=True,
@@ -371,7 +557,7 @@ def positions(
             return
         console.print("[yellow]Broker positions unavailable; falling back to mock data.[/yellow]")
 
-    snapshots = AccountClient(config).positions()
+    snapshots = _account_client(config).positions()
     console.print("[bold]Positions[/bold]")
     console.print("Source: mock data; this is not broker position data; no orders placed.")
     console.print_json(data=[position.model_dump(mode="json") for position in snapshots])
@@ -497,7 +683,7 @@ def build_plan_payload(config: TraderConfig, *, strategy_name: str) -> dict[str,
     symbols = config.universe
     quotes = deterministic_quotes(symbols)
     history = deterministic_history(symbols)
-    account = AccountClient(config).snapshot()
+    account = _account_client(config).snapshot()
     positions = mock_positions()
     signals = selected_strategy.generate_signals(symbols, quotes, history)
     plans = build_trade_plans(signals, quotes, config)
@@ -537,7 +723,7 @@ def _fetch_historical_snapshot_report(
     use_rth: int,
     timeout: float,
 ) -> HistoricalSnapshotReport:
-    report = IBKRClient(config).request_historical_snapshots(
+    report = _ibkr_client(config).request_historical_snapshots(
         symbols,
         duration=duration,
         bar_size=bar_size,
@@ -551,6 +737,12 @@ def _fetch_historical_snapshot_report(
         for result in report.results
     ]
     return attach_snapshot_paths(report.model_copy(update={"results": stored_results}))
+
+
+def _parse_optional_symbols(symbols: str | None) -> list[str]:
+    if symbols is None or not symbols.strip():
+        return []
+    return parse_symbols(symbols)
 
 
 def _load_config_or_exit() -> TraderConfig:
@@ -578,6 +770,7 @@ def _validate_use_rth_option(use_rth: int) -> int:
 def _report_dict(
     report: (
         BrokerDiagnosticReport
+        | HistoricalLoaderReport
         | HistoricalReadinessReport
         | HistoricalSnapshotReport
         | MarketDataDiagnosticReport
@@ -729,6 +922,74 @@ def _print_market_data_result(report: MarketDataDiagnosticReport) -> None:
         for error in report.errors:
             code = f"IBKR {error.code}: " if error.code is not None else ""
             console.print(f"- {escape(code + error.message)}")
+
+
+def _print_history_index_result(report: HistoricalLoaderReport) -> None:
+    table = Table(title="Snapshot Index")
+    table.add_column("Symbol")
+    table.add_column("Bar Size")
+    table.add_column("What")
+    table.add_column("Snapshot")
+    table.add_column("Manifest Bars")
+    table.add_column("Bars File")
+    for entry in report.snapshots_discovered:
+        table.add_row(
+            entry.symbol,
+            entry.bar_size,
+            entry.what_to_show,
+            entry.snapshot_timestamp,
+            str(entry.manifest_bar_count),
+            entry.bars_path,
+        )
+    console.print(table)
+    console.print(f"Broker contacted: {str(report.broker_contacted).lower()}.")
+    console.print(f"Final status: {report.final_status}")
+    _print_loader_messages(report)
+
+
+def _print_history_load_result(report: HistoricalLoaderReport) -> None:
+    table = Table(title="Loaded Historical Datasets")
+    table.add_column("Symbol")
+    table.add_column("Status")
+    table.add_column("Bars")
+    table.add_column("First")
+    table.add_column("Last")
+    table.add_column("Duplicates")
+    table.add_column("Gaps")
+    table.add_column("Malformed")
+    table.add_column("Invalid OHLC")
+    table.add_column("Negative Vol")
+    for summary in report.summaries:
+        table.add_row(
+            summary.symbol,
+            _enum_value(summary.load_status),
+            str(summary.bars_count),
+            summary.first_timestamp.isoformat() if summary.first_timestamp else "n/a",
+            summary.last_timestamp.isoformat() if summary.last_timestamp else "n/a",
+            str(summary.duplicate_timestamps_count),
+            str(summary.missing_gap_count),
+            str(summary.malformed_line_count),
+            str(summary.invalid_ohlc_count),
+            str(summary.negative_volume_count),
+        )
+    console.print(table)
+    if report.results and not report.summaries:
+        for result in report.results:
+            console.print(f"{result.symbol}: {_enum_value(result.load_status)}")
+    console.print(f"Broker contacted: {str(report.broker_contacted).lower()}.")
+    console.print(f"Final status: {report.final_status}")
+    _print_loader_messages(report)
+
+
+def _print_loader_messages(report: HistoricalLoaderReport) -> None:
+    if report.warnings:
+        console.print("[yellow]Loader warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Loader errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
 
 
 def _print_history_snapshot_result(report: HistoricalSnapshotReport) -> None:
