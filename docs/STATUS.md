@@ -51,8 +51,8 @@
 - `v0.10.0-offline-fixture-stress-suite`: broker-free offline fixture stress suite.
 - `v0.11.0-broker-free-signal-contract`: broker-free disabled signal contract scaffold.
 - `v0.11.1-stage-gated-audit-polish`: stage-gated audit and polish.
-- `v0.12.0-broker-free-disabled-signal-runner`: pending review/commit/tag for broker-free disabled signal diagnostic runner.
-- `v0.13`: not implemented and not approved in this status record.
+- `v0.12.0-broker-free-disabled-signal-runner`: broker-free disabled signal diagnostic runner.
+- `v0.13`: planned design only; broker-free analytical signal evaluator scaffold is not implemented.
 
 ## Intentionally Blocked
 
@@ -75,6 +75,7 @@
 - Offline stress tests contacting brokers, using real broker data, evaluating real strategies, generating signals or order intents, simulating orders or fills, maintaining portfolio accounting, or calculating P&L.
 - Signal contract checks performing real signal evaluation, generating buy/sell/hold outputs, generating order intents, simulating orders or fills, maintaining portfolio accounting, or calculating P&L.
 - Signal runner checks performing real signal evaluation, generating buy/sell/hold outputs, generating order intents, simulating orders or fills, maintaining portfolio accounting, or calculating P&L.
+- Planned `v0.13` analytical signal evaluation is not implemented and is not approved to create trading actions, order intents, fills, portfolio accounting, or P&L.
 
 ## Current Blockers
 
@@ -99,7 +100,7 @@
 
 ## Next Recommended Steps
 
-1. Review, validate, commit, push, and tag the disabled signal diagnostic runner as `v0.12.0-broker-free-disabled-signal-runner`.
-2. Keep `v0.13` unimplemented until a separate plan is approved.
-3. Keep any future signal-evaluation proposal free of order intents, execution, fills, portfolio accounting, and P&L until explicitly approved.
+1. Review the `v0.13` broker-free analytical signal evaluator scaffold design.
+2. Keep `v0.13` implementation unstarted until the design is approved.
+3. Keep any future signal-evaluation implementation free of order intents, execution, fills, portfolio accounting, and P&L until explicitly approved.
 4. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

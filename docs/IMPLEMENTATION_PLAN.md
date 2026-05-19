@@ -1383,3 +1383,247 @@ Completion criteria:
 - Reports are written and remain ignored.
 - No broker calls or order APIs are added.
 - Paper execution remains blocked and live trading remains rejected.
+
+## Milestone 15 - Broker-free analytical signal evaluator scaffold
+
+Objective:
+
+- Design `v0.13` as the first broker-free analytical signal evaluator scaffold.
+- The evaluator may calculate non-actionable diagnostic observations from offline
+  historical feed frames.
+- The evaluator must not produce trading instructions, order-shaped records,
+  portfolio decisions, fills, accounting, or performance claims.
+
+Current baseline:
+
+- Latest completed tag is `v0.12.0-broker-free-disabled-signal-runner`.
+- The offline loader, feed adapter, backtest engine, strategy contract, inert
+  strategy runner, signal contract, and disabled signal runner are operational.
+- `signal-runner` still reports `signal_evaluation_enabled=false`,
+  `generated_signals=false`, `signal_count=0`, `generated_orders=false`,
+  `order_intents_generated=false`, `orders_simulated=false`,
+  `fills_simulated=false`, `pnl_calculated=false`,
+  `portfolio_accounting=false`, and `broker_contacted=false`.
+
+Non-goals:
+
+- No broker calls, broker imports, socket connections, or `ibapi` dependency.
+- No buy/sell/hold, long/short, enter/exit, order, position, allocation, or
+  rebalance output vocabulary.
+- No order intents, order simulation, fill simulation, P&L, portfolio
+  accounting, paper execution activation, or live trading.
+- No profitability, tradability, alpha-quality, or performance claims.
+- No changes to execution, portfolio, risk, broker, or paper-executor behavior.
+
+Allowed behavior:
+
+- Load local historical snapshots through the offline loader.
+- Build a `BacktestDataFeed` with the existing broker-free feed adapter.
+- Iterate feed frames in deterministic timestamp order.
+- Build a read-only per-symbol analytical context from bars with timestamps at
+  or before the current frame timestamp.
+- Emit analytical observations that use only the approved diagnostic vocabulary.
+- Write JSON/Markdown reports only when a future implementation task explicitly
+  approves the command and report surface.
+
+Forbidden behavior:
+
+- Do not import `trader.broker`, `trader.execution`, `ibapi`, broker clients,
+  portfolio construction, risk routing, or execution routing from the evaluator
+  path.
+- Do not call order APIs, including `placeOrder`, `cancelOrder`, or
+  `reqGlobalCancel`.
+- Do not create order-intent schemas beyond explicit false safety flags.
+- Do not interpret an observation as a trade recommendation.
+
+Model/schema proposal:
+
+- Add `AnalyticalSignalConditionState` with exactly:
+  `condition_met`, `condition_not_met`, `insufficient_data`, and
+  `invalid_data`.
+- Add `AnalyticalSignalObservation` with:
+  `evaluator_name`, `evaluator_version`, `symbol`, `timestamp`,
+  `frame_index`, `condition_name`, `condition_state`, `numeric_value`,
+  `threshold_or_reference_value`, `required_lookback_bars`,
+  `warmup_complete`, `data_valid`, `explanation`, `generated_signals=false`,
+  `signal_count=0`, `order_intents_generated=false`,
+  `broker_contacted=false`, `pnl_calculated=false`, and
+  `portfolio_accounting=false`.
+- Add `AnalyticalSignalEvaluatorMetadata` with:
+  `name`, `version`, `description`, `required_fields`,
+  `required_lookback_bars`, `supported_bar_sizes`, `broker_required=false`,
+  `emits_trading_actions=false`, and `emits_order_intents=false`.
+- Add run/report models only in the implementation milestone, preserving
+  `generated_signals=false`, `signal_count=0`, `generated_orders=false`,
+  `order_intents_generated=false`, `orders_simulated=false`,
+  `fills_simulated=false`, `pnl_calculated=false`,
+  `portfolio_accounting=false`, `broker_contacted=false`,
+  `order_routing_enabled=false`, and `no_order_guarantee=true`.
+
+Evaluator interface:
+
+- Proposed module: `src/trader/strategy/signal_evaluation.py`.
+- Proposed interface:
+  `evaluate_frame(context, history_window, metadata) -> list[AnalyticalSignalObservation]`.
+- The interface accepts read-only frame context plus bounded historical bars for
+  each symbol.
+- The interface returns observations only. It must not return `Signal`,
+  `TradePlan`, risk decisions, order intents, fills, positions, allocations, or
+  P&L values.
+- The implementation should expose validation helpers that reject unsupported
+  condition states or forbidden vocabulary in observation fields.
+
+First evaluator proposal:
+
+- Name: `moving_average_relationship_diagnostic`.
+- Purpose: compare a short moving average with a long moving average using close
+  prices available at the current frame timestamp.
+- Default proposed windows: short window `5`, long window `20`.
+- Required lookback bars: `max(short_window, long_window)`.
+- The evaluator may calculate short average, long average, difference, and a
+  safe ratio when the long average is non-zero.
+- It may return `condition_met` when the configured relationship is true,
+  `condition_not_met` when the relationship is false, `insufficient_data` during
+  warm-up, and `invalid_data` for missing or invalid OHLCV fields.
+
+No-lookahead rule:
+
+- At frame timestamp `T`, the evaluator may only use bars with
+  `bar.timestamp <= T`.
+- Future bars must not be inspected, cached into the frame, or used for warm-up.
+- Tests must include a sentinel future bar whose value would change the moving
+  average if accidentally read.
+
+Warm-up rule:
+
+- If fewer than `required_lookback_bars` valid bars are available for a symbol,
+  return `condition_state=insufficient_data`.
+- Warm-up observations must include `warmup_complete=false`,
+  `generated_signals=false`, and `signal_count=0`.
+
+Invalid-data rule:
+
+- If required OHLCV fields are missing, non-numeric, non-finite, or internally
+  invalid, return `condition_state=invalid_data`.
+- Invalid-data observations must include `data_valid=false`,
+  `generated_signals=false`, and `signal_count=0`.
+
+Output vocabulary:
+
+- Allowed condition states:
+  `condition_met`, `condition_not_met`, `insufficient_data`, `invalid_data`.
+- Forbidden vocabulary in observation states, condition names, explanations, CLI
+  summaries, and reports when describing outputs:
+  `buy`, `sell`, `hold`, `long`, `short`, `enter`, `exit`, `order`,
+  `position`, `allocation`, and `rebalance`.
+- Documentation may list forbidden words only as safety boundaries.
+
+Report fields:
+
+- Proposed future report files:
+  `reports/signal_evaluation_<timestamp>.json`,
+  `reports/signal_evaluation_<timestamp>.md`,
+  `reports/latest_signal_evaluation.json`, and
+  `reports/latest_signal_evaluation.md`.
+- Reports must state that observations are non-actionable diagnostics.
+- `signal_evaluation_enabled=true` may be used only if the implementation
+  milestone explicitly approves analytical evaluation execution. Even then,
+  `generated_signals=false` and `signal_count=0` remain required for this
+  scaffold.
+- Reports must include `order_intents_generated=false`,
+  `broker_contacted=false`, `orders_simulated=false`,
+  `fills_simulated=false`, `pnl_calculated=false`,
+  `portfolio_accounting=false`, `order_routing_enabled=false`, and
+  `no_order_guarantee=true`.
+- Reports must avoid profitability, performance, or tradability claims.
+
+CLI proposal:
+
+```bash
+python -m trader.cli signal-evaluate --symbols SPY,AAPL
+python -m trader.cli signal-evaluate --symbols SPY,AAPL --evaluator moving_average_relationship
+python -m trader.cli signal-evaluate --symbols SPY,AAPL --short-window 5 --long-window 20
+```
+
+- The command must remain offline only.
+- It should reuse loader and feed-adapter options from `signal-runner`,
+  including `--alignment`, `--bar-size`, `--what-to-show`, `--latest`,
+  `--strict`, `--snapshot-timestamp`, and `--base-path`.
+- It must print that observations are diagnostic-only and non-actionable.
+
+Test plan:
+
+- Metadata, observation, result, and report models serialize cleanly.
+- Invalid condition states are rejected.
+- Forbidden output vocabulary is rejected in condition states and output labels.
+- Moving-average observation returns `insufficient_data` before warm-up.
+- Moving-average observation returns `invalid_data` for missing or invalid bars.
+- No-lookahead sentinel test proves future bars are not used.
+- Ready feed produces deterministic observations in frame/symbol order.
+- Partial feed records missing-symbol diagnostics without generating signals.
+- Empty and failed feeds fail cleanly.
+- CLI fixture test runs with temporary local snapshots only.
+- Static scans prove no broker, `ibapi`, execution, portfolio, risk, or order API
+  dependency in the evaluator path.
+- Paper executor remains blocked and live ports remain rejected.
+
+Stress-test plan:
+
+- Use the existing synthetic fixture families for clean, partial overlap,
+  gapped, duplicate, malformed, invalid, missing, and empty datasets.
+- Assert all stress scenarios keep `generated_signals=false`, `signal_count=0`,
+  `order_intents_generated=false`, `orders_simulated=false`,
+  `fills_simulated=false`, `pnl_calculated=false`,
+  `portfolio_accounting=false`, and `broker_contacted=false`.
+- Include a future-bar sentinel fixture for no-lookahead proof.
+
+Safety scans:
+
+```bash
+grep -R "placeOrder" -n src tests docs scripts || true
+grep -R "cancelOrder" -n src tests docs scripts || true
+grep -R "reqGlobalCancel" -n src tests docs scripts || true
+grep -R "ALLOW_PAPER_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "ALLOW_LIVE_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "trader.broker" -n src/trader/strategy tests/test_signal_evaluation.py tests/test_offline_stress_signal_evaluation.py || true
+grep -R "IBKRReadOnlyClient\|ibapi" -n src/trader/strategy tests/test_signal_evaluation.py tests/test_offline_stress_signal_evaluation.py || true
+grep -R "place_order\|submit_order\|order_intent\|fill\|portfolio\|pnl\|P&L\|profit\|loss" -n src/trader/strategy tests/test_signal_evaluation.py tests/test_offline_stress_signal_evaluation.py || true
+```
+
+Acceptance criteria:
+
+- Unit tests pass without IB Gateway.
+- The evaluator works from fixture feeds or local snapshots only.
+- Observations are generated once per evaluated symbol/frame and use only the
+  allowed condition states.
+- No lookahead is possible by construction and verified by tests.
+- Warm-up and invalid-data states are explicit.
+- `generated_signals=false`, `signal_count=0`, `order_intents_generated=false`,
+  `generated_orders=false`, `orders_simulated=false`, `fills_simulated=false`,
+  `pnl_calculated=false`, `portfolio_accounting=false`, and
+  `broker_contacted=false` remain fixed.
+- No order APIs, broker calls, paper execution, or live trading are added.
+- Generated reports remain ignored.
+
+Validation commands:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
+.venv/bin/mypy src
+.venv/bin/python -m trader.cli --help
+.venv/bin/python -m trader.cli status
+.venv/bin/python -m trader.cli history-index || true
+.venv/bin/python -m trader.cli history-load --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-feed --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli signal-runner --symbols SPY,AAPL || true
+git diff --check
+```
+
+Future v0.14 boundary:
+
+- `v0.14` must not be assumed from this design.
+- A future milestone may broaden analytical observation coverage or add
+  evaluator comparison, but it still must not add order intents, execution,
+  fills, P&L, portfolio accounting, paper execution, or live trading unless a
+  separate explicit plan approves those behaviors.
