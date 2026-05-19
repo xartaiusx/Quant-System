@@ -34,6 +34,8 @@ from trader.models import (
     BacktestRunReport,
     BacktestRunRequest,
     BrokerDiagnosticReport,
+    DisabledSignalRunnerReport,
+    DisabledSignalRunnerRequest,
     HistoricalLoaderReport,
     HistoricalReadinessReport,
     HistoricalSnapshotLoadRequest,
@@ -55,6 +57,7 @@ from trader.risk.rules import evaluate_trade_plans
 from trader.strategy import get_strategy
 from trader.strategy.interface import build_strategy_contract_report
 from trader.strategy.runner import build_inert_strategy_runner_report
+from trader.strategy.signal_runner import build_disabled_signal_runner_report
 from trader.strategy.signals import build_signal_contract_report
 
 app = typer.Typer(
@@ -851,6 +854,98 @@ def signal_contract(
         raise typer.Exit(code=1)
 
 
+@app.command("signal-runner")
+def signal_runner(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols to replay through disabled signal diagnostics."),
+    ] = "SPY,AAPL",
+    alignment: Annotated[
+        BacktestAlignmentMode,
+        typer.Option("--alignment", help="Timestamp alignment mode."),
+    ] = BacktestAlignmentMode.UNION,
+    bar_size: Annotated[
+        str | None,
+        typer.Option("--bar-size", help="Optional bar-size filter."),
+    ] = None,
+    what_to_show: Annotated[
+        str | None,
+        typer.Option("--what-to-show", help="Optional data-type filter."),
+    ] = None,
+    latest: Annotated[
+        bool,
+        typer.Option("--latest/--all", help="Load latest matching snapshot per symbol."),
+    ] = True,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict/--non-strict", help="Fail on malformed records."),
+    ] = False,
+    snapshot_timestamp: Annotated[
+        str | None,
+        typer.Option("--snapshot-timestamp", help="Optional YYYYMMDDTHHMMSSZ filter."),
+    ] = None,
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical snapshot root."),
+    ] = Path("data/historical"),
+) -> None:
+    """Run disabled signal diagnostics over a broker-free feed."""
+
+    request = DisabledSignalRunnerRequest(
+        symbols=parse_symbols(symbols),
+        alignment_mode=alignment,
+        requested_bar_size=bar_size,
+        requested_what_to_show=what_to_show,
+        latest=latest,
+        strict=strict,
+        snapshot_timestamp=snapshot_timestamp,
+        base_data_path=base_path.as_posix(),
+    )
+    loader_request = HistoricalSnapshotLoadRequest(
+        symbols=request.symbols,
+        bar_size=request.requested_bar_size,
+        what_to_show=request.requested_what_to_show,
+        latest=request.latest,
+        strict=request.strict,
+        snapshot_timestamp=request.snapshot_timestamp,
+        base_data_path=request.base_data_path,
+    )
+    loader_report = load_historical_snapshots(loader_request)
+    datasets = [
+        result.dataset
+        for result in loader_report.results
+        if result.dataset is not None
+    ]
+    feed = build_backtest_feed(datasets, alignment_mode=request.alignment_mode)
+    feed = feed.model_copy(
+        update={
+            "warnings": list(dict.fromkeys([*feed.warnings, *loader_report.warnings])),
+            "errors": list(dict.fromkeys([*feed.errors, *loader_report.errors])),
+        }
+    )
+    report = build_disabled_signal_runner_report(feed, request)
+    json_path, md_path = Journal().write_cycle("signal_runner", _report_dict(report))
+
+    console.print("[bold]Broker-free disabled signal runner[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    console.print("Disabled signal runner: true.")
+    console.print(
+        "This run exercised the disabled signal contract only. Signal evaluation "
+        "is disabled."
+    )
+    console.print(
+        "No trading signals, order intents, order simulation, fill simulation, "
+        "broker routing, portfolio accounting, or P&L calculation was performed."
+    )
+    _print_signal_runner_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("history-snapshot")
 def history_snapshot(
     symbols: Annotated[
@@ -1214,6 +1309,7 @@ def _report_dict(
         BacktestDataAdapterReport
         | BacktestRunReport
         | BrokerDiagnosticReport
+        | DisabledSignalRunnerReport
         | HistoricalLoaderReport
         | HistoricalReadinessReport
         | HistoricalSnapshotReport
@@ -1479,6 +1575,78 @@ def _print_signal_contract_result(report: SignalContractReport) -> None:
             console.print(f"- {escape(warning)}")
     if report.errors:
         console.print("[red]Signal contract errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_signal_runner_result(report: DisabledSignalRunnerReport) -> None:
+    diagnostics = report.diagnostics
+    table = Table(title="Disabled Signal Runner")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Contract", report.metadata.signal_contract_name)
+    table.add_row("Version", report.metadata.signal_contract_version)
+    table.add_row("Symbols", ", ".join(report.symbols_requested))
+    table.add_row("Alignment", _enum_value(report.request.alignment_mode))
+    table.add_row("Disabled signal runner", str(report.disabled_signal_runner).lower())
+    table.add_row(
+        "Signal contract validated",
+        str(report.signal_contract_validated).lower(),
+    )
+    table.add_row(
+        "Signal evaluation enabled",
+        str(report.signal_evaluation_enabled).lower(),
+    )
+    table.add_row("Generated signals", str(report.generated_signals).lower())
+    table.add_row("Signal count", str(report.signal_count))
+    table.add_row("Generated orders", str(report.generated_orders).lower())
+    table.add_row(
+        "Order intents generated",
+        str(report.order_intents_generated).lower(),
+    )
+    table.add_row("Orders simulated", str(report.orders_simulated).lower())
+    table.add_row("Fills simulated", str(report.fills_simulated).lower())
+    table.add_row("P&L calculated", str(report.pnl_calculated).lower())
+    table.add_row("Portfolio accounting", str(report.portfolio_accounting).lower())
+    table.add_row("Broker contacted", str(report.broker_contacted).lower())
+    table.add_row("Order routing", "disabled")
+    table.add_row("Final status", report.final_status)
+    table.add_row("Frame count", str(diagnostics.frame_count))
+    table.add_row("Contexts built", str(diagnostics.contexts_built))
+    table.add_row("Diagnostics emitted", str(diagnostics.diagnostics_emitted))
+    table.add_row(
+        "First timestamp",
+        diagnostics.first_timestamp.isoformat() if diagnostics.first_timestamp else "n/a",
+    )
+    table.add_row(
+        "Last timestamp",
+        diagnostics.last_timestamp.isoformat() if diagnostics.last_timestamp else "n/a",
+    )
+    table.add_row(
+        "Frames with missing symbols",
+        str(diagnostics.missing_symbols_by_frame_count),
+    )
+    if report.feed_summary is not None:
+        table.add_row("Feed status", _enum_value(report.feed_summary.feed_status))
+        table.add_row("Feed frames", str(report.feed_summary.frame_count))
+    console.print(table)
+
+    missing_table = Table(title="Signal Runner Missing Symbols")
+    missing_table.add_column("Symbol")
+    missing_table.add_column("Missing frames")
+    for symbol in diagnostics.symbols:
+        missing_table.add_row(
+            symbol,
+            str(diagnostics.missing_symbols_by_symbol.get(symbol, 0)),
+        )
+    console.print(missing_table)
+
+    if report.warnings:
+        console.print("[yellow]Signal runner warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Signal runner errors[/red]")
         for error in report.errors:
             console.print(f"- {escape(error)}")
 

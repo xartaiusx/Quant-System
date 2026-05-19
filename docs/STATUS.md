@@ -24,6 +24,7 @@
 - Milestone 11 implemented: broker-free inert strategy runner scaffold with per-frame no-op diagnostics and runner reports.
 - Milestone 12 implemented: broker-free offline fixture stress suite covering partial, gapped, duplicate, malformed, missing, empty, and invalid historical datasets.
 - Milestone 13 implemented: broker-free disabled signal contract scaffold with diagnostics-only validation and signal-contract reports.
+- Milestone 14 implemented: broker-free disabled signal diagnostic runner with per-frame disabled-signal diagnostics and signal-runner reports.
 - Optional `ibapi` dependency check script.
 - Deterministic mock data.
 - Momentum and mean-reversion strategy modules.
@@ -49,7 +50,9 @@
 - `v0.9.0-broker-free-inert-strategy-runner`: broker-free inert strategy runner.
 - `v0.10.0-offline-fixture-stress-suite`: broker-free offline fixture stress suite.
 - `v0.11.0-broker-free-signal-contract`: broker-free disabled signal contract scaffold.
-- `v0.12`: not implemented and not approved in this status record.
+- `v0.11.1-stage-gated-audit-polish`: stage-gated audit and polish.
+- `v0.12.0-broker-free-disabled-signal-runner`: pending review/commit/tag for broker-free disabled signal diagnostic runner.
+- `v0.13`: not implemented and not approved in this status record.
 
 ## Intentionally Blocked
 
@@ -71,6 +74,7 @@
 - Strategy runner checks performing real strategy evaluation, generating buy/sell/hold signals, generating order intents, simulating orders or fills, maintaining portfolio accounting, or calculating P&L.
 - Offline stress tests contacting brokers, using real broker data, evaluating real strategies, generating signals or order intents, simulating orders or fills, maintaining portfolio accounting, or calculating P&L.
 - Signal contract checks performing real signal evaluation, generating buy/sell/hold outputs, generating order intents, simulating orders or fills, maintaining portfolio accounting, or calculating P&L.
+- Signal runner checks performing real signal evaluation, generating buy/sell/hold outputs, generating order intents, simulating orders or fills, maintaining portfolio accounting, or calculating P&L.
 
 ## Current Blockers
 
@@ -91,10 +95,11 @@
 - Offline `strategy-runner` routes local feed frames through no-op diagnostics only, reports `broker_contacted=false`, `diagnostic_only=true`, `noop_strategy_observed=true`, `real_strategy_evaluated=false`, `generated_signals=false`, `generated_orders=false`, `orders_simulated=false`, `fills_simulated=false`, `portfolio_accounting=false`, and `pnl_calculated=false`.
 - Offline stress fixtures validate loader, feed adapter, backtest engine, strategy contract, and inert runner behavior against synthetic edge-case datasets without contacting IBKR.
 - Offline `signal-contract` validates disabled signal schema and frame contexts only, reports `broker_contacted=false`, `signal_contract_validated=true`, `signal_evaluation_enabled=false`, `generated_signals=false`, `signal_count=0`, `generated_orders=false`, `orders_simulated=false`, `fills_simulated=false`, `portfolio_accounting=false`, and `pnl_calculated=false`.
+- Offline `signal-runner` routes local feed frames through the disabled signal contract only, reports `broker_contacted=false`, `disabled_signal_runner=true`, `signal_contract_validated=true`, `signal_evaluation_enabled=false`, `generated_signals=false`, `signal_count=0`, `generated_orders=false`, `order_intents_generated=false`, `orders_simulated=false`, `fills_simulated=false`, `portfolio_accounting=false`, and `pnl_calculated=false`.
 
 ## Next Recommended Steps
 
-1. Review this stage audit and the disabled signal contract reports before adding any new milestone.
-2. Design `v0.12` only as a separately approved plan; it is not implemented here.
+1. Review, validate, commit, push, and tag the disabled signal diagnostic runner as `v0.12.0-broker-free-disabled-signal-runner`.
+2. Keep `v0.13` unimplemented until a separate plan is approved.
 3. Keep any future signal-evaluation proposal free of order intents, execution, fills, portfolio accounting, and P&L until explicitly approved.
 4. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

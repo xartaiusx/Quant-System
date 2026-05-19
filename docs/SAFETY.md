@@ -118,6 +118,13 @@ evaluation, generates buy/sell/hold outputs, creates order intents, simulates
 orders, simulates fills, maintains portfolio accounting, computes P&L, submits
 to the paper executor, or routes execution.
 
+Milestone 14 adds a broker-free disabled signal diagnostic runner.
+`signal-runner` routes offline feed frames through the disabled signal contract
+only. It never contacts a broker, invokes order APIs, performs real signal
+evaluation, generates buy/sell/hold outputs, creates order intents, simulates
+orders, simulates fills, maintains portfolio accounting, computes P&L, submits
+to the paper executor, or routes execution.
+
 ## Quantitative Research Gate
 
 No current milestone supports profitability, performance, or tradability claims.

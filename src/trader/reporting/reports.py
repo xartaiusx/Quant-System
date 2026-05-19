@@ -31,6 +31,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return strategy_runner_markdown(payload)
     if payload.get("report_type") == "signal_contract":
         return signal_contract_markdown(payload)
+    if payload.get("report_type") == "signal_runner":
+        return signal_runner_markdown(payload)
 
     lines = [
         f"# {payload.get('title', 'Trading Report')}",
@@ -904,6 +906,94 @@ def signal_contract_markdown(payload: Mapping[str, Any]) -> str:
                 f"- Missing symbols: `{', '.join(sample.get('missing_symbols', []))}`",
             ]
         )
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def signal_runner_markdown(payload: Mapping[str, Any]) -> str:
+    """Render a broker-free disabled signal runner report."""
+
+    request = payload.get("request", {})
+    metadata = payload.get("metadata", {})
+    diagnostics = payload.get("diagnostics") or {}
+    feed_summary = payload.get("feed_summary") or {}
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    missing = diagnostics.get("missing_symbols_by_symbol", {})
+
+    lines = [
+        f"# {payload.get('title', 'Broker-free Disabled Signal Runner')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'signal-runner')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Signal contract: `{metadata.get('signal_contract_name', 'unknown')}`",
+        f"- Signal contract version: `{metadata.get('signal_contract_version', 'unknown')}`",
+        f"- Contract enabled: `{metadata.get('enabled', True)}`",
+        f"- Symbols requested: `{', '.join(payload.get('symbols_requested', []))}`",
+        f"- Alignment mode: `{request.get('alignment_mode', 'union')}`",
+        f"- Bar size filter: `{request.get('requested_bar_size')}`",
+        f"- What-to-show filter: `{request.get('requested_what_to_show')}`",
+        f"- Disabled signal runner: `{payload.get('disabled_signal_runner', False)}`",
+        f"- Signal contract validated: `{payload.get('signal_contract_validated', False)}`",
+        f"- Signal evaluation enabled: `{payload.get('signal_evaluation_enabled', True)}`",
+        f"- Generated signals: `{payload.get('generated_signals', True)}`",
+        f"- Signal count: `{payload.get('signal_count', 0)}`",
+        f"- Generated orders: `{payload.get('generated_orders', True)}`",
+        f"- Order intents generated: `{payload.get('order_intents_generated', True)}`",
+        f"- Orders simulated: `{payload.get('orders_simulated', True)}`",
+        f"- Fills simulated: `{payload.get('fills_simulated', True)}`",
+        f"- P&L calculated: `{payload.get('pnl_calculated', True)}`",
+        f"- Portfolio accounting: `{payload.get('portfolio_accounting', True)}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
+        "",
+        "## Scope",
+        "",
+        str(
+            payload.get(
+                "no_order_guarantee_statement",
+                "This report reads local files only and no orders were routed.",
+            )
+        ),
+        "",
+        str(
+            payload.get(
+                "no_execution_statement",
+                "This run exercised the disabled signal contract only. Signal "
+                "evaluation is disabled. No trading signals, order intents, order "
+                "simulation, broker routing, fills, portfolio accounting, or P&L "
+                "calculation was performed.",
+            )
+        ),
+        "",
+        "## Runner Summary",
+        "",
+        f"- Runner status: `{diagnostics.get('runner_status', 'unknown')}`",
+        f"- Feed status: `{diagnostics.get('feed_status', 'unknown')}`",
+        f"- Frame count: `{diagnostics.get('frame_count', 0)}`",
+        f"- Contexts built: `{diagnostics.get('contexts_built', 0)}`",
+        f"- Diagnostics emitted: `{diagnostics.get('diagnostics_emitted', 0)}`",
+        f"- First timestamp: `{diagnostics.get('first_timestamp')}`",
+        f"- Last timestamp: `{diagnostics.get('last_timestamp')}`",
+        f"- Frames with missing symbols: `{diagnostics.get('missing_symbols_by_frame_count', 0)}`",
+        "",
+        "## Feed Summary",
+        "",
+        f"- Feed frames: `{feed_summary.get('frame_count', 0)}`",
+        f"- Feed bars: `{feed_summary.get('total_bars', 0)}`",
+        f"- Feed status: `{feed_summary.get('feed_status', 'unknown')}`",
+        "",
+        "## Missing Symbols",
+        "",
+    ]
+    if diagnostics.get("symbols"):
+        for symbol in diagnostics.get("symbols", []):
+            lines.append(f"- `{symbol}` missing_frames=`{missing.get(symbol, 0)}`")
     else:
         lines.append("- None")
 

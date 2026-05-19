@@ -172,3 +172,12 @@ reviewed and committed or otherwise deliberately handled.
 
 Recommended next action: review, commit, push, and tag the audit polish as
 `v0.11.1-stage-gated-audit-polish`.
+
+## v0.12 Start Note
+
+The disabled signal diagnostic runner milestone starts only after the
+`v0.11.1-stage-gated-audit-polish` gate. Its boundary remains broker-free and
+diagnostics-only: it may route offline feed frames through the disabled signal
+contract, but it must not add real signal evaluation, trading outputs, order
+intents, order simulation, fills, portfolio accounting, P&L, paper execution,
+live trading, or broker contact.

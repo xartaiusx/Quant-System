@@ -26,6 +26,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Broker-free inert strategy runner scaffold that routes frames through no-op diagnostics only.
 - Broker-free offline fixture stress tests for partial, gapped, duplicate, malformed, missing, and invalid historical datasets.
 - Broker-free disabled signal contract scaffold with diagnostics only.
+- Broker-free disabled signal diagnostic runner that records per-frame signal diagnostics only.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
 
@@ -45,6 +46,8 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Real strategy evaluation, signal generation, order simulation, or P&L from strategy-contract checks.
 - Real strategy evaluation, buy/sell/hold signal generation, order-intent generation, fill simulation, portfolio accounting, or P&L from strategy-runner checks.
 - Real signal evaluation, buy/sell/hold outputs, order intents, order simulation, fill simulation, portfolio accounting, or P&L from signal-contract checks.
+- Real signal evaluation, buy/sell/hold outputs, order intents, order simulation, fill simulation, portfolio accounting, or P&L from signal-runner checks.
+- Future `v0.13` signal evaluation or trading behavior.
 
 ## Safety Design
 
@@ -123,6 +126,8 @@ python -m trader.cli strategy-runner --symbols SPY,AAPL
 python -m trader.cli strategy-runner --symbols SPY,AAPL --alignment intersection
 python -m trader.cli signal-contract --symbols SPY,AAPL
 python -m trader.cli signal-contract --symbols SPY,AAPL --alignment intersection
+python -m trader.cli signal-runner --symbols SPY,AAPL
+python -m trader.cli signal-runner --symbols SPY,AAPL --alignment intersection
 scripts/check-ibapi.sh
 scripts/run-broker-preflight.sh
 python -m trader.cli account --mock
@@ -151,6 +156,7 @@ scripts/run-backtest-run.sh
 scripts/run-strategy-contract.sh
 scripts/run-strategy-runner.sh
 scripts/run-signal-contract.sh
+scripts/run-signal-runner.sh
 ```
 
 ## TWS Paper Notes
@@ -203,10 +209,17 @@ intents, simulate orders or fills, perform portfolio accounting, or compute
 P&L. Reports always state `signal_evaluation_enabled=false` and
 `signal_count=0`.
 
+`signal-runner` is an offline disabled diagnostic runner. It routes local feed
+frames through the disabled signal contract, records one diagnostic per frame,
+writes runner reports, and does not contact IBKR, generate trading signals,
+create order intents, simulate orders or fills, perform portfolio accounting,
+or compute P&L. Reports always state `disabled_signal_runner=true`,
+`signal_evaluation_enabled=false`, and `signal_count=0`.
+
 The offline fixture stress suite uses temporary synthetic historical snapshots
 to validate loader, feed, engine, strategy-contract, strategy-runner, and
-signal-contract behavior against partial, gapped, duplicate, malformed, missing,
-empty, and invalid data.
+signal-contract/signal-runner behavior against partial, gapped, duplicate,
+malformed, missing, empty, and invalid data.
 It does not read broker data, contact IBKR, evaluate real strategies, generate
 signals, simulate orders or fills, perform portfolio accounting, or compute P&L.
 

@@ -5,12 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from trader.config import mask_account_id
+
+T = TypeVar("T")
 
 
 def utc_now() -> datetime:
@@ -102,6 +104,14 @@ class BacktestRunStatus(StrEnum):
 
 class InertStrategyRunnerStatus(StrEnum):
     """Offline inert strategy runner states for no-op diagnostics."""
+
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class DisabledSignalRunnerStatus(StrEnum):
+    """Offline disabled signal runner states for diagnostic-only runs."""
 
     COMPLETED = "completed"
     PARTIAL = "partial"
@@ -1510,6 +1520,216 @@ class SignalContractReport(SerializableModel):
     )
     final_status: str = "unknown"
     timestamp: datetime = Field(default_factory=utc_now)
+
+
+class DisabledSignalRunnerRequest(SerializableModel):
+    """Offline disabled signal diagnostic runner request."""
+
+    symbols: list[str] = Field(default_factory=list)
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    requested_bar_size: str | None = None
+    requested_what_to_show: str | None = None
+    latest: bool = True
+    snapshot_timestamp: str | None = None
+    strict: bool = False
+    base_data_path: str = "data/historical"
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        return [symbol.strip().upper() for symbol in value if symbol.strip()]
+
+    @field_validator("requested_bar_size", "requested_what_to_show", "snapshot_timestamp")
+    @classmethod
+    def normalize_optional_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("requested_what_to_show")
+    @classmethod
+    def normalize_optional_what_to_show(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+
+class DisabledSignalFrameDiagnostic(SerializableModel):
+    """Per-frame result from the disabled signal diagnostic runner."""
+
+    signal_contract_name: str
+    signal_contract_version: str
+    timestamp: datetime
+    frame_index: int
+    available_symbols: list[str] = Field(default_factory=list)
+    missing_symbols: list[str] = Field(default_factory=list)
+    diagnostic: SignalContractDiagnostic
+    disabled_signal_runner: bool = True
+    signal_contract_validated: bool = True
+    signal_evaluation_enabled: bool = False
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+    @model_validator(mode="after")
+    def validate_disabled_output(self) -> DisabledSignalFrameDiagnostic:
+        return _validate_disabled_signal_runner_flags(self)
+
+
+class DisabledSignalRunnerDiagnostics(SerializableModel):
+    """Run-level diagnostics from the disabled signal runner."""
+
+    signal_contract_name: str = "disabled_signal_contract"
+    signal_contract_version: str = "0.1.0"
+    symbols: list[str] = Field(default_factory=list)
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    feed_status: BacktestFeedStatus = BacktestFeedStatus.FAILED
+    runner_status: DisabledSignalRunnerStatus = DisabledSignalRunnerStatus.FAILED
+    frame_count: int = 0
+    contexts_built: int = 0
+    diagnostics_emitted: int = 0
+    first_timestamp: datetime | None = None
+    last_timestamp: datetime | None = None
+    missing_symbols_by_frame_count: int = 0
+    missing_symbols_by_symbol: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    disabled_signal_runner: bool = True
+    signal_contract_validated: bool = True
+    signal_evaluation_enabled: bool = False
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+    @model_validator(mode="after")
+    def validate_disabled_output(self) -> DisabledSignalRunnerDiagnostics:
+        return _validate_disabled_signal_runner_flags(self)
+
+
+class DisabledSignalRunnerResult(SerializableModel):
+    """Result of replaying feed frames through the disabled signal contract."""
+
+    ok: bool
+    request: DisabledSignalRunnerRequest
+    metadata: SignalContractMetadata
+    feed_summary: BacktestDataFeedSummary | None = None
+    diagnostics: DisabledSignalRunnerDiagnostics
+    frame_diagnostics: list[DisabledSignalFrameDiagnostic] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    disabled_signal_runner: bool = True
+    signal_contract_validated: bool = True
+    signal_evaluation_enabled: bool = False
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_disabled_output(self) -> DisabledSignalRunnerResult:
+        return _validate_disabled_signal_runner_flags(self)
+
+
+class DisabledSignalRunnerReport(SerializableModel):
+    """Report for the broker-free disabled signal diagnostic runner."""
+
+    title: str = "Broker-free Disabled Signal Runner"
+    report_type: str = "signal_runner"
+    command: str = "signal-runner"
+    ok: bool
+    request: DisabledSignalRunnerRequest
+    metadata: SignalContractMetadata
+    symbols_requested: list[str] = Field(default_factory=list)
+    feed_summary: BacktestDataFeedSummary | None = None
+    result: DisabledSignalRunnerResult
+    diagnostics: DisabledSignalRunnerDiagnostics
+    frame_diagnostics: list[DisabledSignalFrameDiagnostic] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    disabled_signal_runner: bool = True
+    signal_contract_validated: bool = True
+    signal_evaluation_enabled: bool = False
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This disabled signal runner report reads local historical snapshots only "
+        "and does not contact a broker."
+    )
+    no_execution_statement: str = (
+        "This run exercised the disabled signal contract only. Signal evaluation "
+        "is disabled. No trading signals, order intents, order simulation, broker "
+        "routing, fills, portfolio accounting, or P&L calculation was performed."
+    )
+    final_status: str = "unknown"
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_disabled_output(self) -> DisabledSignalRunnerReport:
+        return _validate_disabled_signal_runner_flags(self)
+
+
+def _validate_disabled_signal_runner_flags(model: T) -> T:
+    if getattr(model, "disabled_signal_runner", False) is not True:
+        raise ValueError("disabled_signal_runner must remain true")
+    if getattr(model, "signal_contract_validated", False) is not True:
+        raise ValueError("signal_contract_validated must remain true")
+    if getattr(model, "signal_evaluation_enabled", True):
+        raise ValueError("signal_evaluation_enabled must remain false")
+    if getattr(model, "generated_signals", True):
+        raise ValueError("generated_signals must remain false")
+    if getattr(model, "signal_count", 1) != 0:
+        raise ValueError("signal_count must remain 0")
+    if getattr(model, "generated_orders", True):
+        raise ValueError("generated_orders must remain false")
+    if getattr(model, "order_intents_generated", True):
+        raise ValueError("order_intents_generated must remain false")
+    if getattr(model, "orders_simulated", True):
+        raise ValueError("orders_simulated must remain false")
+    if getattr(model, "fills_simulated", True):
+        raise ValueError("fills_simulated must remain false")
+    if getattr(model, "pnl_calculated", True):
+        raise ValueError("pnl_calculated must remain false")
+    if getattr(model, "portfolio_accounting", True):
+        raise ValueError("portfolio_accounting must remain false")
+    if getattr(model, "broker_contacted", True):
+        raise ValueError("broker_contacted must remain false")
+    if getattr(model, "order_routing_enabled", True):
+        raise ValueError("order_routing_enabled must remain false")
+    if getattr(model, "no_order_guarantee", False) is not True:
+        raise ValueError("no_order_guarantee must remain true")
+    return model
 
 
 class InertStrategyRunnerRequest(SerializableModel):

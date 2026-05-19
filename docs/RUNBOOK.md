@@ -454,7 +454,7 @@ Expected behavior:
 Workflow relationship:
 
 ```text
-history-snapshot -> history-load -> backtest-feed -> backtest-run -> strategy-contract -> strategy-runner -> signal-contract
+history-snapshot -> history-load -> backtest-feed -> backtest-run -> strategy-contract -> strategy-runner -> signal-contract -> signal-runner
 ```
 
 `signal-contract` validates schema and diagnostics only. It is not connected to
@@ -465,6 +465,50 @@ real strategy evaluation and does not produce trading outputs. Common failures:
 - Missing required bar fields: review the signal contract report before future signal work.
 - Partial feed: review missing-symbol summaries in the frame context sample.
 
+## Offline Disabled Signal Runner
+
+```bash
+python -m trader.cli signal-runner --symbols SPY,AAPL
+python -m trader.cli signal-runner --symbols SPY,AAPL --alignment union
+python -m trader.cli signal-runner --symbols SPY,AAPL --alignment intersection
+python -m trader.cli signal-runner --symbols SPY,AAPL --bar-size "5 mins" --what-to-show TRADES
+scripts/run-signal-runner.sh
+```
+
+Expected behavior:
+
+- opens no broker socket
+- loads local snapshots through the offline historical loader
+- builds an aligned feed with the broker-free data adapter
+- routes each feed frame through the disabled signal contract
+- records one signal evaluation context and one diagnostic per frame
+- writes `reports/signal_runner_<timestamp>.json` and `.md`
+- updates `reports/latest_signal_runner.json` and `.md`
+- places no orders and invokes no order APIs
+- reports `disabled_signal_runner=true`, `signal_contract_validated=true`,
+  `signal_evaluation_enabled=false`, `generated_signals=false`,
+  `signal_count=0`, `generated_orders=false`,
+  `order_intents_generated=false`, `orders_simulated=false`,
+  `fills_simulated=false`, `portfolio_accounting=false`, and
+  `pnl_calculated=false`
+- does not perform real signal evaluation, generate trading signals, create
+  order intents, simulate orders or fills, maintain portfolio accounting, or
+  compute P&L
+
+Workflow relationship:
+
+```text
+history-snapshot -> history-load -> backtest-feed -> backtest-run -> strategy-contract -> strategy-runner -> signal-contract -> signal-runner
+```
+
+`signal-runner` exercises only the disabled signal contract. It is not connected
+to real signal evaluation and does not produce trading outputs. Common failures:
+
+- No snapshots found: run or review `history-index` and `history-load`.
+- Empty feed: inspect the snapshot and loader reports.
+- Failed feed: inspect loader and feed adapter errors before rerunning.
+- Partial feed: review missing-symbol summaries in the runner report.
+
 ## Offline Fixture Stress Tests
 
 ```bash
@@ -473,6 +517,7 @@ python -m pytest tests/test_offline_stress_backtest_feed.py
 python -m pytest tests/test_offline_stress_backtest_engine.py
 python -m pytest tests/test_offline_stress_strategy_runner.py
 python -m pytest tests/test_offline_stress_signal_contract.py
+python -m pytest tests/test_offline_stress_signal_runner.py
 ```
 
 Expected behavior:
@@ -484,7 +529,7 @@ Expected behavior:
 - verifies loader diagnostics for malformed JSONL, missing manifests, missing bars files, duplicate timestamps, timestamp gaps, invalid OHLC, negative volume, and empty datasets
 - verifies `backtest-feed` union/intersection alignment and explicit missing-bar counts
 - verifies `backtest-run` ready, partial, and failed feed diagnostics
-- verifies `strategy-contract`, `strategy-runner`, and `signal-contract` missing-symbol handling and diagnostics-only behavior
+- verifies `strategy-contract`, `strategy-runner`, `signal-contract`, and `signal-runner` missing-symbol handling and diagnostics-only behavior
 - places no orders and invokes no order APIs
 - does not perform real strategy evaluation, generate signals, generate order intents, simulate orders, simulate fills, maintain portfolio accounting, or compute P&L
 
@@ -553,7 +598,7 @@ If `broker-probe` fails:
 
 ## Safe Next Milestones
 
-1. Review the disabled `signal-contract` reports and this stage audit before designing any new milestone.
-2. Keep `v0.12` unimplemented until there is an explicitly approved plan for disabled/offline signal diagnostics.
+1. Review the disabled `signal-runner` reports before designing any future signal-evaluation milestone.
+2. Keep `v0.13` unimplemented until there is an explicitly approved plan for real signal evaluation.
 3. Do not add real signal evaluation, buy/sell/hold outputs, order intents, order simulation, fills, portfolio accounting, P&L, broker routing, paper execution, or live trading in the next planning pass.
 4. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

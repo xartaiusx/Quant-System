@@ -1243,3 +1243,143 @@ Completion criteria:
 - No broker calls or order APIs are added.
 - No real signal generation, order-intent generation, order simulation, fill simulation, P&L calculation, or portfolio accounting is added.
 - Paper execution remains blocked, live trading remains rejected, and generated reports remain ignored.
+
+## Milestone 14 - Broker-free disabled signal diagnostic runner
+
+Baseline before edits:
+
+- Milestone 13 / `v0.11.0-broker-free-signal-contract` added the disabled signal contract scaffold.
+- The stage-gated audit polish tag `v0.11.1-stage-gated-audit-polish` confirmed milestones `v0.1` through `v0.11` are complete or fixed-and-complete.
+- This milestone implements `v0.12` as diagnostic plumbing only: historical feed frames are routed through the existing disabled signal contract and recorded per frame.
+- Paper execution remains blocked, live trading remains rejected, and no broker contact is allowed.
+
+Files expected to change:
+
+- `docs/IMPLEMENTATION_PLAN.md`
+- `src/trader/models.py`
+- `src/trader/strategy/signal_runner.py`
+- `src/trader/cli.py`
+- `src/trader/reporting/reports.py`
+- `scripts/run-signal-runner.sh`
+- `tests/test_signal_runner.py`
+- `tests/test_offline_stress_signal_runner.py`
+- `README.md`
+- `docs/RUNBOOK.md`
+- `docs/SAFETY.md`
+- `docs/STATUS.md`
+- `docs/STAGE_AUDIT.md`
+- `AGENTS.md`
+
+Disabled signal runner design:
+
+- Add a broker-free runner that consumes a `BacktestDataFeed`, builds a `SignalEvaluationContext` for each deterministic feed frame, and invokes only `DisabledSignalContract.observe(...)`.
+- Record one per-frame `DisabledSignalFrameDiagnostic` for each feed frame and runner-level diagnostics for frame count, contexts built, diagnostics emitted, first/last timestamp, missing symbols by frame, and missing symbols by symbol.
+- Treat ready feeds as completed, partial feeds as completed with partial status and warnings, empty feeds as failed, and failed feeds as failed with precise errors.
+- The runner must not mutate the input feed.
+
+Dependency boundaries:
+
+- The signal runner module may depend on `trader.backtest.data_adapter`, `trader.models`, `trader.strategy.interface`, and `trader.strategy.signals`.
+- The signal runner path must not import `trader.broker`, `trader.execution`, `ibapi`, portfolio construction, risk routing, or broker clients.
+- CLI integration must reuse the offline historical loader and backtest feed adapter, matching the `signal-contract` command.
+
+Per-frame diagnostic flow:
+
+- Load offline datasets through `load_historical_snapshots(...)`.
+- Build a `BacktestDataFeed` with union or intersection alignment.
+- Summarize the feed.
+- For each frame yielded by `iter_feed_frames(...)`, build a `SignalEvaluationContext`.
+- Invoke the disabled signal contract and store the resulting diagnostic.
+- Aggregate missing symbols, warnings, errors, and runner status.
+
+Result and report models:
+
+- Add `DisabledSignalRunnerRequest`.
+- Add `DisabledSignalFrameDiagnostic`.
+- Add `DisabledSignalRunnerDiagnostics`.
+- Add `DisabledSignalRunnerResult`.
+- Add `DisabledSignalRunnerReport`.
+- Include `disabled_signal_runner=true`, `signal_contract_validated=true`, `signal_evaluation_enabled=false`, `generated_signals=false`, `signal_count=0`, `generated_orders=false`, `order_intents_generated=false`, `orders_simulated=false`, `fills_simulated=false`, `pnl_calculated=false`, `portfolio_accounting=false`, `broker_contacted=false`, `order_routing_enabled=false`, and `no_order_guarantee=true` in relevant result/report surfaces.
+
+CLI behavior:
+
+- Add `python -m trader.cli signal-runner --symbols SPY,AAPL`.
+- Support `--alignment union`, `--alignment intersection`, `--bar-size`, `--what-to-show`, `--latest`, `--strict`, `--snapshot-timestamp`, and `--base-path`.
+- Print a diagnostic-only summary with runner status, frame count, contexts built, diagnostics emitted, missing symbols, and explicit false safety flags.
+- The command must state that no trading signals, order intents, order simulation, broker routing, fills, portfolio accounting, or P&L calculation were performed.
+
+Reporting behavior:
+
+- Write `reports/signal_runner_<timestamp>.json` and `.md`.
+- Maintain `reports/latest_signal_runner.json` and `.md`.
+- Reports include timestamp, symbols requested, snapshot selection criteria, alignment mode, feed summary, disabled signal contract metadata, runner status, frame count, context/diagnostic counts, first/last timestamp, missing symbols summary, warnings/errors, and all required safety flags.
+- Reports include the explicit statement: "This run exercised the disabled signal contract only. Signal evaluation is disabled. No trading signals, order intents, order simulation, broker routing, fills, portfolio accounting, or P&L calculation was performed."
+
+Fixture and stress tests:
+
+- Add fixture-feed unit tests for ready, partial, empty, and failed feeds.
+- Assert one signal context and one disabled-signal diagnostic per frame.
+- Assert first/last timestamp and missing-symbol aggregation.
+- Assert JSON serialization for result/report models.
+- Add CLI fixture snapshot coverage that does not depend on real `data/historical` contents.
+- Add stress tests using synthetic historical snapshot fixtures for partial overlap, gapped, duplicate, and clean feeds.
+- Add static tests that the runner path has no broker, `ibapi`, or forbidden order API dependencies.
+
+Safety checks:
+
+- No broker calls, socket connection attempts, `trader.broker` imports, `ibapi` imports, order APIs, real signal evaluation, buy/sell/hold outputs, order-intent generation, order simulation, fill simulation, P&L calculation, portfolio accounting, paper execution activation, or live trading.
+- Generated reports and generated snapshots remain ignored.
+- Paper executor remains blocked and live ports remain rejected.
+
+Validation commands:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
+.venv/bin/mypy src
+.venv/bin/python -m trader.cli --help
+.venv/bin/python -m trader.cli status
+.venv/bin/python -m trader.cli history-index || true
+.venv/bin/python -m trader.cli history-load --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-feed --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-run --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli strategy-contract --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli strategy-runner --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli signal-contract --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli signal-runner --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli signal-runner --symbols SPY,AAPL --alignment intersection || true
+scripts/run-signal-runner.sh || true
+grep -R "placeOrder" -n src tests docs scripts || true
+grep -R "cancelOrder" -n src tests docs scripts || true
+grep -R "reqGlobalCancel" -n src tests docs scripts || true
+grep -R "ALLOW_PAPER_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "ALLOW_LIVE_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "4001\|7496" -n src tests docs scripts .env.example || true
+grep -R "trader.broker" -n src/trader/strategy tests/test_signal_runner.py tests/test_offline_stress_signal_runner.py || true
+grep -R "IBKRReadOnlyClient\|ibapi" -n src/trader/strategy tests/test_signal_runner.py tests/test_offline_stress_signal_runner.py || true
+grep -R "place_order\|submit_order\|order_intent\|fill\|portfolio\|pnl\|P&L\|profit\|loss" -n src/trader/strategy tests/test_signal_runner.py tests/test_offline_stress_signal_runner.py || true
+grep -R "buy\|sell\|hold" -n src/trader/strategy tests/test_signal_runner.py tests/test_offline_stress_signal_runner.py || true
+git diff --check
+```
+
+Explicit non-goals:
+
+- No real signal evaluation.
+- No buy/sell/hold signal generation.
+- No order intents.
+- No order simulation.
+- No fill simulation.
+- No P&L.
+- No portfolio accounting.
+- No broker calls.
+- No paper or live execution.
+
+Completion criteria:
+
+- Unit tests pass without IB Gateway.
+- `signal-runner` works offline with local snapshots when present or fails cleanly when they are absent.
+- Disabled signal diagnostics run once per frame.
+- `disabled_signal_runner=true`, `signal_contract_validated=true`, `signal_evaluation_enabled=false`, `generated_signals=false`, `signal_count=0`, `generated_orders=false`, `order_intents_generated=false`, `orders_simulated=false`, `fills_simulated=false`, `pnl_calculated=false`, `portfolio_accounting=false`, and `broker_contacted=false` are present in relevant reports.
+- Reports are written and remain ignored.
+- No broker calls or order APIs are added.
+- Paper execution remains blocked and live trading remains rejected.
