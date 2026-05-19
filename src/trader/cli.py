@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from trader.backtest.data_adapter import build_backtest_feed_report
 from trader.config import ConfigError, TraderConfig, load_config
 from trader.data.historical import (
     attach_snapshot_paths,
@@ -26,6 +27,9 @@ from trader.data.snapshots import deterministic_history, deterministic_quotes, m
 from trader.data.universe import parse_symbols
 from trader.execution.router import ExecutionRouter
 from trader.models import (
+    BacktestAlignmentMode,
+    BacktestDataAdapterReport,
+    BacktestDataAdapterRequest,
     BrokerDiagnosticReport,
     HistoricalLoaderReport,
     HistoricalReadinessReport,
@@ -409,6 +413,78 @@ def history_inspect(
         raise typer.Exit(code=1)
 
 
+@app.command("backtest-feed")
+def backtest_feed(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols to adapt from local snapshots."),
+    ] = "SPY,AAPL",
+    alignment: Annotated[
+        BacktestAlignmentMode,
+        typer.Option("--alignment", help="Timestamp alignment mode."),
+    ] = BacktestAlignmentMode.UNION,
+    bar_size: Annotated[
+        str | None,
+        typer.Option("--bar-size", help="Optional bar-size filter."),
+    ] = None,
+    what_to_show: Annotated[
+        str | None,
+        typer.Option("--what-to-show", help="Optional data-type filter."),
+    ] = None,
+    latest: Annotated[
+        bool,
+        typer.Option("--latest/--all", help="Load latest matching snapshot per symbol."),
+    ] = True,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict/--non-strict", help="Fail on malformed records."),
+    ] = False,
+    snapshot_timestamp: Annotated[
+        str | None,
+        typer.Option("--snapshot-timestamp", help="Optional YYYYMMDDTHHMMSSZ filter."),
+    ] = None,
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical snapshot root."),
+    ] = Path("data/historical"),
+) -> None:
+    """Build a broker-free aligned bar feed from local historical snapshots."""
+
+    request = BacktestDataAdapterRequest(
+        symbols=parse_symbols(symbols),
+        bar_size=bar_size,
+        what_to_show=what_to_show,
+        latest=latest,
+        strict=strict,
+        snapshot_timestamp=snapshot_timestamp,
+        base_data_path=base_path.as_posix(),
+        alignment_mode=alignment,
+    )
+    loader_request = HistoricalSnapshotLoadRequest(
+        symbols=request.symbols,
+        bar_size=request.bar_size,
+        what_to_show=request.what_to_show,
+        latest=request.latest,
+        strict=request.strict,
+        snapshot_timestamp=request.snapshot_timestamp,
+        base_data_path=request.base_data_path,
+    )
+    loader_report = load_historical_snapshots(loader_request)
+    report = build_backtest_feed_report(loader_report, request)
+    json_path, md_path = Journal().write_cycle("backtest_feed", _report_dict(report))
+
+    console.print("[bold]Broker-free backtest data feed[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    console.print("No strategy evaluation, order simulation, or P&L calculation was performed.")
+    _print_backtest_feed_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("history-snapshot")
 def history_snapshot(
     symbols: Annotated[
@@ -769,7 +845,8 @@ def _validate_use_rth_option(use_rth: int) -> int:
 
 def _report_dict(
     report: (
-        BrokerDiagnosticReport
+        BacktestDataAdapterReport
+        | BrokerDiagnosticReport
         | HistoricalLoaderReport
         | HistoricalReadinessReport
         | HistoricalSnapshotReport
@@ -777,6 +854,53 @@ def _report_dict(
     ),
 ) -> dict[str, Any]:
     return report.model_dump(mode="json")
+
+
+def _print_backtest_feed_result(report: BacktestDataAdapterReport) -> None:
+    summary = report.summary
+    table = Table(title="Backtest Feed")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Symbols", ", ".join(report.symbols_requested))
+    table.add_row("Alignment", _enum_value(report.request.alignment_mode))
+    table.add_row("Broker contacted", str(report.broker_contacted).lower())
+    table.add_row("Order routing", "disabled")
+    table.add_row("No order APIs invoked", "true")
+    table.add_row("Final status", report.final_status)
+    if summary is not None:
+        table.add_row("Total bars", str(summary.total_bars))
+        table.add_row("Frame count", str(summary.frame_count))
+        table.add_row(
+            "First timestamp",
+            summary.first_timestamp.isoformat() if summary.first_timestamp else "n/a",
+        )
+        table.add_row(
+            "Last timestamp",
+            summary.last_timestamp.isoformat() if summary.last_timestamp else "n/a",
+        )
+    console.print(table)
+
+    if summary is not None:
+        missing_table = Table(title="Missing Bars")
+        missing_table.add_column("Symbol")
+        missing_table.add_column("Missing bars")
+        missing_table.add_column("Duplicates")
+        for symbol in summary.symbols:
+            missing_table.add_row(
+                symbol,
+                str(summary.missing_bars_by_symbol.get(symbol, 0)),
+                str(summary.duplicate_timestamps_by_symbol.get(symbol, 0)),
+            )
+        console.print(missing_table)
+
+    if report.warnings:
+        console.print("[yellow]Backtest feed warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Backtest feed errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
 
 
 def _print_broker_result(report: BrokerDiagnosticReport) -> None:

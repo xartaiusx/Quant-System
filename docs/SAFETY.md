@@ -78,6 +78,11 @@ Milestone 7 adds offline historical snapshot indexing and loading. `history-inde
 only. They do not import broker clients, open sockets, request IBKR data, place
 orders, or route execution.
 
+Milestone 8 adds a broker-free backtest data adapter scaffold. `backtest-feed`
+reads local loaded historical datasets only, aligns bars into feed frames, and
+does not contact a broker. It does not evaluate strategies, simulate orders,
+compute P&L, submit to the paper executor, or route execution.
+
 ## Sensitive Data
 
 Never commit:

@@ -77,6 +77,21 @@ class HistoricalLoadStatus(StrEnum):
     FAILED = "failed"
 
 
+class BacktestAlignmentMode(StrEnum):
+    """Timestamp alignment modes for offline backtest data feeds."""
+
+    UNION = "union"
+    INTERSECTION = "intersection"
+
+
+class BacktestFeedStatus(StrEnum):
+    """Offline backtest feed readiness states."""
+
+    READY = "ready"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
 class Instrument(SerializableModel):
     """Tradable instrument descriptor."""
 
@@ -832,6 +847,157 @@ class HistoricalLoaderReport(SerializableModel):
     no_order_guarantee_statement: str = (
         "This offline loader reads local historical snapshot files only and does not "
         "contact a broker."
+    )
+    final_status: str = "unknown"
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class BacktestBar(SerializableModel):
+    """Normalized bar prepared for future backtest data feeds."""
+
+    symbol: str
+    timestamp: datetime
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal | None = None
+    source_snapshot_timestamp: str | None = None
+    source_bars_path: str | None = None
+    source_manifest_path: str | None = None
+    source: str = "offline_snapshot"
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("symbol is required")
+        return normalized
+
+
+class BacktestFeedPoint(SerializableModel):
+    """One symbol's optional bar inside an aligned feed frame."""
+
+    symbol: str
+    bar: BacktestBar | None = None
+    missing: bool = False
+
+
+class BacktestFeedFrame(SerializableModel):
+    """All symbol bars aligned to one timestamp."""
+
+    timestamp: datetime
+    bars_by_symbol: dict[str, BacktestBar | None] = Field(default_factory=dict)
+    points: list[BacktestFeedPoint] = Field(default_factory=list)
+    missing_symbols: list[str] = Field(default_factory=list)
+
+
+class BacktestDataAdapterIssue(SerializableModel):
+    """Structured issue found while adapting offline datasets into a feed."""
+
+    symbol: str | None = None
+    severity: str
+    code: str
+    message: str
+    timestamp: datetime | None = None
+
+
+class BacktestDataFeedSummary(SerializableModel):
+    """Compact summary of an offline backtest data feed."""
+
+    symbols: list[str] = Field(default_factory=list)
+    total_bars: int = 0
+    frame_count: int = 0
+    first_timestamp: datetime | None = None
+    last_timestamp: datetime | None = None
+    missing_bars_by_symbol: dict[str, int] = Field(default_factory=dict)
+    duplicate_timestamps_by_symbol: dict[str, int] = Field(default_factory=dict)
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    feed_status: BacktestFeedStatus = BacktestFeedStatus.FAILED
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+
+class BacktestDataFeed(SerializableModel):
+    """Deterministic offline bar feed for future backtesting."""
+
+    symbols: list[str] = Field(default_factory=list)
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    frames: list[BacktestFeedFrame] = Field(default_factory=list)
+    source_summaries: list[HistoricalDatasetSummary] = Field(default_factory=list)
+    total_bars: int = 0
+    frame_count: int = 0
+    first_timestamp: datetime | None = None
+    last_timestamp: datetime | None = None
+    missing_bars_by_symbol: dict[str, int] = Field(default_factory=dict)
+    duplicate_timestamps_by_symbol: dict[str, int] = Field(default_factory=dict)
+    feed_status: BacktestFeedStatus = BacktestFeedStatus.FAILED
+    issues: list[BacktestDataAdapterIssue] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+
+class BacktestDataAdapterRequest(SerializableModel):
+    """Offline backtest feed build request."""
+
+    symbols: list[str] = Field(default_factory=list)
+    bar_size: str | None = None
+    what_to_show: str | None = None
+    latest: bool = True
+    snapshot_timestamp: str | None = None
+    strict: bool = False
+    base_data_path: str = "data/historical"
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        return [symbol.strip().upper() for symbol in value if symbol.strip()]
+
+    @field_validator("bar_size", "what_to_show", "snapshot_timestamp")
+    @classmethod
+    def normalize_optional_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("what_to_show")
+    @classmethod
+    def normalize_optional_what_to_show(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+
+class BacktestDataAdapterReport(SerializableModel):
+    """Report for a broker-free backtest feed build."""
+
+    title: str = "Broker-free Backtest Data Feed"
+    report_type: str = "backtest_feed"
+    command: str = "backtest-feed"
+    ok: bool
+    request: BacktestDataAdapterRequest
+    symbols_requested: list[str] = Field(default_factory=list)
+    source_datasets: list[HistoricalDatasetSummary] = Field(default_factory=list)
+    summary: BacktestDataFeedSummary | None = None
+    issues: list[BacktestDataAdapterIssue] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This backtest feed adapter reads local historical snapshots only and does not "
+        "contact a broker."
+    )
+    no_strategy_execution_statement: str = (
+        "No strategy evaluation, order simulation, or P&L calculation was performed."
     )
     final_status: str = "unknown"
     timestamp: datetime = Field(default_factory=utc_now)

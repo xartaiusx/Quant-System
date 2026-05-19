@@ -512,3 +512,128 @@ Completion criteria:
 - Missing or malformed data produces structured diagnostics.
 - No broker calls or order APIs are added.
 - Paper execution remains blocked, live trading remains rejected, and generated reports/snapshots remain ignored.
+
+## Milestone 8 - Broker-free backtest data adapter scaffold
+
+Baseline before edits:
+
+- Milestone 7 / `v0.5.0-offline-history-loader` loads ignored local JSONL snapshots into `HistoricalLoadedDataset` objects without contacting IBKR.
+- This milestone remains broker-free and must not import broker clients, `ibapi`, or open any broker socket.
+- It prepares normalized simulation-ready bar feeds only. It must not evaluate strategies, simulate orders, compute P&L, enable paper execution, or enable live trading.
+- Unit tests must use fixture `HistoricalLoadedDataset` objects or temporary snapshot files and must not require IB Gateway.
+
+Files expected to change:
+
+- `docs/IMPLEMENTATION_PLAN.md`
+- `src/trader/models.py`
+- `src/trader/backtest/data_adapter.py`
+- `src/trader/cli.py`
+- `src/trader/reporting/reports.py`
+- `tests/test_backtest_data_adapter.py`
+- `README.md`
+- `docs/RUNBOOK.md`
+- `docs/SAFETY.md`
+- `docs/STATUS.md`
+- `AGENTS.md`
+- `scripts/run-backtest-feed.sh`
+
+Data adapter design:
+
+- Consume one or more `HistoricalLoadedDataset` instances from the offline historical loader.
+- Validate that inputs are loaded, non-empty, and broker-free.
+- Normalize each loaded bar into a stable `BacktestBar` record with symbol, timestamp, OHLCV values, source snapshot timestamp, bars path, and manifest path.
+- Build deterministic feed frames ordered by ascending timestamp.
+- Preserve symbol identity and source metadata for every bar.
+- Return structured diagnostics instead of throwing for empty or partial inputs.
+- Keep the adapter independent from broker, strategy, execution, simulator, cost, and P&L modules.
+
+Normalized bar/feed model:
+
+- Add serializable models for `BacktestBar`, `BacktestFeedPoint`, `BacktestFeedFrame`, `BacktestDataFeed`, `BacktestDataAdapterRequest`, `BacktestDataAdapterIssue`, `BacktestDataFeedSummary`, and `BacktestDataAdapterReport`.
+- Include `broker_contacted=false`, `order_routing_enabled=false`, and `no_order_guarantee=true` on feed summaries and reports.
+- Include a report statement that no strategy evaluation, order simulation, or P&L calculation was performed.
+
+Multi-symbol alignment rules:
+
+- Default alignment mode is `union`, which includes every timestamp observed across all selected symbols.
+- `intersection` includes only timestamps present for every selected symbol.
+- Missing bars in `union` frames are explicit `null` values and counted in `missing_bars_by_symbol`.
+- Duplicate timestamps are recorded per symbol as diagnostics and warnings.
+- Frames and iteration order are deterministic.
+
+Validation checks:
+
+- Empty input fails cleanly.
+- Empty datasets fail or produce partial status depending on the batch.
+- Partial input datasets propagate partial feed status.
+- Duplicate timestamps are counted by symbol.
+- Frames must be sorted ascending.
+- Bars must be keyed by requested symbol.
+- Unsupported alignment modes are rejected by the CLI and model validation.
+
+CLI commands:
+
+- `python -m trader.cli backtest-feed --symbols SPY,AAPL`
+- `python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment union`
+- `python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment intersection`
+- `python -m trader.cli backtest-feed --symbols SPY,AAPL --bar-size "5 mins" --what-to-show TRADES`
+
+Reporting behavior:
+
+- Write `reports/backtest_feed_<timestamp>.json` and `.md`.
+- Maintain `reports/latest_backtest_feed.json` and `.md`.
+- Reports include symbols requested, snapshot selection criteria, alignment mode, source datasets, total bars, frame count, first/last timestamp, missing bars by symbol, warnings/errors, feed status, and the explicit no-strategy/no-order/no-P&L statement.
+
+Tests to add:
+
+- Build feed from one dataset and multiple datasets.
+- Verify union and intersection alignment behavior.
+- Count missing bars by symbol and duplicate timestamps by symbol.
+- Confirm frames are sorted and bars are keyed by symbol.
+- Confirm empty and partial datasets produce structured diagnostics.
+- Confirm summaries and reports serialize.
+- Confirm `iter_feed_frames` is deterministic.
+- Confirm CLI `backtest-feed` runs with fixture data.
+- Confirm adapter path has no broker or `ibapi` imports and no order API usage.
+- Confirm paper executor remains blocked and live ports remain rejected.
+
+Safety checks:
+
+- Do not add broker calls, socket connection attempts, `trader.broker` imports, `ibapi` imports, order APIs, strategy evaluation, order simulation, P&L calculation, paper execution activation, or live trading.
+- Keep generated reports and generated snapshots ignored.
+
+Validation commands:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
+.venv/bin/mypy src
+.venv/bin/python -m trader.cli --help
+.venv/bin/python -m trader.cli status
+.venv/bin/python -m trader.cli history-index || true
+.venv/bin/python -m trader.cli history-load --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-feed --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment intersection || true
+scripts/run-backtest-feed.sh || true
+grep -R "placeOrder" -n src tests docs scripts || true
+grep -R "cancelOrder" -n src tests docs scripts || true
+grep -R "reqGlobalCancel" -n src tests docs scripts || true
+grep -R "ALLOW_PAPER_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "ALLOW_LIVE_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "4001\|7496" -n src tests docs scripts .env.example || true
+grep -R "trader.broker" -n src/trader/backtest tests/test_backtest_data_adapter.py || true
+grep -R "IBKRReadOnlyClient\|ibapi" -n src/trader/backtest tests/test_backtest_data_adapter.py || true
+git diff --check
+```
+
+Completion criteria:
+
+- Unit tests pass without IB Gateway.
+- Adapter tests use fixture loaded datasets or temporary offline snapshots.
+- `backtest-feed` works offline with local snapshots when present.
+- Union and intersection alignment work.
+- Missing bars are explicit and counted.
+- Feed frames are deterministic and sorted.
+- Reports are written and state that no strategy evaluation, order simulation, or P&L calculation was performed.
+- No broker calls or order APIs are added.
+- Paper execution remains blocked, live trading remains rejected, and generated reports remain ignored.

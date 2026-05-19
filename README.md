@@ -20,6 +20,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
   spread checks, quote freshness, and small historical-bar samples.
 - Read-only historical snapshot ingestion and readiness reports for future simulation inputs.
 - Broker-free offline historical snapshot indexing and loading for future simulation inputs.
+- Broker-free backtest data feed scaffold for aligning offline historical datasets.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
 
@@ -34,6 +35,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Trading decisions from live broker market data.
 - Strategy evaluation from broker historical snapshots.
 - Backtest strategy evaluation from offline snapshot datasets.
+- Order simulation or P&L from offline snapshot datasets.
 
 ## Safety Design
 
@@ -102,6 +104,8 @@ python -m trader.cli history-readiness --latest
 python -m trader.cli history-index
 python -m trader.cli history-load --symbols SPY,AAPL
 python -m trader.cli history-inspect --symbol SPY
+python -m trader.cli backtest-feed --symbols SPY,AAPL
+python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment intersection
 scripts/check-ibapi.sh
 scripts/run-broker-preflight.sh
 python -m trader.cli account --mock
@@ -125,6 +129,7 @@ scripts/run-market-probe.sh
 scripts/run-market-probe.sh --symbols SPY,AAPL,NVDA --data-type delayed --historical
 scripts/run-history-snapshot.sh
 scripts/run-history-load.sh
+scripts/run-backtest-feed.sh
 ```
 
 ## TWS Paper Notes
@@ -149,6 +154,10 @@ simulation work. The snapshots are generated artifacts and are ignored by Git.
 `history-index`, `history-load`, and `history-inspect` are offline-only. They
 read local snapshot JSONL and manifest files, normalize bars into reusable
 datasets, write loader reports, and do not contact IBKR or import broker clients.
+
+`backtest-feed` is also offline-only. It reads loaded local historical datasets,
+normalizes them into aligned bar-feed frames, writes feed reports, and does not
+contact IBKR, evaluate strategies, simulate orders, or compute P&L.
 
 ## References
 

@@ -18,6 +18,7 @@
 - Milestone 5 implemented: read-only IBKR market-data diagnostics for contract resolution, market-data type, quote ticks, spread/freshness checks, and optional historical bars.
 - Milestone 6 implemented: read-only historical snapshot ingestion, local JSONL/manifests, and readiness reporting for future simulation inputs.
 - Milestone 7 implemented: broker-free offline historical snapshot indexing, loading, normalization, validation, and loader reports.
+- Milestone 8 implemented: broker-free backtest data feed scaffold with union/intersection alignment, missing-bar diagnostics, and feed reports.
 - Optional `ibapi` dependency check script.
 - Deterministic mock data.
 - Momentum and mean-reversion strategy modules.
@@ -44,6 +45,7 @@
 - Broker market-data diagnostics feeding automated execution.
 - Historical snapshots feeding automated execution.
 - Offline historical datasets feeding automated execution.
+- Backtest feeds evaluating strategies, simulating orders, or calculating P&L.
 
 ## Current Blockers
 
@@ -58,9 +60,10 @@
 - Before market-data diagnostics in a new environment, rerun a successful read-only current-time broker probe.
 - Market-data and historical snapshot diagnostics may still be limited by IBKR data permissions, delayed-data availability, market hours, or pacing.
 - Offline `history-index`, `history-load`, and `history-inspect` read local files only and do not contact IBKR.
+- Offline `backtest-feed` reads local historical datasets only, reports `broker_contacted=false`, and does not evaluate strategies, simulate orders, or compute P&L.
 
 ## Next Recommended Steps
 
-1. Review offline loader reports across clean, partial, and malformed fixture datasets.
-2. Add a broker-free backtest data adapter proposal before strategy evaluation consumes offline datasets.
+1. Add a broker-free backtest engine design that consumes aligned feed frames without execution routing.
+2. Review feed behavior across partial and gapped datasets before adding strategy evaluation.
 3. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

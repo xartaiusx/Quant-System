@@ -273,6 +273,42 @@ partial load; `--strict` marks malformed records as failed. Common failures:
 - Invalid OHLC or negative volume: treat the dataset as failed for simulation input.
 - Stale snapshot: refresh historical data when a current dataset is required.
 
+## Offline Backtest Feed
+
+```bash
+python -m trader.cli backtest-feed --symbols SPY,AAPL
+python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment union
+python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment intersection
+python -m trader.cli backtest-feed --symbols SPY,AAPL --bar-size "5 mins" --what-to-show TRADES
+scripts/run-backtest-feed.sh
+```
+
+Expected behavior:
+
+- opens no broker socket
+- uses the offline historical loader to read local snapshots
+- adapts `HistoricalLoadedDataset` records into normalized feed frames
+- preserves symbol identity, source snapshot paths, and source manifest paths
+- writes `reports/backtest_feed_<timestamp>.json` and `.md`
+- updates `reports/latest_backtest_feed.json` and `.md`
+- places no orders and invokes no order APIs
+- does not evaluate strategies, simulate orders, or compute P&L
+
+Alignment modes:
+
+- `union` includes every timestamp observed across the selected symbols. Missing
+  symbol bars are explicit empty values in those frames and are counted by symbol.
+- `intersection` includes only timestamps present for every selected symbol.
+
+Use `history-index` and `history-load` first if `backtest-feed` reports no local
+snapshots. Common failures:
+
+- No snapshots found: run `history-snapshot` in a separate broker-read-only task.
+- Empty dataset: inspect the source JSONL and manifest pair.
+- Partial dataset: review loader warnings before using the feed for future simulation.
+- Duplicate timestamps: the adapter keeps deterministic first-bar ordering and records the duplicate count.
+- Missing bars: use `intersection` when future analysis needs only shared timestamps.
+
 ## Dry-Run Plan
 
 ```bash
@@ -334,6 +370,6 @@ If `broker-probe` fails:
 
 ## Safe Next Milestones
 
-1. Add a broker-free backtest data adapter proposal for offline datasets.
+1. Add a broker-free backtest engine design that consumes the feed without order routing.
 2. Add read-only market-data subscription diagnostics behind explicit flags.
 3. Add a paper execution design document before enabling any paper submission.
