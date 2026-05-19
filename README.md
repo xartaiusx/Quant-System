@@ -22,6 +22,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Broker-free offline historical snapshot indexing and loading for future simulation inputs.
 - Broker-free backtest data feed scaffold for aligning offline historical datasets.
 - Broker-free backtest engine skeleton for deterministic data-frame replay diagnostics.
+- Broker-free strategy interface contract scaffold with no-op diagnostics only.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
 
@@ -38,6 +39,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Backtest strategy evaluation from offline snapshot datasets.
 - Order simulation or P&L from offline snapshot datasets.
 - Fill simulation, portfolio accounting, or P&L from backtest runs.
+- Real strategy evaluation, signal generation, order simulation, or P&L from strategy-contract checks.
 
 ## Safety Design
 
@@ -110,6 +112,8 @@ python -m trader.cli backtest-feed --symbols SPY,AAPL
 python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment intersection
 python -m trader.cli backtest-run --symbols SPY,AAPL
 python -m trader.cli backtest-run --symbols SPY,AAPL --alignment intersection
+python -m trader.cli strategy-contract --symbols SPY,AAPL
+python -m trader.cli strategy-contract --symbols SPY,AAPL --alignment intersection
 scripts/check-ibapi.sh
 scripts/run-broker-preflight.sh
 python -m trader.cli account --mock
@@ -135,6 +139,7 @@ scripts/run-history-snapshot.sh
 scripts/run-history-load.sh
 scripts/run-backtest-feed.sh
 scripts/run-backtest-run.sh
+scripts/run-strategy-contract.sh
 ```
 
 ## TWS Paper Notes
@@ -168,6 +173,11 @@ contact IBKR, evaluate strategies, simulate orders, or compute P&L.
 deterministically, records frame-level diagnostics, writes run reports, and does
 not contact IBKR, evaluate strategies, simulate orders, calculate fills, or
 compute P&L.
+
+`strategy-contract` is an offline interface scaffold. It validates a no-op
+strategy contract against local feed frames, writes contract reports, and does
+not contact IBKR, perform real strategy evaluation, generate signals, simulate
+orders, or compute P&L.
 
 ## References
 

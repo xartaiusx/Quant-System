@@ -89,6 +89,12 @@ invokes order APIs, evaluates strategies, simulates orders, calculates fills,
 maintains portfolio accounting, computes P&L, submits to the paper executor, or
 routes execution.
 
+Milestone 10 adds a broker-free strategy interface contract scaffold.
+`strategy-contract` validates no-op strategy metadata and frame contexts only.
+It never contacts a broker, invokes order APIs, performs real signal generation,
+simulates orders, calculates fills, maintains portfolio accounting, computes
+P&L, submits to the paper executor, or routes execution.
+
 ## Sensitive Data
 
 Never commit:

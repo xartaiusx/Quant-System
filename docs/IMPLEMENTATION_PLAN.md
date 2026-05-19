@@ -758,3 +758,118 @@ Completion criteria:
 - No broker calls or order APIs are added.
 - No strategy evaluation, order simulation, fill simulation, P&L calculation, portfolio accounting, or risk-based execution logic is added.
 - Paper execution remains blocked, live trading remains rejected, and generated reports remain ignored.
+
+## Milestone 10 - Broker-free strategy interface contract scaffold
+
+Baseline before edits:
+
+- Milestone 9 / `v0.7.0-broker-free-backtest-engine` replays offline `BacktestDataFeed` frames and reports diagnostics with `strategy_evaluated=false`.
+- This milestone is interface design only. It must not wire real strategies into `backtest-run`, emit trading signals, create order intents, simulate fills, compute P&L, maintain portfolio accounting, call broker code, activate paper execution, or enable live trading.
+- Unit tests must use fixture `BacktestFeedFrame` / `BacktestDataFeed` objects or temporary offline snapshots and must not require IB Gateway or `ibapi`.
+
+Files expected to change:
+
+- `docs/IMPLEMENTATION_PLAN.md`
+- `src/trader/models.py`
+- `src/trader/strategy/interface.py`
+- `src/trader/cli.py`
+- `src/trader/reporting/reports.py`
+- `tests/test_strategy_interface.py`
+- `README.md`
+- `docs/RUNBOOK.md`
+- `docs/SAFETY.md`
+- `docs/STATUS.md`
+- `AGENTS.md`
+- `scripts/run-strategy-contract.sh`
+
+Strategy protocol/interface design:
+
+- Define immutable metadata for future strategies: name, version, description, parameters, supported bar sizes, required fields, and `broker_required=false`.
+- Define a frame context that mirrors a single `BacktestFeedFrame`: timestamp, frame index, available symbols, missing symbols, bars keyed by symbol, feed metadata, and alignment mode.
+- Define a diagnostic response that records a frame observation and hard-codes safety flags: `evaluated=false`, `generated_signals=false`, `generated_orders=false`, `orders_simulated=false`, `pnl_calculated=false`, `broker_contacted=false`, `order_routing_enabled=false`, and `no_order_guarantee=true`.
+- Keep the interface path independent from `trader.broker`, `ibapi`, execution, portfolio, risk, and existing signal-generating strategies.
+
+Frame context model:
+
+- Build contexts from feed frames without mutating the feed.
+- Preserve timestamp, frame index, available symbols, missing symbols, bars by symbol, feed status, alignment mode, feed frame count, and source summary.
+- Validate that required bar fields are present in available bars and report missing fields as diagnostics only.
+
+No-op strategy behavior:
+
+- Provide a `NoOpStrategyContract` that accepts frame contexts and emits diagnostics only.
+- The no-op contract records that the frame was observed, reports available and missing symbols, and emits no signals or orders.
+- The no-op contract performs no P&L calculation, fill simulation, order simulation, or portfolio accounting.
+
+Diagnostics model:
+
+- Add serializable models for `StrategyParameterSpec`, `StrategyMetadata`, `StrategyFrameContext`, `StrategyContractDiagnostic`, `StrategyContractValidationRequest`, `StrategyContractValidationResult`, and `StrategyContractReport`.
+- Include warnings/errors and all safety flags on both per-frame diagnostics and report-level results.
+
+CLI behavior:
+
+- Add `python -m trader.cli strategy-contract --symbols SPY,AAPL`.
+- Support `--alignment union`, `--alignment intersection`, `--bar-size`, and `--what-to-show`.
+- The command loads local snapshots through the offline historical loader, builds a broker-free feed, validates the no-op strategy contract, writes a report, and prints contract diagnostics.
+- The command must clearly state that it validates the interface contract only and does not perform real strategy evaluation.
+
+Reporting behavior:
+
+- Write `reports/strategy_contract_<timestamp>.json` and `.md`.
+- Maintain `reports/latest_strategy_contract.json` and `.md`.
+- Reports include strategy metadata, symbols requested, feed summary, frame context sample summary, validation result, diagnostics, warnings/errors, and all safety flags.
+- Reports include the explicit statement: "This command validates the strategy interface contract only. No real strategy evaluation, signal generation, order simulation, broker routing, or P&L calculation was performed."
+
+Tests to add:
+
+- Strategy metadata, frame context, diagnostic, result, and report models serialize cleanly.
+- No-op metadata validates.
+- No-op strategy accepts a frame context and emits diagnostics only.
+- Safety flags remain false for evaluation, signal generation, order generation, order simulation, and P&L calculation.
+- Frame context construction preserves timestamps, available symbols, and missing symbols.
+- CLI `strategy-contract` runs with fixture data.
+- Strategy interface path has no broker or `ibapi` imports.
+- Strategy interface path contains no forbidden order API usage.
+- Paper executor remains blocked and live ports remain rejected.
+
+Safety checks:
+
+- Do not add broker calls, socket connection attempts, `trader.broker` imports, `ibapi` imports, order APIs, real strategy evaluation, buy/sell/hold signal generation, order simulation, fill simulation, P&L calculation, portfolio accounting, paper execution activation, or live trading.
+- Keep generated reports and generated snapshots ignored.
+
+Validation commands:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
+.venv/bin/mypy src
+.venv/bin/python -m trader.cli --help
+.venv/bin/python -m trader.cli status
+.venv/bin/python -m trader.cli history-index || true
+.venv/bin/python -m trader.cli history-load --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-feed --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-run --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli strategy-contract --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli strategy-contract --symbols SPY,AAPL --alignment intersection || true
+scripts/run-strategy-contract.sh || true
+grep -R "placeOrder" -n src tests docs scripts || true
+grep -R "cancelOrder" -n src tests docs scripts || true
+grep -R "reqGlobalCancel" -n src tests docs scripts || true
+grep -R "ALLOW_PAPER_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "ALLOW_LIVE_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "4001\|7496" -n src tests docs scripts .env.example || true
+grep -R "trader.broker" -n src/trader/strategy tests/test_strategy_interface.py || true
+grep -R "IBKRReadOnlyClient\|ibapi" -n src/trader/strategy tests/test_strategy_interface.py || true
+grep -R "place_order\|submit_order\|fill\|portfolio\|pnl\|P&L\|profit\|loss" -n src/trader/strategy tests/test_strategy_interface.py || true
+git diff --check
+```
+
+Completion criteria:
+
+- Unit tests pass without IB Gateway.
+- Strategy interface tests use fixture frames or feeds.
+- `strategy-contract` works offline with local snapshots when present.
+- The no-op strategy emits diagnostics only.
+- Reports are written and state that no real strategy evaluation, signal generation, order simulation, broker routing, or P&L calculation was performed.
+- No broker calls or order APIs are added.
+- Paper execution remains blocked, live trading remains rejected, and generated reports remain ignored.

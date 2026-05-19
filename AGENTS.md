@@ -22,6 +22,7 @@ The current project is infrastructure only. It must support research, signal gen
 - Offline data commands must not import broker clients or contact IBKR.
 - Backtest data adapter commands must remain broker-free and must not evaluate strategies, simulate orders, or compute P&L.
 - Backtest engine skeleton commands must remain broker-free and must not evaluate strategies, simulate orders, or calculate P&L until explicitly approved in a future milestone.
+- Strategy interface scaffold commands must remain broker-free and must not generate real signals, simulate orders, or calculate P&L until explicitly approved in a future milestone.
 - Do not commit `.env`, secrets, account numbers, API credentials, tokens, or sensitive logs.
 - Missing or invalid config must fail closed.
 

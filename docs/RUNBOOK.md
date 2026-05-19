@@ -346,6 +346,43 @@ offline local-file workflows. Common failures:
 - Failed feed: fix loader errors before replay.
 - Partial feed: review missing-bar diagnostics in the run report.
 
+## Offline Strategy Contract
+
+```bash
+python -m trader.cli strategy-contract --symbols SPY,AAPL
+python -m trader.cli strategy-contract --symbols SPY,AAPL --alignment union
+python -m trader.cli strategy-contract --symbols SPY,AAPL --alignment intersection
+python -m trader.cli strategy-contract --symbols SPY,AAPL --bar-size "5 mins" --what-to-show TRADES
+scripts/run-strategy-contract.sh
+```
+
+Expected behavior:
+
+- opens no broker socket
+- loads local snapshots through the offline historical loader
+- builds an aligned feed with the broker-free data adapter
+- validates the no-op strategy interface contract
+- records frame context samples and per-frame diagnostics
+- writes `reports/strategy_contract_<timestamp>.json` and `.md`
+- updates `reports/latest_strategy_contract.json` and `.md`
+- places no orders and invokes no order APIs
+- does not perform real strategy evaluation, generate signals, simulate orders, calculate fills, maintain portfolio accounting, or compute P&L
+
+Workflow relationship:
+
+```text
+history-snapshot -> history-load -> backtest-feed -> backtest-run -> strategy-contract
+```
+
+`strategy-contract` is a contract validation command only. It proves the shape of
+future strategy inputs and diagnostics without connecting strategies to the
+engine loop. Common failures:
+
+- No snapshots found: run or review `history-index` and `history-load`.
+- Empty feed: inspect the snapshot and loader reports.
+- Missing bar fields: review the contract report before future strategy work.
+- Partial feed: review missing-symbol diagnostics in the frame context sample.
+
 ## Dry-Run Plan
 
 ```bash
@@ -407,6 +444,6 @@ If `broker-probe` fails:
 
 ## Safe Next Milestones
 
-1. Add a broker-free backtest strategy-interface design document before connecting strategies.
+1. Add an inert strategy-runner proposal that keeps generated signals disabled by default.
 2. Add read-only market-data subscription diagnostics behind explicit flags.
 3. Add a paper execution design document before enabling any paper submission.
