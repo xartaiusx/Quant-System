@@ -176,6 +176,54 @@ Common outcomes:
 - Stale quotes: quote age is reported and stale quotes are flagged.
 - Historical data pacing or permission issue: the historical section records IBKR errors or timeout diagnostics.
 
+## Historical Snapshot Ingestion
+
+```bash
+python -m trader.cli history-fetch --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
+python -m trader.cli history-readiness --latest
+python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
+scripts/run-history-snapshot.sh
+```
+
+Expected behavior:
+
+- connects through the same safe broker lifecycle as `broker-probe`
+- resolves SMART/USD stock contracts before requesting bars
+- requests bounded historical bars sequentially
+- stores JSONL bars and JSON manifests under `data/historical/<symbol>/<bar_size>/<what_to_show>/`
+- writes snapshot and readiness reports under `reports/`
+- cleans up incomplete requests with `cancelHistoricalData`
+- places no orders and invokes no order APIs
+
+Reports are written to:
+
+```text
+reports/history_snapshot_<timestamp>.json
+reports/history_snapshot_<timestamp>.md
+reports/latest_history_snapshot.json
+reports/latest_history_snapshot.md
+reports/history_readiness_<timestamp>.json
+reports/history_readiness_<timestamp>.md
+reports/latest_history_readiness.json
+reports/latest_history_readiness.md
+```
+
+Generated snapshots are ignored by Git:
+
+```text
+data/historical/**/*.jsonl
+data/historical/**/*_manifest.json
+```
+
+Common outcomes:
+
+- No historical permissions: the report records the IBKR code and the symbol continues to the next request.
+- Pacing limitation: wait before retrying and avoid widening the symbol list.
+- Empty bars: readiness marks the symbol failed or partial rather than inventing data.
+- Contract ambiguity: contract resolution records the ambiguity and selected listed USD equity.
+- Outside market hours: latest RTH bars may still be valid; readiness focuses on stored bar quality.
+- Gateway disconnected: the CLI fails cleanly with connection diagnostics.
+
 ## Dry-Run Plan
 
 ```bash

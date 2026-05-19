@@ -16,6 +16,7 @@
 - Broker-probe connection readiness based on IBKR callbacks and current-time response, not only the Python `ibapi` `connect()` return value.
 - Non-fatal IBKR farm-status messages, including `2107`, are reported as warnings for current-time probing.
 - Milestone 5 implemented: read-only IBKR market-data diagnostics for contract resolution, market-data type, quote ticks, spread/freshness checks, and optional historical bars.
+- Milestone 6 implemented: read-only historical snapshot ingestion, local JSONL/manifests, and readiness reporting for future simulation inputs.
 - Optional `ibapi` dependency check script.
 - Deterministic mock data.
 - Momentum and mean-reversion strategy modules.
@@ -40,6 +41,7 @@
 - Live ports `7496` and `4001`.
 - Broker order routing from read-only probe commands.
 - Broker market-data diagnostics feeding automated execution.
+- Historical snapshots feeding automated execution.
 
 ## Current Blockers
 
@@ -52,10 +54,10 @@
 - IB Gateway paper on `127.0.0.1:4002` accepted a read-only broker probe.
 - Latest successful broker-probe returned current server time, masked managed-account output, `order_routing_enabled=false`, and `no_order_guarantee=true`.
 - Before market-data diagnostics in a new environment, rerun a successful read-only current-time broker probe.
-- Market-data diagnostics may still be limited by IBKR data permissions, delayed-data availability, market hours, or pacing.
+- Market-data and historical snapshot diagnostics may still be limited by IBKR data permissions, delayed-data availability, market hours, or pacing.
 
 ## Next Recommended Steps
 
-1. Review market-probe reports across market hours and outside market hours.
-2. Add historical-data snapshot ingestion with clear subscription/readiness diagnostics.
+1. Review historical readiness reports across market hours and outside market hours.
+2. Add offline historical snapshot loaders for future backtest scaffolding.
 3. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

@@ -18,6 +18,7 @@ The current project is infrastructure only. It must support research, signal gen
 - Do not submit market orders.
 - Broker-probe commands may read broker state through read-only API requests, but they must not submit, modify, or cancel orders.
 - Market-data diagnostics may request contract, quote, and historical data, but they must never route execution.
+- Historical-data commands may request and store data but must never route execution.
 - Do not commit `.env`, secrets, account numbers, API credentials, tokens, or sensitive logs.
 - Missing or invalid config must fail closed.
 

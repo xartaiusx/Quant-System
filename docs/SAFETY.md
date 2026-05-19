@@ -16,6 +16,11 @@ historical-bar sample. It does not place, modify, or cancel orders. `cancelMktDa
 and `cancelHistoricalData` are permitted only as data-request cleanup operations;
 `cancelOrder` remains forbidden.
 
+Milestone 6 adds read-only historical snapshot ingestion. `history-fetch`,
+`history-readiness`, and `history-snapshot` may request, store, and validate
+historical bar data. They do not place, modify, or cancel orders.
+`cancelHistoricalData` is permitted only as historical-data request cleanup.
+
 ## Live Trading Disabled
 
 Live trading is impossible in this version by design:
@@ -63,6 +68,10 @@ The read-only broker probe does not change `ALLOW_PAPER_ORDERS`, does not submit
 The read-only market-data probe does not change `ALLOW_PAPER_ORDERS`, does not
 submit to the paper executor, and does not feed strategy, portfolio, risk, or
 execution automation.
+
+The historical snapshot commands do not change `ALLOW_PAPER_ORDERS`, do not
+submit to the paper executor, and do not feed automated strategy evaluation or
+execution.
 
 ## Sensitive Data
 

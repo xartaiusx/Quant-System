@@ -18,6 +18,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Masked managed-account discovery when the broker API is reachable.
 - Read-only IBKR market-data diagnostics for contract resolution, delayed quote capture,
   spread checks, quote freshness, and small historical-bar samples.
+- Read-only historical snapshot ingestion and readiness reports for future simulation inputs.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
 
@@ -30,6 +31,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Profit optimization.
 - Production-grade backtesting.
 - Trading decisions from live broker market data.
+- Strategy evaluation from broker historical snapshots.
 
 ## Safety Design
 
@@ -93,6 +95,8 @@ python -m trader.cli preflight --connect
 python -m trader.cli broker-probe
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
+python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
+python -m trader.cli history-readiness --latest
 scripts/check-ibapi.sh
 scripts/run-broker-preflight.sh
 python -m trader.cli account --mock
@@ -114,6 +118,7 @@ scripts/run-broker-probe.sh
 scripts/run-dry-plan.sh
 scripts/run-market-probe.sh
 scripts/run-market-probe.sh --symbols SPY,AAPL,NVDA --data-type delayed --historical
+scripts/run-history-snapshot.sh
 ```
 
 ## TWS Paper Notes
@@ -129,6 +134,11 @@ Broker-probe reports include `connection_attempted`, `failure_stage`, `ibapi_ava
 `market-probe` is also read-only. It may call IBKR contract, market-data, and
 historical-data request APIs, then cleans up data requests with `cancelMktData`
 and `cancelHistoricalData`. It does not submit, modify, or cancel orders.
+
+`history-snapshot` is read-only data infrastructure. It requests bounded
+historical bars, stores local JSONL snapshots under `data/historical/`, writes
+matching manifests, and produces readiness reports for future backtesting and
+simulation work. The snapshots are generated artifacts and are ignored by Git.
 
 ## References
 

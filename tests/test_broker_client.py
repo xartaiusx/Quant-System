@@ -13,12 +13,23 @@ from typer.testing import CliRunner
 import trader.cli as cli
 from trader.broker.ibkr_client import IBKRClient, _ReadOnlyIBKRApp
 from trader.config import ConfigError, load_config
+from trader.data.historical import (
+    build_readiness_report,
+    readiness_summary_for_snapshot,
+    write_historical_snapshot_result,
+)
 from trader.execution.paper_executor import PaperExecutor
 from trader.models import (
     BrokerDiagnosticReport,
     BrokerErrorEvent,
     ExecutionStatus,
     HistoricalBar,
+    HistoricalReadinessStatus,
+    HistoricalSnapshotBar,
+    HistoricalSnapshotManifest,
+    HistoricalSnapshotReport,
+    HistoricalSnapshotRequest,
+    HistoricalSnapshotResult,
     ManagedAccountInfo,
     MarketDataDiagnosticReport,
     MarketDataRequestType,
@@ -263,6 +274,8 @@ class MarketDataSuccessFakeApp(TimeoutFakeApp):
                 low=Decimal("498"),
                 close=Decimal("500"),
                 volume=Decimal("1000"),
+                wap=Decimal("500.5"),
+                bar_count=10,
             )
         ]
         self.historical_ranges[reqId] = ("20260518 09:30:00", "20260518 16:00:00")
@@ -356,6 +369,83 @@ class MarketDataTimeoutFakeApp(MarketDataSuccessFakeApp):
         _mktDataOptions: list[Any],
     ) -> None:
         return None
+
+
+class HistoricalSnapshotTimeoutFakeApp(MarketDataSuccessFakeApp):
+    def reqHistoricalData(
+        self,
+        _reqId: int,
+        _contract: object,
+        _endDateTime: str,
+        _durationStr: str,
+        _barSizeSetting: str,
+        _whatToShow: str,
+        _useRTH: int,
+        _formatDate: int,
+        _keepUpToDate: bool,
+        _chartOptions: list[Any],
+    ) -> None:
+        return None
+
+
+def snapshot_request(symbol: str = "SPY") -> HistoricalSnapshotRequest:
+    return HistoricalSnapshotRequest(
+        symbols=[symbol],
+        duration="1 D",
+        bar_size="5 mins",
+        what_to_show="TRADES",
+        use_rth=1,
+        timeout_seconds=30,
+    )
+
+
+def snapshot_bar(
+    *,
+    symbol: str = "SPY",
+    timestamp: str = "20260518  09:30:00",
+    open_: Decimal = Decimal("100"),
+    high: Decimal = Decimal("101"),
+    low: Decimal = Decimal("99"),
+    close: Decimal = Decimal("100.5"),
+    volume: Decimal | None = Decimal("1000"),
+) -> HistoricalSnapshotBar:
+    return HistoricalSnapshotBar(
+        symbol=symbol,
+        contract_id=1001,
+        timestamp=timestamp,
+        open=open_,
+        high=high,
+        low=low,
+        close=close,
+        volume=volume,
+        wap=Decimal("100.25"),
+        bar_count=10,
+        duration="1 D",
+        bar_size="5 mins",
+        what_to_show="TRADES",
+        use_rth=1,
+    )
+
+
+def snapshot_manifest(
+    bars: list[HistoricalSnapshotBar],
+    *,
+    symbol: str = "SPY",
+) -> HistoricalSnapshotManifest:
+    return HistoricalSnapshotManifest(
+        symbol=symbol,
+        contract_id=1001,
+        exchange="SMART",
+        currency="USD",
+        duration="1 D",
+        bar_size="5 mins",
+        what_to_show="TRADES",
+        use_rth=1,
+        bar_count=len(bars),
+        first_bar_time=bars[0].timestamp if bars else None,
+        last_bar_time=bars[-1].timestamp if bars else None,
+        request_timeout=30,
+    )
 
 
 def test_ibapi_missing_path_fails_gracefully() -> None:
@@ -721,6 +811,243 @@ def test_market_data_report_serializes_to_json() -> None:
     assert payload["quote_snapshots"][0]["bid"] == "500.10"
 
 
+def test_historical_snapshot_models_serialize_to_json() -> None:
+    request = snapshot_request()
+    bar = snapshot_bar()
+    manifest = snapshot_manifest([bar])
+
+    assert request.model_dump(mode="json")["symbols"] == ["SPY"]
+    assert bar.model_dump(mode="json")["wap"] == "100.25"
+    assert manifest.model_dump(mode="json")["bar_count"] == 1
+
+
+def test_historical_snapshot_collection_and_completion() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = MarketDataSuccessFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    report = client.request_historical_snapshots(["SPY"], timeout=0.1)
+
+    assert report.ok is True
+    assert report.order_routing_enabled is False
+    assert report.no_order_guarantee is True
+    result = report.results[0]
+    assert result.ok is True
+    assert len(result.bars) == 1
+    assert result.bars[0].wap == Decimal("500.5")
+    assert result.bars[0].bar_count == 10
+    assert result.manifest is not None
+    assert result.manifest.bar_count == 1
+    assert fake_app.cancelled_historical_data == []
+
+
+def test_historical_snapshot_timeout_returns_structured_failure_and_cleans_up() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = HistoricalSnapshotTimeoutFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    report = client.request_historical_snapshots(["SPY"], timeout=0.01)
+
+    assert report.ok is False
+    assert report.final_status == "failed"
+    assert report.results[0].ok is False
+    assert any("timed out" in warning for warning in report.warnings)
+    assert fake_app.cancelled_historical_data
+
+
+def test_historical_snapshot_writer_creates_expected_paths(tmp_path: Path) -> None:
+    request = snapshot_request()
+    bar = snapshot_bar()
+    manifest = snapshot_manifest([bar])
+    result = HistoricalSnapshotResult(
+        symbol="SPY",
+        request=request,
+        ok=True,
+        bars=[bar],
+        manifest=manifest,
+    )
+
+    stored = write_historical_snapshot_result(
+        result,
+        base_dir=tmp_path / "historical",
+        timestamp_slug="20260519T010203Z",
+    )
+
+    assert stored.snapshot_path is not None
+    assert stored.manifest_path is not None
+    assert Path(stored.snapshot_path).exists()
+    assert Path(stored.manifest_path).exists()
+    assert "SPY/5_mins/TRADES/20260519T010203Z_bars.jsonl" in stored.snapshot_path
+
+
+def test_readiness_detects_sorted_ready_bars() -> None:
+    bars = [
+        snapshot_bar(timestamp="20260518  09:30:00"),
+        snapshot_bar(timestamp="20260518  09:35:00"),
+    ]
+    manifest = snapshot_manifest(bars)
+
+    summary = readiness_summary_for_snapshot(manifest, bars, now=manifest.generated_at)
+
+    assert summary.readiness_status == HistoricalReadinessStatus.READY
+    assert summary.sorted_timestamps is True
+    assert summary.duplicate_timestamps_count == 0
+
+
+def test_readiness_detects_duplicate_timestamps() -> None:
+    bars = [
+        snapshot_bar(timestamp="20260518  09:30:00"),
+        snapshot_bar(timestamp="20260518  09:30:00"),
+    ]
+    manifest = snapshot_manifest(bars)
+
+    summary = readiness_summary_for_snapshot(manifest, bars, now=manifest.generated_at)
+
+    assert summary.readiness_status == HistoricalReadinessStatus.PARTIAL
+    assert summary.duplicate_timestamps_count == 1
+
+
+def test_readiness_detects_timestamp_gaps() -> None:
+    bars = [
+        snapshot_bar(timestamp="20260518  09:30:00"),
+        snapshot_bar(timestamp="20260518  09:45:00"),
+    ]
+    manifest = snapshot_manifest(bars)
+
+    summary = readiness_summary_for_snapshot(manifest, bars, now=manifest.generated_at)
+
+    assert summary.readiness_status == HistoricalReadinessStatus.PARTIAL
+    assert summary.missing_timestamp_gaps
+    assert summary.largest_gap_seconds == 900
+
+
+def test_readiness_detects_invalid_ohlc() -> None:
+    bars = [
+        snapshot_bar(
+            open_=Decimal("100"),
+            high=Decimal("99"),
+            low=Decimal("98"),
+            close=Decimal("100"),
+        )
+    ]
+    manifest = snapshot_manifest(bars)
+
+    summary = readiness_summary_for_snapshot(manifest, bars, now=manifest.generated_at)
+
+    assert summary.readiness_status == HistoricalReadinessStatus.FAILED
+    assert summary.invalid_ohlc_bars == 1
+
+
+def test_readiness_detects_negative_volume() -> None:
+    bars = [snapshot_bar(volume=Decimal("-1"))]
+    manifest = snapshot_manifest(bars)
+
+    summary = readiness_summary_for_snapshot(manifest, bars, now=manifest.generated_at)
+
+    assert summary.readiness_status == HistoricalReadinessStatus.FAILED
+    assert summary.negative_volume_bars == 1
+
+
+def test_readiness_handles_empty_bars() -> None:
+    manifest = snapshot_manifest([])
+
+    summary = readiness_summary_for_snapshot(manifest, [], now=manifest.generated_at)
+
+    assert summary.readiness_status == HistoricalReadinessStatus.FAILED
+    assert "snapshot contains no bars" in summary.errors
+
+
+def test_readiness_report_supports_partial_success(tmp_path: Path) -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    ready = HistoricalSnapshotResult(
+        symbol="SPY",
+        request=snapshot_request("SPY"),
+        ok=True,
+        bars=[snapshot_bar(symbol="SPY")],
+        manifest=snapshot_manifest([snapshot_bar(symbol="SPY")], symbol="SPY"),
+    )
+    failed_manifest = snapshot_manifest([], symbol="BAD")
+    failed = HistoricalSnapshotResult(
+        symbol="BAD",
+        request=snapshot_request("BAD"),
+        ok=True,
+        bars=[],
+        manifest=failed_manifest,
+    )
+    stored_ready = write_historical_snapshot_result(
+        ready,
+        base_dir=tmp_path / "historical",
+        timestamp_slug="20260519T010203Z",
+    )
+    failed_path = tmp_path / "historical" / "BAD" / "5_mins" / "trades"
+    failed_path.mkdir(parents=True)
+    failed_snapshot_path = failed_path / "20260519T010204Z_bars.jsonl"
+    failed_manifest_path = failed_path / "20260519T010204Z_manifest.json"
+    failed_snapshot_path.write_text("")
+    failed_manifest = failed_manifest.model_copy(
+        update={
+            "snapshot_path": failed_snapshot_path.as_posix(),
+            "manifest_path": failed_manifest_path.as_posix(),
+        }
+    )
+    failed_manifest_path.write_text(failed_manifest.model_dump_json())
+    failed = failed.model_copy(update={"manifest_path": failed_manifest_path.as_posix()})
+
+    report = build_readiness_report(
+        config,
+        manifest_paths=[stored_ready.manifest_path, failed.manifest_path],
+    )
+
+    assert report.ok is True
+    assert report.final_status == "partial"
+    assert {summary.readiness_status for summary in report.summaries} == {
+        HistoricalReadinessStatus.READY,
+        HistoricalReadinessStatus.FAILED,
+    }
+
+
+def test_historical_reports_serialize_to_json() -> None:
+    request = snapshot_request()
+    bar = snapshot_bar()
+    manifest = snapshot_manifest([bar])
+    snapshot_report = HistoricalSnapshotReport(
+        ok=True,
+        mode="paper",
+        host="127.0.0.1",
+        port=4002,
+        client_id=101,
+        broker_kind="ib_gateway",
+        connected=True,
+        ibapi_available=True,
+        request=request,
+        results=[
+            HistoricalSnapshotResult(
+                symbol="SPY",
+                request=request,
+                ok=True,
+                bars=[bar],
+                manifest=manifest,
+            )
+        ],
+        final_status="connected",
+    )
+
+    payload = snapshot_report.model_dump(mode="json")
+
+    assert payload["report_type"] == "history_snapshot"
+    assert payload["no_order_guarantee"] is True
+
+
 def test_cli_preflight_runs_without_tws() -> None:
     runner = CliRunner()
 
@@ -854,13 +1181,83 @@ def test_market_probe_command_handles_mocked_success(
     assert (tmp_path / "reports" / "latest_market_probe.json").exists()
 
 
+def test_history_snapshot_command_handles_mocked_success(
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    class FakeClient:
+        def __init__(self, _config: object) -> None:
+            return None
+
+        def request_historical_snapshots(
+            self,
+            symbols: list[str],
+            *,
+            duration: str = "1 D",
+            bar_size: str = "5 mins",
+            what_to_show: str = "TRADES",
+            use_rth: int = 1,
+            timeout: float | None = None,
+        ) -> HistoricalSnapshotReport:
+            del timeout
+            request = HistoricalSnapshotRequest(
+                symbols=symbols,
+                duration=duration,
+                bar_size=bar_size,
+                what_to_show=what_to_show,
+                use_rth=use_rth,
+                timeout_seconds=30,
+            )
+            bars = [snapshot_bar(symbol=symbols[0])]
+            manifest = snapshot_manifest(bars, symbol=symbols[0])
+            result = HistoricalSnapshotResult(
+                symbol=symbols[0],
+                request=request,
+                ok=True,
+                bars=bars,
+                manifest=manifest,
+            )
+            return HistoricalSnapshotReport(
+                ok=True,
+                mode="paper",
+                host="127.0.0.1",
+                port=4002,
+                client_id=101,
+                broker_kind="ib_gateway",
+                connected=True,
+                ibapi_available=True,
+                connection_attempted=True,
+                request=request,
+                symbols_requested=symbols,
+                results=[result],
+                final_status="connected",
+            )
+
+    monkeypatch.setattr(cli, "IBKRClient", FakeClient)
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.app,
+        ["history-snapshot", "--symbols", "SPY"],
+    )
+
+    assert result.exit_code == 0
+    assert "Read-only historical snapshot" in result.output
+    assert "No order APIs invoked" in result.output
+    assert (tmp_path / "reports" / "latest_history_snapshot.json").exists()
+    assert (tmp_path / "reports" / "latest_history_readiness.json").exists()
+
+
 def test_read_only_broker_code_does_not_call_order_apis() -> None:
     source = "\n".join(
         path.read_text()
         for path in [
             Path("src/trader/broker/ibkr_client.py"),
             Path("src/trader/cli.py"),
+            Path("src/trader/data/historical.py"),
             Path("scripts/run-market-probe.sh"),
+            Path("scripts/run-history-snapshot.sh"),
         ]
         if path.exists()
     )

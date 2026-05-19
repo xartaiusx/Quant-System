@@ -9,11 +9,14 @@ This repo opens a socket only when explicitly asked to run a read-only probe:
 ```bash
 python -m trader.cli broker-probe
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
+python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins"
 ```
 
 The probe requests current server time and managed accounts. Account identifiers are masked in CLI output and reports.
 The market-data probe requests contract details, market-data type, quote ticks,
 and optional small historical-bar samples. It does not route orders.
+The historical snapshot command requests bounded historical bars and stores
+local data files for future offline analysis. It does not route orders.
 
 ## IBKR API Dependency
 
@@ -83,6 +86,7 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - Request timeouts report `failure_stage=timeout`.
 - Successful probes report current server time and masked managed accounts when returned.
 - `market-probe` defaults to delayed data and writes `market_probe` reports.
+- `history-snapshot` writes ignored JSONL snapshots and manifests under `data/historical/`.
 - Paper execution remains blocked by the refusing paper executor.
 - Live trading remains impossible.
 
@@ -100,6 +104,7 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - In Python `ibapi`, a falsy `connect()` return does not by itself prove failure; the probe waits for readiness callbacks and the current-time response.
 - IBKR farm-status warnings such as `2104`, `2106`, `2107`, and `2158` are informational for this probe. They do not mean current-time connectivity failed.
 - Live market data requires IBKR permissions/subscriptions. Delayed data is acceptable for early diagnostics and is the default.
+- Historical data availability depends on IBKR data permissions, instrument availability, and pacing limits.
 - Missing bid/ask values can occur outside market hours or when permissions are unavailable; the report records this as diagnostics rather than pretending mock data is broker data.
 - IB Gateway paper uses port `4002`; live Gateway port `4001` remains rejected.
 
@@ -116,6 +121,7 @@ python -m trader.cli account --connect
 python -m trader.cli positions --connect
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
+python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
 ```
 
 `account --connect` and `positions --connect` are read-only. If the broker is unavailable, they clearly fall back to mock data instead of pretending mock data came from TWS or Gateway.

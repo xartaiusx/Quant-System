@@ -61,6 +61,14 @@ class MarketDataRequestType(StrEnum):
     DELAYED_FROZEN = "delayed_frozen"
 
 
+class HistoricalReadinessStatus(StrEnum):
+    """Historical snapshot readiness states for future simulation inputs."""
+
+    READY = "ready"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
 class Instrument(SerializableModel):
     """Tradable instrument descriptor."""
 
@@ -423,6 +431,8 @@ class HistoricalBar(SerializableModel):
     low: Decimal
     close: Decimal
     volume: Decimal | None = None
+    wap: Decimal | None = None
+    bar_count: int | None = None
 
 
 class HistoricalDataDiagnostic(SerializableModel):
@@ -437,6 +447,214 @@ class HistoricalDataDiagnostic(SerializableModel):
     historical_end: str | None = None
     errors: list[BrokerErrorEvent] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class HistoricalSnapshotRequest(SerializableModel):
+    """Bounded read-only historical-data request parameters."""
+
+    symbols: list[str]
+    duration: str = "1 D"
+    bar_size: str = "5 mins"
+    what_to_show: str = "TRADES"
+    use_rth: int = 1
+    timeout_seconds: float = 30
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        symbols = [symbol.strip().upper() for symbol in value if symbol.strip()]
+        if not symbols:
+            raise ValueError("at least one symbol is required")
+        return symbols
+
+    @field_validator("duration", "bar_size", "what_to_show")
+    @classmethod
+    def validate_non_empty(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("historical request fields cannot be empty")
+        return normalized
+
+    @field_validator("what_to_show")
+    @classmethod
+    def normalize_what_to_show(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("use_rth")
+    @classmethod
+    def validate_use_rth(cls, value: int) -> int:
+        if value not in {0, 1}:
+            raise ValueError("use_rth must be 0 or 1")
+        return value
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def validate_timeout_seconds(cls, value: float) -> float:
+        if value <= 0 or value > 120:
+            raise ValueError("timeout_seconds must be greater than 0 and no more than 120")
+        return value
+
+
+class HistoricalSnapshotBar(SerializableModel):
+    """Persisted historical bar from a read-only IBKR snapshot."""
+
+    symbol: str
+    contract_id: int | None = None
+    timestamp: str
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal | None = None
+    wap: Decimal | None = None
+    bar_count: int | None = None
+    source: str = "ibkr"
+    duration: str
+    bar_size: str
+    what_to_show: str
+    use_rth: int
+
+
+class HistoricalSnapshotManifest(SerializableModel):
+    """Metadata for a stored historical snapshot file."""
+
+    generated_at: datetime = Field(default_factory=utc_now)
+    symbol: str
+    contract_id: int | None = None
+    exchange: str = "SMART"
+    currency: str = "USD"
+    duration: str
+    bar_size: str
+    what_to_show: str
+    use_rth: int
+    bar_count: int = 0
+    first_bar_time: str | None = None
+    last_bar_time: str | None = None
+    request_timeout: float
+    snapshot_path: str | None = None
+    manifest_path: str | None = None
+    ibkr_messages: list[BrokerErrorEvent] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[BrokerErrorEvent] = Field(default_factory=list)
+    no_order_guarantee: bool = True
+    order_routing_enabled: bool = False
+
+
+class HistoricalSnapshotResult(SerializableModel):
+    """Per-symbol historical snapshot request result."""
+
+    symbol: str
+    request: HistoricalSnapshotRequest
+    contract_resolution: ContractResolutionResult | None = None
+    ok: bool = False
+    bars: list[HistoricalSnapshotBar] = Field(default_factory=list)
+    manifest: HistoricalSnapshotManifest | None = None
+    snapshot_path: str | None = None
+    manifest_path: str | None = None
+    historical_start: str | None = None
+    historical_end: str | None = None
+    errors: list[BrokerErrorEvent] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class HistoricalSnapshotReport(SerializableModel):
+    """Batch report for read-only historical snapshot ingestion."""
+
+    title: str = "Read-only Historical Snapshot"
+    report_type: str = "history_snapshot"
+    ok: bool
+    mode: str
+    host: str
+    port: int
+    client_id: int
+    broker_kind: str
+    connected: bool
+    ibapi_available: bool
+    ibapi_import_error: str | None = None
+    connection_attempted: bool = False
+    failure_stage: str | None = None
+    request: HistoricalSnapshotRequest
+    symbols_requested: list[str] = Field(default_factory=list)
+    results: list[HistoricalSnapshotResult] = Field(default_factory=list)
+    snapshot_paths: list[str] = Field(default_factory=list)
+    manifest_paths: list[str] = Field(default_factory=list)
+    ibkr_messages: list[BrokerErrorEvent] = Field(default_factory=list)
+    errors: list[BrokerErrorEvent] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    order_routing_enabled: bool = False
+    final_status: str = "unknown"
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This historical snapshot uses read-only data requests only and order routing is disabled."
+    )
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class HistoricalDataQualityIssue(SerializableModel):
+    """One validation issue found in a historical snapshot."""
+
+    symbol: str
+    severity: str
+    code: str
+    message: str
+    timestamp: str | None = None
+
+
+class HistoricalReadinessSummary(SerializableModel):
+    """Per-symbol historical data readiness summary."""
+
+    symbol: str
+    resolved_contract_id: int | None = None
+    requested_duration: str
+    requested_bar_size: str
+    requested_what_to_show: str
+    use_rth: int
+    bars_count: int = 0
+    first_timestamp: str | None = None
+    last_timestamp: str | None = None
+    sorted_timestamps: bool = False
+    duplicate_timestamps_count: int = 0
+    missing_timestamp_gaps: list[str] = Field(default_factory=list)
+    largest_gap_seconds: float | None = None
+    zero_volume_bars: int = 0
+    negative_volume_bars: int = 0
+    invalid_ohlc_bars: int = 0
+    stale_snapshot: bool = False
+    readiness_status: HistoricalReadinessStatus = HistoricalReadinessStatus.FAILED
+    snapshot_path: str | None = None
+    manifest_path: str | None = None
+    issues: list[HistoricalDataQualityIssue] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    no_order_guarantee: bool = True
+    order_routing_enabled: bool = False
+
+
+class HistoricalReadinessReport(SerializableModel):
+    """Readiness report for stored historical snapshots."""
+
+    title: str = "Historical Snapshot Readiness"
+    report_type: str = "history_readiness"
+    ok: bool
+    mode: str
+    host: str
+    port: int
+    client_id: int
+    broker_kind: str
+    requests: list[HistoricalSnapshotRequest] = Field(default_factory=list)
+    symbols_requested: list[str] = Field(default_factory=list)
+    snapshot_paths: list[str] = Field(default_factory=list)
+    manifest_paths: list[str] = Field(default_factory=list)
+    summaries: list[HistoricalReadinessSummary] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    order_routing_enabled: bool = False
+    final_status: str = "unknown"
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This readiness report reads local historical snapshots only and order routing is disabled."
+    )
+    timestamp: datetime = Field(default_factory=utc_now)
 
 
 class MarketDataDiagnosticReport(SerializableModel):

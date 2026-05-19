@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -14,11 +15,18 @@ from rich.table import Table
 from trader.broker.account import AccountClient
 from trader.broker.ibkr_client import IBKRClient
 from trader.config import ConfigError, TraderConfig, load_config
+from trader.data.historical import (
+    attach_snapshot_paths,
+    build_readiness_report,
+    write_historical_snapshot_result,
+)
 from trader.data.snapshots import deterministic_history, deterministic_quotes, mock_positions
 from trader.data.universe import parse_symbols
 from trader.execution.router import ExecutionRouter
 from trader.models import (
     BrokerDiagnosticReport,
+    HistoricalReadinessReport,
+    HistoricalSnapshotReport,
     MarketDataDiagnosticReport,
     MarketDataRequestType,
     MarketQuote,
@@ -131,6 +139,156 @@ def market_probe(
     console.print(f"JSON report: {json_path}")
     console.print(f"Markdown report: {md_path}")
     if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("history-fetch")
+def history_fetch(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols to fetch bounded historical bars for."),
+    ] = "SPY,AAPL",
+    duration: Annotated[
+        str,
+        typer.Option("--duration", help="IBKR historical duration string."),
+    ] = "1 D",
+    bar_size: Annotated[
+        str,
+        typer.Option("--bar-size", help="IBKR historical bar size."),
+    ] = "5 mins",
+    what_to_show: Annotated[
+        str,
+        typer.Option("--what-to-show", help="IBKR historical data type."),
+    ] = "TRADES",
+    use_rth: Annotated[
+        int,
+        typer.Option("--use-rth", help="Use regular trading hours: 1 or 0."),
+    ] = 1,
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Override IBKR connect/request timeout seconds."),
+    ] = 30,
+) -> None:
+    """Fetch and store read-only IBKR historical snapshots."""
+
+    config = _load_config_or_exit()
+    validated_timeout = _validate_timeout_option(timeout)
+    request_timeout = validated_timeout if validated_timeout is not None else 30
+    use_rth = _validate_use_rth_option(use_rth)
+    selected_symbols = parse_symbols(symbols)
+    report = _fetch_historical_snapshot_report(
+        config,
+        selected_symbols,
+        duration=duration,
+        bar_size=bar_size,
+        what_to_show=what_to_show,
+        use_rth=use_rth,
+        timeout=request_timeout,
+    )
+    json_path, md_path = Journal().write_cycle("history_snapshot", _report_dict(report))
+
+    console.print("[bold]Read-only historical snapshot fetch[/bold]")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    _print_history_snapshot_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("history-readiness")
+def history_readiness(
+    latest: Annotated[
+        bool,
+        typer.Option("--latest/--no-latest", help="Validate the latest stored snapshots."),
+    ] = True,
+) -> None:
+    """Validate local historical snapshots without opening a broker socket."""
+
+    config = _load_config_or_exit()
+    if not latest:
+        console.print("[red]Only --latest readiness is implemented for this milestone.[/red]")
+        raise typer.Exit(code=2)
+    report = build_readiness_report(config, latest=True)
+    json_path, md_path = Journal().write_cycle("history_readiness", _report_dict(report))
+
+    console.print("[bold]Historical snapshot readiness[/bold]")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    _print_history_readiness_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("history-snapshot")
+def history_snapshot(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols to fetch and validate."),
+    ] = "SPY,AAPL",
+    duration: Annotated[
+        str,
+        typer.Option("--duration", help="IBKR historical duration string."),
+    ] = "1 D",
+    bar_size: Annotated[
+        str,
+        typer.Option("--bar-size", help="IBKR historical bar size."),
+    ] = "5 mins",
+    what_to_show: Annotated[
+        str,
+        typer.Option("--what-to-show", help="IBKR historical data type."),
+    ] = "TRADES",
+    use_rth: Annotated[
+        int,
+        typer.Option("--use-rth", help="Use regular trading hours: 1 or 0."),
+    ] = 1,
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Override IBKR connect/request timeout seconds."),
+    ] = 30,
+) -> None:
+    """Fetch historical snapshots and immediately write a readiness report."""
+
+    config = _load_config_or_exit()
+    validated_timeout = _validate_timeout_option(timeout)
+    request_timeout = validated_timeout if validated_timeout is not None else 30
+    use_rth = _validate_use_rth_option(use_rth)
+    selected_symbols = parse_symbols(symbols)
+    snapshot_report = _fetch_historical_snapshot_report(
+        config,
+        selected_symbols,
+        duration=duration,
+        bar_size=bar_size,
+        what_to_show=what_to_show,
+        use_rth=use_rth,
+        timeout=request_timeout,
+    )
+    snapshot_json, snapshot_md = Journal().write_cycle(
+        "history_snapshot",
+        _report_dict(snapshot_report),
+    )
+    readiness_report = build_readiness_report(
+        config,
+        manifest_paths=snapshot_report.manifest_paths,
+    )
+    readiness_json, readiness_md = Journal().write_cycle(
+        "history_readiness",
+        _report_dict(readiness_report),
+    )
+
+    console.print("[bold]Read-only historical snapshot[/bold]")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    _print_history_snapshot_result(snapshot_report)
+    _print_history_readiness_result(readiness_report)
+    console.print(f"Snapshot JSON report: {snapshot_json}")
+    console.print(f"Snapshot Markdown report: {snapshot_md}")
+    console.print(f"Readiness JSON report: {readiness_json}")
+    console.print(f"Readiness Markdown report: {readiness_md}")
+    if not snapshot_report.ok or not readiness_report.ok:
         raise typer.Exit(code=1)
 
 
@@ -369,6 +527,32 @@ def build_plan_payload(config: TraderConfig, *, strategy_name: str) -> dict[str,
     }
 
 
+def _fetch_historical_snapshot_report(
+    config: TraderConfig,
+    symbols: list[str],
+    *,
+    duration: str,
+    bar_size: str,
+    what_to_show: str,
+    use_rth: int,
+    timeout: float,
+) -> HistoricalSnapshotReport:
+    report = IBKRClient(config).request_historical_snapshots(
+        symbols,
+        duration=duration,
+        bar_size=bar_size,
+        what_to_show=what_to_show,
+        use_rth=use_rth,
+        timeout=timeout,
+    )
+    timestamp_slug = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    stored_results = [
+        write_historical_snapshot_result(result, timestamp_slug=timestamp_slug)
+        for result in report.results
+    ]
+    return attach_snapshot_paths(report.model_copy(update={"results": stored_results}))
+
+
 def _load_config_or_exit() -> TraderConfig:
     try:
         return load_config()
@@ -384,7 +568,21 @@ def _validate_timeout_option(timeout: float | None) -> float | None:
     return timeout
 
 
-def _report_dict(report: BrokerDiagnosticReport | MarketDataDiagnosticReport) -> dict[str, Any]:
+def _validate_use_rth_option(use_rth: int) -> int:
+    if use_rth not in {0, 1}:
+        console.print("[red]--use-rth must be 0 or 1.[/red]")
+        raise typer.Exit(code=2)
+    return use_rth
+
+
+def _report_dict(
+    report: (
+        BrokerDiagnosticReport
+        | HistoricalReadinessReport
+        | HistoricalSnapshotReport
+        | MarketDataDiagnosticReport
+    ),
+) -> dict[str, Any]:
     return report.model_dump(mode="json")
 
 
@@ -531,6 +729,107 @@ def _print_market_data_result(report: MarketDataDiagnosticReport) -> None:
         for error in report.errors:
             code = f"IBKR {error.code}: " if error.code is not None else ""
             console.print(f"- {escape(code + error.message)}")
+
+
+def _print_history_snapshot_result(report: HistoricalSnapshotReport) -> None:
+    table = Table(title="Historical Snapshot")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Config mode", report.mode)
+    table.add_row("Host", report.host)
+    table.add_row("Port", str(report.port))
+    table.add_row("Client ID", str(report.client_id))
+    table.add_row("Broker kind", report.broker_kind)
+    table.add_row("ibapi import", "ok" if report.ibapi_available else "missing")
+    table.add_row("Connection attempted", str(report.connection_attempted))
+    table.add_row("Connected", str(report.connected))
+    table.add_row("Symbols", ", ".join(report.symbols_requested))
+    table.add_row("Duration", report.request.duration)
+    table.add_row("Bar size", report.request.bar_size)
+    table.add_row("What to show", report.request.what_to_show)
+    table.add_row("Use RTH", str(report.request.use_rth))
+    table.add_row("Final status", report.final_status)
+    table.add_row("Order routing", "disabled")
+    table.add_row("No order APIs invoked", "true")
+    console.print(table)
+
+    result_table = Table(title="Snapshot Files")
+    result_table.add_column("Symbol")
+    result_table.add_column("OK")
+    result_table.add_column("Contract")
+    result_table.add_column("Bars")
+    result_table.add_column("First")
+    result_table.add_column("Last")
+    result_table.add_column("Snapshot")
+    result_table.add_column("Manifest")
+    for result in report.results:
+        manifest = result.manifest
+        result_table.add_row(
+            result.symbol,
+            str(result.ok),
+            str(result.contract_resolution.contract_id)
+            if result.contract_resolution and result.contract_resolution.contract_id
+            else "n/a",
+            str(len(result.bars)),
+            manifest.first_bar_time if manifest and manifest.first_bar_time else "n/a",
+            manifest.last_bar_time if manifest and manifest.last_bar_time else "n/a",
+            result.snapshot_path or "n/a",
+            result.manifest_path or "n/a",
+        )
+    console.print(result_table)
+
+    if report.failure_stage:
+        console.print(f"Diagnostic stage: {report.failure_stage}")
+    if report.warnings:
+        console.print("[yellow]Warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Errors[/red]")
+        for error in report.errors:
+            code = f"IBKR {error.code}: " if error.code is not None else ""
+            console.print(f"- {escape(code + error.message)}")
+
+
+def _print_history_readiness_result(report: HistoricalReadinessReport) -> None:
+    table = Table(title="Historical Readiness")
+    table.add_column("Symbol")
+    table.add_column("Status")
+    table.add_column("Bars")
+    table.add_column("First")
+    table.add_column("Last")
+    table.add_column("Sorted")
+    table.add_column("Duplicates")
+    table.add_column("Gaps")
+    table.add_column("Invalid OHLC")
+    table.add_column("Negative Vol")
+    table.add_column("Stale")
+    for summary in report.summaries:
+        table.add_row(
+            summary.symbol,
+            _enum_value(summary.readiness_status),
+            str(summary.bars_count),
+            summary.first_timestamp or "n/a",
+            summary.last_timestamp or "n/a",
+            str(summary.sorted_timestamps),
+            str(summary.duplicate_timestamps_count),
+            str(len(summary.missing_timestamp_gaps)),
+            str(summary.invalid_ohlc_bars),
+            str(summary.negative_volume_bars),
+            str(summary.stale_snapshot),
+        )
+    console.print(table)
+    console.print(f"Final status: {report.final_status}")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    if report.warnings:
+        console.print("[yellow]Readiness warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Readiness errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
 
 
 def _broker_next_step(report: BrokerDiagnosticReport) -> str:

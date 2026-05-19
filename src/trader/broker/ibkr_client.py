@@ -28,6 +28,11 @@ from trader.models import (
     ContractResolutionResult,
     HistoricalBar,
     HistoricalDataDiagnostic,
+    HistoricalSnapshotBar,
+    HistoricalSnapshotManifest,
+    HistoricalSnapshotReport,
+    HistoricalSnapshotRequest,
+    HistoricalSnapshotResult,
     ManagedAccountInfo,
     MarketDataDiagnosticReport,
     MarketDataRequestType,
@@ -89,6 +94,7 @@ _ACCOUNT_SUMMARY_TAGS = "NetLiquidation,TotalCashValue,BuyingPower,DailyPnL"
 _DEFAULT_HISTORICAL_DURATION = "1 D"
 _DEFAULT_HISTORICAL_BAR_SIZE = "5 mins"
 _DEFAULT_HISTORICAL_WHAT_TO_SHOW = "TRADES"
+_HISTORICAL_PACING_DELAY_SECONDS = 0.25
 _MARKET_DATA_TYPE_CODES = {
     "live": 1,
     "frozen": 2,
@@ -376,6 +382,8 @@ class _ReadOnlyIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
     def historicalData(self, reqId: int, bar: object) -> None:  # noqa: N802
         symbol = ""
         volume_raw = getattr(bar, "volume", None)
+        wap_raw = getattr(bar, "wap", None)
+        bar_count_raw = getattr(bar, "barCount", None)
         with self._lock:
             self.historical_bars.setdefault(reqId, []).append(
                 HistoricalBar(
@@ -386,6 +394,8 @@ class _ReadOnlyIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
                     low=Decimal(str(getattr(bar, "low", "0"))),
                     close=Decimal(str(getattr(bar, "close", "0"))),
                     volume=Decimal(str(volume_raw)) if volume_raw is not None else None,
+                    wap=Decimal(str(wap_raw)) if wap_raw is not None else None,
+                    bar_count=int(bar_count_raw) if bar_count_raw is not None else None,
                 )
             )
 
@@ -820,6 +830,149 @@ class IBKRClient:
             symbol.strip().upper(),
             contract,
             timeout=timeout,
+        )
+
+    def request_historical_snapshot(
+        self,
+        symbol: str,
+        *,
+        duration: str = _DEFAULT_HISTORICAL_DURATION,
+        bar_size: str = _DEFAULT_HISTORICAL_BAR_SIZE,
+        what_to_show: str = _DEFAULT_HISTORICAL_WHAT_TO_SHOW,
+        use_rth: int = 1,
+        timeout: float | None = None,
+    ) -> HistoricalSnapshotResult:
+        """Request one bounded read-only historical snapshot."""
+
+        report = self.request_historical_snapshots(
+            [symbol],
+            duration=duration,
+            bar_size=bar_size,
+            what_to_show=what_to_show,
+            use_rth=use_rth,
+            timeout=timeout,
+        )
+        if report.results:
+            return report.results[0]
+        request_timeout = timeout or self.connection_config.request_timeout_seconds
+        request = HistoricalSnapshotRequest(
+            symbols=[symbol],
+            duration=duration,
+            bar_size=bar_size,
+            what_to_show=what_to_show,
+            use_rth=use_rth,
+            timeout_seconds=request_timeout,
+        )
+        return HistoricalSnapshotResult(
+            symbol=symbol.strip().upper(),
+            request=request,
+            ok=False,
+            errors=list(report.errors),
+            warnings=list(report.warnings),
+        )
+
+    def request_historical_snapshots(
+        self,
+        symbols: list[str],
+        *,
+        duration: str = _DEFAULT_HISTORICAL_DURATION,
+        bar_size: str = _DEFAULT_HISTORICAL_BAR_SIZE,
+        what_to_show: str = _DEFAULT_HISTORICAL_WHAT_TO_SHOW,
+        use_rth: int = 1,
+        timeout: float | None = None,
+    ) -> HistoricalSnapshotReport:
+        """Request bounded read-only historical snapshots for symbols."""
+
+        self._clear_events()
+        request_timeout = timeout or self.connection_config.request_timeout_seconds
+        normalized_symbols = [symbol.strip().upper() for symbol in symbols if symbol.strip()]
+        request = HistoricalSnapshotRequest(
+            symbols=normalized_symbols,
+            duration=duration,
+            bar_size=bar_size,
+            what_to_show=what_to_show,
+            use_rth=use_rth,
+            timeout_seconds=request_timeout,
+        )
+        results: list[HistoricalSnapshotResult] = []
+        connected_before_disconnect = False
+
+        try:
+            status = self.connect(timeout=timeout)
+            if not status.connected:
+                return self._historical_snapshot_report(
+                    ok=False,
+                    connected=False,
+                    request=request,
+                    results=[],
+                    final_status="failed",
+                    errors=list(status.errors),
+                    warnings=list(status.warnings),
+                )
+
+            app = self._require_app()
+            for index, symbol in enumerate(normalized_symbols):
+                contract, resolution = self._resolve_contract_connected(
+                    app,
+                    symbol,
+                    timeout=timeout,
+                )
+                if contract is None or not resolution.resolved:
+                    results.append(
+                        HistoricalSnapshotResult(
+                            symbol=symbol,
+                            request=request,
+                            contract_resolution=resolution,
+                            ok=False,
+                            errors=list(resolution.errors),
+                            warnings=list(resolution.warnings),
+                        )
+                    )
+                else:
+                    results.append(
+                        self._request_historical_snapshot_connected(
+                            app,
+                            symbol,
+                            contract,
+                            resolution,
+                            request=request,
+                            timeout=timeout,
+                        )
+                    )
+                if index < len(normalized_symbols) - 1:
+                    time.sleep(_HISTORICAL_PACING_DELAY_SECONDS)
+        except KeyboardInterrupt:
+            self._record_error(
+                "historical snapshot interrupted by keyboard",
+                failure_stage="unknown",
+            )
+        finally:
+            self._collect_app_events()
+            connected_before_disconnect = self.is_connected()
+            self.disconnect()
+
+        errors = list(self._client_errors)
+        warnings = list(
+            dict.fromkeys(
+                [
+                    *self._client_warnings,
+                    *[warning for item in results for warning in item.warnings],
+                    "TWS Read-Only API setting is not directly detectable by this probe",
+                    _NO_ORDER_WARNING,
+                ]
+            )
+        )
+        ok_any = any(result.ok for result in results)
+        ok_all = bool(results) and all(result.ok for result in results)
+        final_status = "connected" if ok_all and not errors else "partial" if ok_any else "failed"
+        return self._historical_snapshot_report(
+            ok=ok_any,
+            connected=connected_before_disconnect,
+            request=request,
+            results=results,
+            final_status=final_status,
+            errors=errors,
+            warnings=warnings,
         )
 
     def market_data_diagnostic(
@@ -1290,6 +1443,130 @@ class IBKRClient:
             warnings=warnings,
         )
 
+    def _request_historical_snapshot_connected(
+        self,
+        app: ReadOnlyAppProtocol,
+        symbol: str,
+        contract: object,
+        resolution: ContractResolutionResult,
+        *,
+        request: HistoricalSnapshotRequest,
+        timeout: float | None = None,
+    ) -> HistoricalSnapshotResult:
+        request_timeout = timeout or self.connection_config.request_timeout_seconds
+        req_id = self._next_request_id()
+        event = threading.Event()
+        app.historical_data_events[req_id] = event
+        app.historical_bars[req_id] = []
+
+        try:
+            app.reqHistoricalData(
+                req_id,
+                contract,
+                "",
+                request.duration,
+                request.bar_size,
+                request.what_to_show,
+                request.use_rth,
+                1,
+                False,
+                [],
+            )
+        except RuntimeError as exc:
+            message = f"historical snapshot request failed for {symbol}: {exc}"
+            self._record_error(message, req_id=req_id, failure_stage="historical_data_request")
+            return HistoricalSnapshotResult(
+                symbol=symbol,
+                request=request,
+                contract_resolution=resolution,
+                ok=False,
+                errors=[BrokerErrorEvent(req_id=req_id, message=message)],
+            )
+
+        completed = False
+        try:
+            completed = event.wait(request_timeout)
+        finally:
+            if not completed:
+                with suppress(OSError, RuntimeError):
+                    app.cancelHistoricalData(req_id)
+
+        self._collect_app_events()
+        errors = self._errors_for_req(req_id)
+        warnings: list[str] = []
+        if not completed:
+            message = (
+                f"historical snapshot request timed out for {symbol} "
+                f"after {request_timeout:g} seconds"
+            )
+            warnings.append(message)
+            self._record_error(message, req_id=req_id, failure_stage="timeout")
+            errors = self._errors_for_req(req_id)
+
+        source_bars = app.historical_bars.get(req_id, [])
+        bars = [
+            HistoricalSnapshotBar(
+                symbol=symbol,
+                contract_id=resolution.contract_id,
+                timestamp=bar.timestamp,
+                open=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                volume=bar.volume,
+                wap=bar.wap,
+                bar_count=bar.bar_count,
+                duration=request.duration,
+                bar_size=request.bar_size,
+                what_to_show=request.what_to_show,
+                use_rth=request.use_rth,
+            )
+            for bar in source_bars
+        ]
+        if completed and not bars:
+            warnings.append(f"historical snapshot completed for {symbol} with no bars")
+
+        first_bar_time = bars[0].timestamp if bars else None
+        last_bar_time = bars[-1].timestamp if bars else None
+        ibkr_messages = [
+            *errors,
+            *[
+                BrokerErrorEvent(message=warning, source="ibkr_warning")
+                for warning in self._client_warnings
+                if warning.startswith("IBKR ")
+            ],
+        ]
+        manifest = HistoricalSnapshotManifest(
+            symbol=symbol,
+            contract_id=resolution.contract_id,
+            exchange=resolution.exchange,
+            currency=resolution.currency,
+            duration=request.duration,
+            bar_size=request.bar_size,
+            what_to_show=request.what_to_show,
+            use_rth=request.use_rth,
+            bar_count=len(bars),
+            first_bar_time=first_bar_time,
+            last_bar_time=last_bar_time,
+            request_timeout=request_timeout,
+            ibkr_messages=ibkr_messages,
+            warnings=warnings,
+            errors=errors,
+        )
+        start, end = app.historical_ranges.get(req_id, (None, None))
+        return HistoricalSnapshotResult(
+            symbol=symbol,
+            request=request,
+            contract_resolution=resolution,
+            ok=bool(completed and bars and not errors),
+            bars=bars,
+            manifest=manifest,
+            historical_start=start,
+            historical_end=end,
+            errors=errors,
+            warnings=warnings,
+        )
+
     def _quote_snapshot_from_app(
         self,
         app: ReadOnlyAppProtocol,
@@ -1395,6 +1672,62 @@ class IBKRClient:
                     ]
                 )
             ),
+            final_status=final_status,
+        )
+
+    def _historical_snapshot_report(
+        self,
+        *,
+        ok: bool,
+        connected: bool,
+        request: HistoricalSnapshotRequest,
+        results: list[HistoricalSnapshotResult],
+        final_status: str,
+        errors: list[BrokerErrorEvent],
+        warnings: list[str],
+    ) -> HistoricalSnapshotReport:
+        snapshot_paths = [
+            result.snapshot_path for result in results if result.snapshot_path is not None
+        ]
+        manifest_paths = [
+            result.manifest_path for result in results if result.manifest_path is not None
+        ]
+        all_warnings = list(
+            dict.fromkeys(
+                [
+                    *warnings,
+                    "TWS Read-Only API setting is not directly detectable by this probe",
+                    _NO_ORDER_WARNING,
+                ]
+            )
+        )
+        return HistoricalSnapshotReport(
+            ok=ok,
+            mode=self.connection_config.mode,
+            host=self.connection_config.host,
+            port=self.connection_config.port,
+            client_id=self.connection_config.client_id,
+            broker_kind=self.connection_config.broker_kind,
+            connected=connected,
+            ibapi_available=self.ibapi_is_available,
+            ibapi_import_error=self.ibapi_import_error(),
+            connection_attempted=self._connection_attempted,
+            failure_stage=self._failure_stage,
+            request=request,
+            symbols_requested=list(request.symbols),
+            results=results,
+            snapshot_paths=snapshot_paths,
+            manifest_paths=manifest_paths,
+            ibkr_messages=[
+                *errors,
+                *[
+                    BrokerErrorEvent(message=warning, source="ibkr_warning")
+                    for warning in all_warnings
+                    if warning.startswith("IBKR ")
+                ],
+            ],
+            errors=errors,
+            warnings=all_warnings,
             final_status=final_status,
         )
 

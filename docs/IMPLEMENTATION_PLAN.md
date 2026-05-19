@@ -264,3 +264,134 @@ Completion criteria:
 - At least contract resolution plus one data path succeeds: quote data, market-data-type callback, or historical bars.
 - Failures are structured and diagnostic.
 - Order routing remains disabled, no-order guarantee remains true, paper execution remains blocked, and live trading remains rejected.
+
+## Milestone 6 - Historical-data snapshot ingestion and readiness reporting
+
+Baseline before edits:
+
+- Milestone 5 / `v0.3.0-readonly-market-data` added read-only contract, quote, spread, and small historical-bar diagnostics.
+- IB Gateway paper is expected on `IBKR_HOST=127.0.0.1`, `IBKR_PORT=4002`, `BROKER_KIND=ib_gateway`, `TRADING_MODE=paper`.
+- `ALLOW_PAPER_ORDERS=false` and `ALLOW_LIVE_ORDERS=false` remain hard safety defaults.
+- Broker-probe must pass before live historical snapshot ingestion is attempted.
+- Unit tests must not require TWS or IB Gateway.
+
+Files expected to change:
+
+- `.gitignore`
+- `data/.gitkeep`
+- `docs/IMPLEMENTATION_PLAN.md`
+- `src/trader/models.py`
+- `src/trader/data/historical.py`
+- `src/trader/broker/ibkr_client.py`
+- `src/trader/cli.py`
+- `src/trader/reporting/reports.py`
+- `tests/test_broker_client.py`
+- `README.md`
+- `docs/RUNBOOK.md`
+- `docs/BROKER_SETUP.md`
+- `docs/SAFETY.md`
+- `docs/STATUS.md`
+- `AGENTS.md`
+- `scripts/run-history-snapshot.sh`
+
+New models to add in `src/trader/models.py`:
+
+- `HistoricalSnapshotRequest`
+- `HistoricalSnapshotBar`
+- `HistoricalSnapshotManifest`
+- `HistoricalSnapshotResult`
+- `HistoricalDataQualityIssue`
+- `HistoricalReadinessSummary`
+- `HistoricalReadinessReport`
+
+Broker methods:
+
+- Add `request_historical_snapshot(symbol, duration, bar_size, what_to_show, use_rth, timeout)`.
+- Add `request_historical_snapshots(symbols, duration, bar_size, what_to_show, use_rth, timeout)`.
+- Reuse contract resolution, existing connection lifecycle, bounded timeouts, and historical callbacks.
+- Use only `reqContractDetails`, `reqHistoricalData`, `cancelHistoricalData`, and `disconnect` for this milestone path.
+- Call `cancelHistoricalData` only as cleanup for incomplete active historical requests.
+- Keep requests sequential by default, with a small pacing delay between symbols.
+
+CLI commands:
+
+- `python -m trader.cli history-fetch --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1`
+- `python -m trader.cli history-readiness --latest`
+- `python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1`
+
+Storage format:
+
+- Store generated snapshots under `data/historical/<symbol>/<bar_size_slug>/<what_to_show>/<YYYYMMDDTHHMMSSZ>_bars.jsonl`.
+- Store matching manifests beside each snapshot as `<YYYYMMDDTHHMMSSZ>_manifest.json`.
+- JSONL bars include symbol, contract id, timestamp, open, high, low, close, volume, WAP when available, bar count when available, source, duration, bar size, what to show, and use RTH.
+- Manifests include generated time, contract/config metadata, bar count, first/last bar time, timeout, IBKR messages, warnings, errors, `no_order_guarantee=true`, and `order_routing_enabled=false`.
+- Generated snapshot files and reports remain ignored; only `data/.gitkeep` is tracked.
+
+Validation checks:
+
+- Timestamp parsing succeeds.
+- Bars are sorted.
+- Duplicate timestamps are counted.
+- Timestamp gaps are summarized.
+- OHLC values are numeric and internally consistent.
+- Volume is non-negative.
+- Bar count is above a minimal threshold.
+- First and last timestamps are present.
+- Snapshot recency is assessed.
+- Empty or missing data is reported cleanly.
+
+Report format:
+
+- Write `reports/history_snapshot_<timestamp>.json` and `.md`.
+- Write `reports/history_readiness_<timestamp>.json` and `.md`.
+- Maintain `reports/latest_history_snapshot.json`, `.md`, `reports/latest_history_readiness.json`, and `.md`.
+- Include mode, broker kind, host, port, client id, request parameters, symbols, snapshot paths, readiness summaries, per-symbol validation results, IBKR warnings/errors, `order_routing_enabled=false`, and `no_order_guarantee=true`.
+
+Tests to add:
+
+- Historical snapshot request, bar, and manifest serialization.
+- Successful historical callback collection and `historicalDataEnd` completion.
+- Timeout failure with structured diagnostics and cleanup cancellation.
+- Static no-order API scan for historical paths.
+- Readiness checks for sorted bars, duplicate timestamps, timestamp gaps, invalid OHLC, negative volume, empty bars, and partial success.
+- Snapshot writer path and manifest creation.
+- Report serialization and CLI mocked success paths.
+- Live ports remain rejected and the paper executor remains blocked.
+
+Safety scans:
+
+```bash
+grep -R "placeOrder" -n src tests docs scripts || true
+grep -R "cancelOrder" -n src tests docs scripts || true
+grep -R "reqGlobalCancel" -n src tests docs scripts || true
+grep -R "ALLOW_PAPER_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "ALLOW_LIVE_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "4001\|7496" -n src tests docs scripts .env.example || true
+git status --ignored --short
+```
+
+Validation commands:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
+.venv/bin/mypy src
+.venv/bin/python -m trader.cli --help
+.venv/bin/python -m trader.cli status
+.venv/bin/python -m trader.cli broker-probe
+.venv/bin/python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
+.venv/bin/python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1 || true
+.venv/bin/python -m trader.cli history-readiness --latest || true
+scripts/run-history-snapshot.sh || true
+git diff --check
+```
+
+Completion criteria:
+
+- Unit tests pass without TWS or IB Gateway.
+- Broker-probe and market-probe still succeed when IB Gateway paper is running.
+- `history-snapshot` requests bounded historical bars, writes local snapshots/manifests, and writes snapshot/readiness reports.
+- `history-readiness --latest` produces a readiness report from latest local snapshots.
+- Per-symbol readiness is `ready`, `partial`, or `failed` with structured warnings/errors.
+- No order APIs are added or invoked.
+- Paper execution remains blocked, live trading remains rejected, and generated snapshots/reports remain ignored.
