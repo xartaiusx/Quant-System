@@ -83,6 +83,12 @@ reads local loaded historical datasets only, aligns bars into feed frames, and
 does not contact a broker. It does not evaluate strategies, simulate orders,
 compute P&L, submit to the paper executor, or route execution.
 
+Milestone 9 adds a broker-free backtest engine skeleton. `backtest-run` replays
+offline feed frames only and writes diagnostics. It never contacts a broker,
+invokes order APIs, evaluates strategies, simulates orders, calculates fills,
+maintains portfolio accounting, computes P&L, submits to the paper executor, or
+routes execution.
+
 ## Sensitive Data
 
 Never commit:

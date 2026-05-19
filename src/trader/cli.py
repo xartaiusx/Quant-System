@@ -12,7 +12,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from trader.backtest.data_adapter import build_backtest_feed_report
+from trader.backtest.data_adapter import build_backtest_feed, build_backtest_feed_report
+from trader.backtest.engine import build_backtest_run_report
 from trader.config import ConfigError, TraderConfig, load_config
 from trader.data.historical import (
     attach_snapshot_paths,
@@ -30,6 +31,8 @@ from trader.models import (
     BacktestAlignmentMode,
     BacktestDataAdapterReport,
     BacktestDataAdapterRequest,
+    BacktestRunReport,
+    BacktestRunRequest,
     BrokerDiagnosticReport,
     HistoricalLoaderReport,
     HistoricalReadinessReport,
@@ -485,6 +488,94 @@ def backtest_feed(
         raise typer.Exit(code=1)
 
 
+@app.command("backtest-run")
+def backtest_run(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols to replay from local snapshots."),
+    ] = "SPY,AAPL",
+    alignment: Annotated[
+        BacktestAlignmentMode,
+        typer.Option("--alignment", help="Timestamp alignment mode."),
+    ] = BacktestAlignmentMode.UNION,
+    bar_size: Annotated[
+        str | None,
+        typer.Option("--bar-size", help="Optional bar-size filter."),
+    ] = None,
+    what_to_show: Annotated[
+        str | None,
+        typer.Option("--what-to-show", help="Optional data-type filter."),
+    ] = None,
+    latest: Annotated[
+        bool,
+        typer.Option("--latest/--all", help="Load latest matching snapshot per symbol."),
+    ] = True,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict/--non-strict", help="Fail on malformed records."),
+    ] = False,
+    snapshot_timestamp: Annotated[
+        str | None,
+        typer.Option("--snapshot-timestamp", help="Optional YYYYMMDDTHHMMSSZ filter."),
+    ] = None,
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical snapshot root."),
+    ] = Path("data/historical"),
+) -> None:
+    """Replay a broker-free backtest data feed and write diagnostics."""
+
+    request = BacktestRunRequest(
+        symbols=parse_symbols(symbols),
+        alignment_mode=alignment,
+        requested_bar_size=bar_size,
+        requested_what_to_show=what_to_show,
+        latest=latest,
+        strict=strict,
+        snapshot_timestamp=snapshot_timestamp,
+        base_data_path=base_path.as_posix(),
+    )
+    loader_request = HistoricalSnapshotLoadRequest(
+        symbols=request.symbols,
+        bar_size=request.requested_bar_size,
+        what_to_show=request.requested_what_to_show,
+        latest=request.latest,
+        strict=request.strict,
+        snapshot_timestamp=request.snapshot_timestamp,
+        base_data_path=request.base_data_path,
+    )
+    loader_report = load_historical_snapshots(loader_request)
+    datasets = [
+        result.dataset
+        for result in loader_report.results
+        if result.dataset is not None
+    ]
+    feed = build_backtest_feed(datasets, alignment_mode=request.alignment_mode)
+    feed = feed.model_copy(
+        update={
+            "warnings": list(dict.fromkeys([*feed.warnings, *loader_report.warnings])),
+            "errors": list(dict.fromkeys([*feed.errors, *loader_report.errors])),
+        }
+    )
+    report = build_backtest_run_report(feed, request)
+    json_path, md_path = Journal().write_cycle("backtest_run", _report_dict(report))
+
+    console.print("[bold]Broker-free backtest run[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    console.print("This run replayed data frames only.")
+    console.print(
+        "No strategy evaluation, order simulation, broker routing, or "
+        "P&L calculation was performed."
+    )
+    _print_backtest_run_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("history-snapshot")
 def history_snapshot(
     symbols: Annotated[
@@ -846,6 +937,7 @@ def _validate_use_rth_option(use_rth: int) -> int:
 def _report_dict(
     report: (
         BacktestDataAdapterReport
+        | BacktestRunReport
         | BrokerDiagnosticReport
         | HistoricalLoaderReport
         | HistoricalReadinessReport
@@ -899,6 +991,52 @@ def _print_backtest_feed_result(report: BacktestDataAdapterReport) -> None:
             console.print(f"- {escape(warning)}")
     if report.errors:
         console.print("[red]Backtest feed errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_backtest_run_result(report: BacktestRunReport) -> None:
+    diagnostics = report.diagnostics
+    table = Table(title="Backtest Run")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Symbols", ", ".join(report.symbols_requested))
+    table.add_row("Alignment", _enum_value(report.request.alignment_mode))
+    table.add_row("Broker contacted", str(report.broker_contacted).lower())
+    table.add_row("Strategy evaluated", str(report.strategy_evaluated).lower())
+    table.add_row("Orders simulated", str(report.orders_simulated).lower())
+    table.add_row("P&L calculated", str(report.pnl_calculated).lower())
+    table.add_row("Final status", report.final_status)
+    table.add_row("Frame count", str(diagnostics.frame_count))
+    table.add_row("Observations", str(diagnostics.observations_count))
+    table.add_row("Total bars observed", str(diagnostics.total_bars_observed))
+    table.add_row(
+        "First timestamp",
+        diagnostics.first_timestamp.isoformat() if diagnostics.first_timestamp else "n/a",
+    )
+    table.add_row(
+        "Last timestamp",
+        diagnostics.last_timestamp.isoformat() if diagnostics.last_timestamp else "n/a",
+    )
+    table.add_row("Frames with missing bars", str(diagnostics.frames_with_missing_bars))
+    console.print(table)
+
+    missing_table = Table(title="Run Missing Bars")
+    missing_table.add_column("Symbol")
+    missing_table.add_column("Missing bars")
+    for symbol in diagnostics.symbols:
+        missing_table.add_row(
+            symbol,
+            str(diagnostics.missing_bars_by_symbol.get(symbol, 0)),
+        )
+    console.print(missing_table)
+
+    if report.warnings:
+        console.print("[yellow]Backtest run warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Backtest run errors[/red]")
         for error in report.errors:
             console.print(f"- {escape(error)}")
 

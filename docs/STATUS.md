@@ -19,6 +19,7 @@
 - Milestone 6 implemented: read-only historical snapshot ingestion, local JSONL/manifests, and readiness reporting for future simulation inputs.
 - Milestone 7 implemented: broker-free offline historical snapshot indexing, loading, normalization, validation, and loader reports.
 - Milestone 8 implemented: broker-free backtest data feed scaffold with union/intersection alignment, missing-bar diagnostics, and feed reports.
+- Milestone 9 implemented: broker-free backtest engine skeleton with deterministic frame replay diagnostics and run reports.
 - Optional `ibapi` dependency check script.
 - Deterministic mock data.
 - Momentum and mean-reversion strategy modules.
@@ -46,6 +47,7 @@
 - Historical snapshots feeding automated execution.
 - Offline historical datasets feeding automated execution.
 - Backtest feeds evaluating strategies, simulating orders, or calculating P&L.
+- Backtest runs evaluating strategies, simulating orders, calculating fills, maintaining portfolio accounting, or calculating P&L.
 
 ## Current Blockers
 
@@ -61,9 +63,10 @@
 - Market-data and historical snapshot diagnostics may still be limited by IBKR data permissions, delayed-data availability, market hours, or pacing.
 - Offline `history-index`, `history-load`, and `history-inspect` read local files only and do not contact IBKR.
 - Offline `backtest-feed` reads local historical datasets only, reports `broker_contacted=false`, and does not evaluate strategies, simulate orders, or compute P&L.
+- Offline `backtest-run` replays local feed frames only, reports `broker_contacted=false`, `strategy_evaluated=false`, `orders_simulated=false`, and `pnl_calculated=false`.
 
 ## Next Recommended Steps
 
-1. Add a broker-free backtest engine design that consumes aligned feed frames without execution routing.
-2. Review feed behavior across partial and gapped datasets before adding strategy evaluation.
+1. Add a broker-free strategy-interface design document before connecting strategies to the engine loop.
+2. Review run reports across partial and gapped datasets before adding strategy evaluation.
 3. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

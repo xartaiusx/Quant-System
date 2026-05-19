@@ -92,6 +92,14 @@ class BacktestFeedStatus(StrEnum):
     FAILED = "failed"
 
 
+class BacktestRunStatus(StrEnum):
+    """Offline backtest run states for frame replay diagnostics."""
+
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
 class Instrument(SerializableModel):
     """Tradable instrument descriptor."""
 
@@ -998,6 +1006,125 @@ class BacktestDataAdapterReport(SerializableModel):
     )
     no_strategy_execution_statement: str = (
         "No strategy evaluation, order simulation, or P&L calculation was performed."
+    )
+    final_status: str = "unknown"
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class BacktestRunRequest(SerializableModel):
+    """Offline backtest engine skeleton request."""
+
+    symbols: list[str] = Field(default_factory=list)
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    requested_bar_size: str | None = None
+    requested_what_to_show: str | None = None
+    latest: bool = True
+    snapshot_timestamp: str | None = None
+    strict: bool = False
+    base_data_path: str = "data/historical"
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        return [symbol.strip().upper() for symbol in value if symbol.strip()]
+
+    @field_validator("requested_bar_size", "requested_what_to_show", "snapshot_timestamp")
+    @classmethod
+    def normalize_optional_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("requested_what_to_show")
+    @classmethod
+    def normalize_optional_what_to_show(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+
+class BacktestFrameObservation(SerializableModel):
+    """One replayed data-frame observation from the offline engine skeleton."""
+
+    timestamp: datetime
+    frame_index: int
+    symbols_present: list[str] = Field(default_factory=list)
+    symbols_missing: list[str] = Field(default_factory=list)
+    bar_count: int = 0
+    missing_bar_count: int = 0
+
+
+class BacktestRunDiagnostics(SerializableModel):
+    """Run-level diagnostics from replaying an offline data feed."""
+
+    symbols: list[str] = Field(default_factory=list)
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    requested_bar_size: str | None = None
+    requested_what_to_show: str | None = None
+    feed_status: BacktestFeedStatus = BacktestFeedStatus.FAILED
+    run_status: BacktestRunStatus = BacktestRunStatus.FAILED
+    frame_count: int = 0
+    total_bars_observed: int = 0
+    first_timestamp: datetime | None = None
+    last_timestamp: datetime | None = None
+    observations_count: int = 0
+    missing_bars_by_symbol: dict[str, int] = Field(default_factory=dict)
+    frames_with_missing_bars: int = 0
+    elapsed_seconds: float | None = None
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    strategy_evaluated: bool = False
+    orders_simulated: bool = False
+    pnl_calculated: bool = False
+
+
+class BacktestRunResult(SerializableModel):
+    """Result of an offline backtest engine skeleton replay."""
+
+    ok: bool
+    request: BacktestRunRequest
+    diagnostics: BacktestRunDiagnostics
+    observations: list[BacktestFrameObservation] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    strategy_evaluated: bool = False
+    orders_simulated: bool = False
+    pnl_calculated: bool = False
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class BacktestRunReport(SerializableModel):
+    """Report for an offline backtest engine skeleton run."""
+
+    title: str = "Broker-free Backtest Run"
+    report_type: str = "backtest_run"
+    command: str = "backtest-run"
+    ok: bool
+    request: BacktestRunRequest
+    symbols_requested: list[str] = Field(default_factory=list)
+    feed_summary: BacktestDataFeedSummary | None = None
+    result: BacktestRunResult
+    diagnostics: BacktestRunDiagnostics
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    strategy_evaluated: bool = False
+    orders_simulated: bool = False
+    pnl_calculated: bool = False
+    no_order_guarantee_statement: str = (
+        "This backtest run reads local historical snapshots only and does not "
+        "contact a broker."
+    )
+    no_execution_statement: str = (
+        "This run replayed data frames only. No strategy evaluation, order "
+        "simulation, broker routing, or P&L calculation was performed."
     )
     final_status: str = "unknown"
     timestamp: datetime = Field(default_factory=utc_now)

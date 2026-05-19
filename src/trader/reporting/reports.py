@@ -23,6 +23,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return history_load_markdown(payload)
     if payload.get("report_type") == "backtest_feed":
         return backtest_feed_markdown(payload)
+    if payload.get("report_type") == "backtest_run":
+        return backtest_run_markdown(payload)
 
     lines = [
         f"# {payload.get('title', 'Trading Report')}",
@@ -561,6 +563,80 @@ def backtest_feed_markdown(payload: Mapping[str, Any]) -> str:
                 f"snapshot=`{source.get('snapshot_timestamp')}` "
                 f"bars_path=`{source.get('bars_path')}`"
             )
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def backtest_run_markdown(payload: Mapping[str, Any]) -> str:
+    """Render a broker-free backtest run report."""
+
+    request = payload.get("request", {})
+    diagnostics = payload.get("diagnostics") or {}
+    feed_summary = payload.get("feed_summary") or {}
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    missing = diagnostics.get("missing_bars_by_symbol", {})
+
+    lines = [
+        f"# {payload.get('title', 'Broker-free Backtest Run')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'backtest-run')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Symbols requested: `{', '.join(payload.get('symbols_requested', []))}`",
+        f"- Alignment mode: `{request.get('alignment_mode', 'union')}`",
+        f"- Bar size filter: `{request.get('requested_bar_size')}`",
+        f"- What-to-show filter: `{request.get('requested_what_to_show')}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
+        f"- Strategy evaluated: `{payload.get('strategy_evaluated', True)}`",
+        f"- Orders simulated: `{payload.get('orders_simulated', True)}`",
+        f"- P&L calculated: `{payload.get('pnl_calculated', True)}`",
+        "",
+        "## Scope",
+        "",
+        str(
+            payload.get(
+                "no_order_guarantee_statement",
+                "This report reads local files only and no orders were routed.",
+            )
+        ),
+        "",
+        str(
+            payload.get(
+                "no_execution_statement",
+                "This run replayed data frames only. No strategy evaluation, "
+                "order simulation, broker routing, or P&L calculation was performed.",
+            )
+        ),
+        "",
+        "## Run Summary",
+        "",
+        f"- Run status: `{diagnostics.get('run_status', 'unknown')}`",
+        f"- Feed status: `{diagnostics.get('feed_status', 'unknown')}`",
+        f"- Frame count: `{diagnostics.get('frame_count', 0)}`",
+        f"- Observations: `{diagnostics.get('observations_count', 0)}`",
+        f"- Total bars observed: `{diagnostics.get('total_bars_observed', 0)}`",
+        f"- First timestamp: `{diagnostics.get('first_timestamp')}`",
+        f"- Last timestamp: `{diagnostics.get('last_timestamp')}`",
+        f"- Frames with missing bars: `{diagnostics.get('frames_with_missing_bars', 0)}`",
+        "",
+        "## Feed Summary",
+        "",
+        f"- Feed frames: `{feed_summary.get('frame_count', 0)}`",
+        f"- Feed bars: `{feed_summary.get('total_bars', 0)}`",
+        f"- Feed status: `{feed_summary.get('feed_status', 'unknown')}`",
+        "",
+        "## Missing Bars",
+        "",
+    ]
+    if diagnostics.get("symbols"):
+        for symbol in diagnostics.get("symbols", []):
+            lines.append(f"- `{symbol}` missing=`{missing.get(symbol, 0)}`")
     else:
         lines.append("- None")
 

@@ -309,6 +309,43 @@ snapshots. Common failures:
 - Duplicate timestamps: the adapter keeps deterministic first-bar ordering and records the duplicate count.
 - Missing bars: use `intersection` when future analysis needs only shared timestamps.
 
+## Offline Backtest Run
+
+```bash
+python -m trader.cli backtest-run --symbols SPY,AAPL
+python -m trader.cli backtest-run --symbols SPY,AAPL --alignment union
+python -m trader.cli backtest-run --symbols SPY,AAPL --alignment intersection
+python -m trader.cli backtest-run --symbols SPY,AAPL --bar-size "5 mins" --what-to-show TRADES
+scripts/run-backtest-run.sh
+```
+
+Expected behavior:
+
+- opens no broker socket
+- loads local snapshots through the offline historical loader
+- builds an aligned feed with the broker-free data adapter
+- replays feed frames in deterministic timestamp order
+- records frame observations and run diagnostics
+- writes `reports/backtest_run_<timestamp>.json` and `.md`
+- updates `reports/latest_backtest_run.json` and `.md`
+- places no orders and invokes no order APIs
+- does not evaluate strategies, simulate orders, calculate fills, maintain portfolio accounting, or compute P&L
+
+Workflow relationship:
+
+```text
+history-snapshot -> history-load -> backtest-feed -> backtest-run
+```
+
+`history-snapshot` is the only step in that chain that contacts IBKR, and only
+when explicitly run. `history-load`, `backtest-feed`, and `backtest-run` are
+offline local-file workflows. Common failures:
+
+- No snapshots found: run or review `history-index` and `history-load`.
+- Empty feed: inspect the snapshot and loader reports.
+- Failed feed: fix loader errors before replay.
+- Partial feed: review missing-bar diagnostics in the run report.
+
 ## Dry-Run Plan
 
 ```bash
@@ -370,6 +407,6 @@ If `broker-probe` fails:
 
 ## Safe Next Milestones
 
-1. Add a broker-free backtest engine design that consumes the feed without order routing.
+1. Add a broker-free backtest strategy-interface design document before connecting strategies.
 2. Add read-only market-data subscription diagnostics behind explicit flags.
 3. Add a paper execution design document before enabling any paper submission.

@@ -637,3 +637,124 @@ Completion criteria:
 - Reports are written and state that no strategy evaluation, order simulation, or P&L calculation was performed.
 - No broker calls or order APIs are added.
 - Paper execution remains blocked, live trading remains rejected, and generated reports remain ignored.
+
+## Milestone 9 - Broker-free backtest engine skeleton
+
+Baseline before edits:
+
+- Milestone 8 / `v0.6.0-broker-free-backtest-feed` builds a broker-free `BacktestDataFeed` from local historical snapshots.
+- This milestone remains offline-only and must not import broker clients, `ibapi`, strategy modules, execution modules, or open any broker socket.
+- It creates the deterministic engine loop only. It must not evaluate strategies, create signals, simulate orders, compute fills, calculate P&L, maintain portfolio accounting, enable paper execution, or enable live trading.
+- Unit tests must use fixture `BacktestDataFeed` objects or temporary offline snapshots and must not require IB Gateway.
+
+Files expected to change:
+
+- `docs/IMPLEMENTATION_PLAN.md`
+- `src/trader/models.py`
+- `src/trader/backtest/engine.py`
+- `src/trader/cli.py`
+- `src/trader/reporting/reports.py`
+- `tests/test_backtest_engine.py`
+- `README.md`
+- `docs/RUNBOOK.md`
+- `docs/SAFETY.md`
+- `docs/STATUS.md`
+- `AGENTS.md`
+- `scripts/run-backtest-run.sh`
+
+Engine loop design:
+
+- Accept a `BacktestDataFeed` created by the offline adapter.
+- Validate that the feed is ready or partial and contains frames before replay.
+- Iterate frames using deterministic timestamp ordering.
+- Record frame-level observations only: timestamp, frame index, symbols present, symbols missing, bar count, and missing bar count.
+- Return structured diagnostics for empty or failed feeds without raising unhandled exceptions.
+- Keep the engine independent from broker, strategy, execution, risk, portfolio, metrics, cost, and P&L modules.
+
+Frame replay semantics:
+
+- Replay every sorted frame exactly once.
+- Treat `BacktestFeedStatus.READY` as a completed run when frames exist.
+- Treat `BacktestFeedStatus.PARTIAL` as a completed run with warnings when frames exist.
+- Treat `BacktestFeedStatus.FAILED` or empty frames as failed.
+- Preserve feed warnings and missing-bar counts in the run diagnostics.
+- Do not mutate the input feed.
+
+Diagnostics model:
+
+- Add serializable models for `BacktestRunRequest`, `BacktestFrameObservation`, `BacktestRunDiagnostics`, `BacktestRunResult`, and `BacktestRunReport`.
+- Include `broker_contacted=false`, `order_routing_enabled=false`, `no_order_guarantee=true`, `strategy_evaluated=false`, `orders_simulated=false`, and `pnl_calculated=false`.
+- Include run status values `completed`, `partial`, and `failed`.
+
+CLI behavior:
+
+- Add `python -m trader.cli backtest-run --symbols SPY,AAPL`.
+- Support `--alignment union`, `--alignment intersection`, `--bar-size`, and `--what-to-show`.
+- The command loads latest snapshots through `history-load`, builds a feed through `backtest-feed` internals, runs the engine loop, writes a report, and prints run diagnostics.
+- The command must clearly state broker-free operation and that no strategy evaluation, order simulation, or P&L calculation was performed.
+
+Reporting behavior:
+
+- Write `reports/backtest_run_<timestamp>.json` and `.md`.
+- Maintain `reports/latest_backtest_run.json` and `.md`.
+- Reports include symbols requested, selection criteria, alignment mode, feed summary, run status, frame count, total bars observed, first/last timestamp, observations count, missing bars by symbol, frames with missing bars, warnings/errors, and safety flags.
+- Reports include the explicit statement: "This run replayed data frames only. No strategy evaluation, order simulation, broker routing, or P&L calculation was performed."
+
+Tests to add:
+
+- Engine runs on ready feed.
+- Engine handles partial feed with warnings.
+- Engine fails cleanly on empty feed.
+- Engine fails cleanly on failed feed.
+- Frame observations are sorted by timestamp.
+- Frame observations record present and missing symbols.
+- Run diagnostics record frame count, total bars observed, first/last timestamp, missing bars by symbol, and frames with missing bars.
+- Result and report serialize cleanly.
+- CLI `backtest-run` runs with fixture data.
+- Engine path has no broker, `ibapi`, or strategy imports.
+- Engine path contains no forbidden order API usage.
+- Safety flags remain false for strategy evaluation, order simulation, and P&L calculation.
+- Paper executor remains blocked and live ports remain rejected.
+
+Safety checks:
+
+- Do not add broker calls, socket connection attempts, `trader.broker` imports, `ibapi` imports, strategy imports, order APIs, strategy evaluation, order simulation, fill simulation, P&L calculation, portfolio accounting, risk-based execution logic, paper execution activation, or live trading.
+- Keep generated reports and generated snapshots ignored.
+
+Validation commands:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
+.venv/bin/mypy src
+.venv/bin/python -m trader.cli --help
+.venv/bin/python -m trader.cli status
+.venv/bin/python -m trader.cli history-index || true
+.venv/bin/python -m trader.cli history-load --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-feed --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-run --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-run --symbols SPY,AAPL --alignment intersection || true
+scripts/run-backtest-run.sh || true
+grep -R "placeOrder" -n src tests docs scripts || true
+grep -R "cancelOrder" -n src tests docs scripts || true
+grep -R "reqGlobalCancel" -n src tests docs scripts || true
+grep -R "ALLOW_PAPER_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "ALLOW_LIVE_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "4001\|7496" -n src tests docs scripts .env.example || true
+grep -R "trader.broker" -n src/trader/backtest tests/test_backtest_engine.py || true
+grep -R "IBKRReadOnlyClient\|ibapi" -n src/trader/backtest tests/test_backtest_engine.py || true
+grep -R "trader.strategy" -n src/trader/backtest tests/test_backtest_engine.py || true
+grep -R "place_order\|submit_order\|fill\|portfolio\|pnl\|P&L\|profit\|loss" -n src/trader/backtest tests/test_backtest_engine.py || true
+git diff --check
+```
+
+Completion criteria:
+
+- Unit tests pass without IB Gateway.
+- Engine tests use fixture `BacktestDataFeed` objects.
+- `backtest-run` works offline with local snapshots when present.
+- Engine iterates frames deterministically and records frame observations.
+- Run diagnostics and reports are written.
+- No broker calls or order APIs are added.
+- No strategy evaluation, order simulation, fill simulation, P&L calculation, portfolio accounting, or risk-based execution logic is added.
+- Paper execution remains blocked, live trading remains rejected, and generated reports remain ignored.
