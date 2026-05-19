@@ -181,7 +181,7 @@ def _write_snapshot(
     bars_path.write_text("\n".join(lines) + ("\n" if lines else ""))
 
     manifest = HistoricalSnapshotManifest(
-        generated_at=datetime(2026, 5, 19, 4, 0, tzinfo=UTC),
+        generated_at=datetime.now(UTC),
         symbol=symbol,
         contract_id=1001,
         exchange="SMART",

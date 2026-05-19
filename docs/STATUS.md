@@ -36,6 +36,21 @@
 - Backtest placeholders.
 - Tests and safe scripts, including `scripts/check-ibapi.sh`, `scripts/run-broker-preflight.sh`, and `scripts/run-broker-probe.sh`.
 
+## Tag-To-Stage Map
+
+- `v0.1.0-safe-foundation`: safe repo foundation.
+- `v0.2.0-readonly-gateway-probe`: read-only IB Gateway broker probe.
+- `v0.3.0-readonly-market-data`: read-only market-data diagnostics.
+- `v0.4.0-readonly-history-snapshots`: read-only historical snapshots and readiness.
+- `v0.5.0-offline-history-loader`: offline historical loader.
+- `v0.6.0-broker-free-backtest-feed`: broker-free backtest feed adapter.
+- `v0.7.0-broker-free-backtest-engine`: broker-free backtest engine skeleton.
+- `v0.8.0-broker-free-strategy-contract`: broker-free strategy contract scaffold.
+- `v0.9.0-broker-free-inert-strategy-runner`: broker-free inert strategy runner.
+- `v0.10.0-offline-fixture-stress-suite`: broker-free offline fixture stress suite.
+- `v0.11.0-broker-free-signal-contract`: broker-free disabled signal contract scaffold.
+- `v0.12`: not implemented and not approved in this status record.
+
 ## Intentionally Blocked
 
 - Live trading.
@@ -79,6 +94,7 @@
 
 ## Next Recommended Steps
 
-1. Review the disabled signal contract reports before adding real signal evaluation.
-2. Design an explicitly approved signal-evaluation milestone without order intents or execution.
-3. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.
+1. Review this stage audit and the disabled signal contract reports before adding any new milestone.
+2. Design `v0.12` only as a separately approved plan; it is not implemented here.
+3. Keep any future signal-evaluation proposal free of order intents, execution, fills, portfolio accounting, and P&L until explicitly approved.
+4. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

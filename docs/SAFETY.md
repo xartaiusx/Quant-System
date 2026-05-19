@@ -118,6 +118,21 @@ evaluation, generates buy/sell/hold outputs, creates order intents, simulates
 orders, simulates fills, maintains portfolio accounting, computes P&L, submits
 to the paper executor, or routes execution.
 
+## Quantitative Research Gate
+
+No current milestone supports profitability, performance, or tradability claims.
+Before any future real signal evaluation, simulation, fills, portfolio
+accounting, or P&L milestone is approved, the plan must explicitly address:
+
+- look-ahead bias and point-in-time data availability;
+- survivorship bias and static-universe limitations;
+- data snooping, overfitting, multiple-testing inflation, and out-of-sample or
+  walk-forward validation;
+- transaction costs, slippage, latency, market-impact assumptions, and fill
+  realism;
+- unsupported claims based on placeholder strategies, synthetic fixtures, or
+  local diagnostic reports.
+
 ## Sensitive Data
 
 Never commit:

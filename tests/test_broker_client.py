@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 import trader.cli as cli
 from trader.broker.ibkr_client import IBKRClient, _ReadOnlyIBKRApp
-from trader.config import ConfigError, load_config
+from trader.config import ENV_TO_FIELD, ConfigError, load_config
 from trader.data.historical import (
     build_readiness_report,
     readiness_summary_for_snapshot,
@@ -1048,7 +1048,13 @@ def test_historical_reports_serialize_to_json() -> None:
     assert payload["no_order_guarantee"] is True
 
 
-def test_cli_preflight_runs_without_tws() -> None:
+def test_cli_preflight_runs_without_tws(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    for env_name in ENV_TO_FIELD:
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.chdir(tmp_path)
     runner = CliRunner()
 
     result = runner.invoke(cli.app, ["preflight"])

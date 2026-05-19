@@ -553,6 +553,7 @@ If `broker-probe` fails:
 
 ## Safe Next Milestones
 
-1. Review the new stress coverage and choose a first explicitly approved signal-evaluation contract.
-2. Add read-only market-data subscription diagnostics behind explicit flags.
-3. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.
+1. Review the disabled `signal-contract` reports and this stage audit before designing any new milestone.
+2. Keep `v0.12` unimplemented until there is an explicitly approved plan for disabled/offline signal diagnostics.
+3. Do not add real signal evaluation, buy/sell/hold outputs, order intents, order simulation, fills, portfolio accounting, P&L, broker routing, paper execution, or live trading in the next planning pass.
+4. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.
