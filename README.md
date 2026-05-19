@@ -24,6 +24,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Broker-free backtest engine skeleton for deterministic data-frame replay diagnostics.
 - Broker-free strategy interface contract scaffold with no-op diagnostics only.
 - Broker-free inert strategy runner scaffold that routes frames through no-op diagnostics only.
+- Broker-free offline fixture stress tests for partial, gapped, duplicate, malformed, missing, and invalid historical datasets.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
 
@@ -189,6 +190,12 @@ frames through the no-op strategy diagnostic contract, writes runner reports, an
 does not contact IBKR, evaluate real strategies, generate buy/sell/hold signals,
 create order intents, simulate orders or fills, perform portfolio accounting, or
 compute P&L.
+
+The offline fixture stress suite uses temporary synthetic historical snapshots
+to validate loader, feed, engine, strategy-contract, and strategy-runner behavior
+against partial, gapped, duplicate, malformed, missing, empty, and invalid data.
+It does not read broker data, contact IBKR, evaluate real strategies, generate
+signals, simulate orders or fills, perform portfolio accounting, or compute P&L.
 
 ## References
 

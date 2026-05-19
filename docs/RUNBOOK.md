@@ -423,6 +423,32 @@ decision engine. Common failures:
 - Failed feed: fix loader/feed errors before running the diagnostic path.
 - Partial feed: review missing-symbol summaries in the runner report.
 
+## Offline Fixture Stress Tests
+
+```bash
+python -m pytest tests/test_offline_stress_loader.py
+python -m pytest tests/test_offline_stress_backtest_feed.py
+python -m pytest tests/test_offline_stress_backtest_engine.py
+python -m pytest tests/test_offline_stress_strategy_runner.py
+```
+
+Expected behavior:
+
+- opens no broker socket
+- uses temporary synthetic historical snapshots only
+- does not read real broker data or require local `data/historical/` files
+- validates clean, partial, gapped, duplicate, malformed, missing, empty, and invalid datasets
+- verifies loader diagnostics for malformed JSONL, missing manifests, missing bars files, duplicate timestamps, timestamp gaps, invalid OHLC, negative volume, and empty datasets
+- verifies `backtest-feed` union/intersection alignment and explicit missing-bar counts
+- verifies `backtest-run` ready, partial, and failed feed diagnostics
+- verifies `strategy-contract` and `strategy-runner` missing-symbol handling and no-op diagnostics
+- places no orders and invokes no order APIs
+- does not perform real strategy evaluation, generate signals, generate order intents, simulate orders, simulate fills, maintain portfolio accounting, or compute P&L
+
+The stress suite is intentionally test-only for now. It does not add an
+operator-facing CLI report, which keeps the offline diagnostic surface small
+until a future milestone needs fixture reports.
+
 ## Dry-Run Plan
 
 ```bash
@@ -484,6 +510,6 @@ If `broker-probe` fails:
 
 ## Safe Next Milestones
 
-1. Review inert strategy-runner reports across partial and gapped datasets.
+1. Review the new stress coverage and choose a first explicitly approved signal-evaluation contract.
 2. Add read-only market-data subscription diagnostics behind explicit flags.
 3. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

@@ -102,6 +102,15 @@ evaluation, generates buy/sell/hold signals, creates order intents, simulates
 orders, simulates fills, maintains portfolio accounting, computes P&L, submits
 to the paper executor, or routes execution.
 
+Milestone 12 adds broker-free offline stress fixtures. These tests create only
+temporary synthetic historical snapshot data to validate partial, gapped,
+duplicate, malformed, missing, empty, and invalid data behavior across the
+loader, feed adapter, backtest engine, strategy contract, and inert strategy
+runner. They never contact a broker, invoke order APIs, perform real strategy
+evaluation, generate signals, create order intents, simulate orders or fills,
+maintain portfolio accounting, compute P&L, submit to the paper executor, or
+route execution.
+
 ## Sensitive Data
 
 Never commit:

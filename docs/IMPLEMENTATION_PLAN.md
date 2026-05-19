@@ -997,3 +997,121 @@ Completion criteria:
 - No broker calls or order APIs are added.
 - No order-intent generation, fill simulation, P&L calculation, or portfolio accounting is added.
 - Paper execution remains blocked, live trading remains rejected, and generated reports remain ignored.
+
+## Milestone 12 - Broker-free offline fixture stress suite
+
+Baseline before edits:
+
+- Milestone 11 / `v0.9.0-broker-free-inert-strategy-runner` completed the offline no-op strategy runner.
+- The existing real local SPY/AAPL snapshots are clean, so they do not exercise missing, malformed, duplicate, invalid, or failed data paths.
+- This milestone is robustness validation only. It must not contact IBKR, evaluate real strategies, generate signals or order intents, simulate orders or fills, calculate P&L, perform portfolio accounting, activate paper execution, or enable live trading.
+- Unit tests must use temporary synthetic snapshot fixtures or fixture feed objects and must not require IB Gateway or `ibapi`.
+
+Files expected to change:
+
+- `docs/IMPLEMENTATION_PLAN.md`
+- `tests/fixtures/__init__.py`
+- `tests/fixtures/historical_snapshots.py`
+- `tests/test_offline_stress_loader.py`
+- `tests/test_offline_stress_backtest_feed.py`
+- `tests/test_offline_stress_backtest_engine.py`
+- `tests/test_offline_stress_strategy_runner.py`
+- `README.md`
+- `docs/RUNBOOK.md`
+- `docs/SAFETY.md`
+- `docs/STATUS.md`
+- `AGENTS.md`
+
+Fixture dataset scenarios:
+
+- `clean_two_symbol_dataset`: two symbols, matching timestamps, valid OHLCV, expected ready/loaded status.
+- `single_symbol_missing_bars`: one symbol has a skipped timestamp, expected timestamp-gap diagnostics.
+- `multi_symbol_partial_overlap`: symbol A has timestamps 1,2,3,4 while symbol B has timestamps 2,3; union shows explicit missing bars and intersection keeps only shared timestamps.
+- `duplicate_timestamps`: one symbol has a duplicate timestamp and records duplicate diagnostics.
+- `invalid_ohlc`: one bar has inconsistent OHLC values and fails loader validation.
+- `negative_volume`: one bar has negative volume and fails loader validation.
+- `malformed_jsonl_line`: invalid JSONL is partial in non-strict mode and failed in strict mode.
+- `missing_manifest`: bars exist without a manifest and fail cleanly.
+- `missing_bars_file`: manifest exists without bars and fails cleanly.
+- `empty_dataset`: manifest and empty bars file produce structured empty-dataset diagnostics.
+
+Loader stress tests:
+
+- Load each fixture scenario through the offline historical loader.
+- Assert clean fixtures load, gapped/duplicate/malformed non-strict fixtures are partial, and invalid/missing/empty fixtures fail cleanly.
+- Assert structured counts for gaps, duplicates, invalid OHLC, negative volume, malformed lines, missing manifests, missing bars files, empty bars, and manifest mismatch where applicable.
+- Assert reports serialize and retain `broker_contacted=false`, `order_routing_enabled=false`, and `no_order_guarantee=true`.
+
+Feed adapter stress tests:
+
+- Build feeds from fixture-loaded datasets rather than real local snapshots.
+- Assert union alignment includes all observed timestamps and makes missing bars explicit.
+- Assert intersection alignment includes only timestamps shared by all symbols.
+- Assert partial datasets produce partial feed status and failed datasets fail cleanly.
+- Assert deterministic frame ordering, missing-bar counts, duplicate diagnostics, and safety flags.
+- Assert no strategy evaluation, order simulation, or P&L calculation is introduced.
+
+Engine stress tests:
+
+- Run the broker-free engine over ready, partial, and failed feeds built from fixtures.
+- Assert ready feeds complete, partial feeds complete with warnings, and failed feeds fail cleanly.
+- Assert missing bars and frames with missing bars are counted.
+- Assert frame observations remain deterministic and sorted.
+- Assert `strategy_evaluated=false`, `orders_simulated=false`, `pnl_calculated=false`, and `broker_contacted=false`.
+
+Strategy contract and inert runner stress tests:
+
+- Build strategy frame contexts from partial feeds with missing symbols.
+- Assert available and missing symbols are preserved in context diagnostics.
+- Run the inert no-op runner over partial feeds and assert one diagnostic per frame.
+- Assert missing symbols are aggregated by frame and symbol.
+- Assert all runner safety flags remain diagnostic-only and false for real strategy evaluation, signal generation, order generation, order simulation, fill simulation, P&L, portfolio accounting, and broker contact.
+
+Report and diagnostic expectations:
+
+- This milestone will remain test-only plus documentation.
+- The optional `offline-stress-report` CLI will be skipped to avoid adding unnecessary reporting surface area before it is needed.
+- Existing model/report serialization paths will be exercised through the stress tests.
+
+Safety checks:
+
+- Do not add broker calls, socket connection attempts, `trader.broker` imports, `ibapi` imports, order APIs, real strategy evaluation, signal generation, order-intent generation, order simulation, fill simulation, P&L calculation, portfolio accounting, paper execution activation, or live trading.
+- New stress helper paths must remain independent from broker and `ibapi`.
+- Generated reports and generated snapshots remain ignored.
+
+Validation commands:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/python -m ruff check .
+.venv/bin/python -m mypy src
+.venv/bin/python -m trader.cli --help
+.venv/bin/python -m trader.cli status
+.venv/bin/python -m trader.cli history-index || true
+.venv/bin/python -m trader.cli history-load --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-feed --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli backtest-run --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli strategy-contract --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli strategy-runner --symbols SPY,AAPL || true
+grep -R "placeOrder" -n src tests docs scripts || true
+grep -R "cancelOrder" -n src tests docs scripts || true
+grep -R "reqGlobalCancel" -n src tests docs scripts || true
+grep -R "ALLOW_PAPER_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "ALLOW_LIVE_ORDERS=true" -n . --exclude-dir=.git --exclude-dir=.venv || true
+grep -R "4001\|7496" -n src tests docs scripts .env.example || true
+grep -R "trader.broker" -n tests/fixtures tests/test_offline_stress*.py src/trader || true
+grep -R "IBKRReadOnlyClient\|ibapi" -n tests/fixtures tests/test_offline_stress*.py src/trader || true
+git diff --check
+```
+
+Completion criteria:
+
+- Unit tests pass without IB Gateway.
+- Synthetic fixture builders exist.
+- Loader stress tests cover clean, partial, duplicate, invalid, malformed, missing, and empty datasets.
+- Feed adapter stress tests cover union/intersection and missing-bar behavior.
+- Engine stress tests cover ready/partial/failed feeds.
+- Strategy contract and inert runner stress tests cover missing symbols and no-op diagnostics.
+- No broker calls or order APIs are added.
+- No real strategy evaluation, signal generation, order-intent generation, order simulation, fill simulation, P&L calculation, or portfolio accounting is added.
+- Paper execution remains blocked, live trading remains rejected, and generated reports remain ignored.
