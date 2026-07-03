@@ -561,15 +561,14 @@ def test_ibkr_error_callback_is_recorded() -> None:
     assert report.errors[0].message == "test IBKR callback error"
 
 
-def test_ibkr_2107_is_non_fatal_warning() -> None:
+def test_ibkr_farm_status_codes_are_non_fatal_warnings() -> None:
     app = _ReadOnlyIBKRApp()
 
-    app.error(-1, 2107, "HMDS data farm connection is inactive but should be available")
+    for code in (2103, 2105, 2107, 2108):
+        app.error(-1, code, f"farm status {code}")
 
     assert app.errors == []
-    assert app.warnings == [
-        "IBKR 2107: HMDS data farm connection is inactive but should be available"
-    ]
+    assert app.warnings == [f"IBKR {code}: farm status {code}" for code in (2103, 2105, 2107, 2108)]
 
 
 def test_broker_probe_success_with_mocked_read_only_callbacks() -> None:
@@ -782,11 +781,11 @@ def test_market_data_permission_error_is_recorded() -> None:
 def test_non_fatal_farm_warnings_do_not_fail_market_probe_by_themselves() -> None:
     app = _ReadOnlyIBKRApp()
 
-    for code in (2104, 2106, 2107, 2158, 10167):
+    for code in (2103, 2104, 2105, 2106, 2107, 2108, 2158, 10167):
         app.error(-1, code, f"status {code}")
 
     assert app.errors == []
-    assert len(app.warnings) == 5
+    assert len(app.warnings) == 8
 
 
 def test_market_data_report_serializes_to_json() -> None:

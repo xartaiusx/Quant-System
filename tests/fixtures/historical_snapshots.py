@@ -49,6 +49,15 @@ def clean_two_symbol_dataset(root: Path) -> SnapshotFixture:
     return _fixture("clean_two_symbol_dataset", root, ["SPY", "AAPL"], paths)
 
 
+def long_two_symbol_dataset(root: Path, *, bar_count: int = 30) -> SnapshotFixture:
+    offsets = [5 * index for index in range(bar_count)]
+    paths = [
+        _write_snapshot(root, symbol="SPY", offsets=offsets),
+        _write_snapshot(root, symbol="AAPL", offsets=offsets),
+    ]
+    return _fixture("long_two_symbol_dataset", root, ["SPY", "AAPL"], paths)
+
+
 def single_symbol_missing_bars(root: Path) -> SnapshotFixture:
     paths = [_write_snapshot(root, symbol="SPY", offsets=[0, 15])]
     return _fixture("single_symbol_missing_bars", root, ["SPY"], paths)
@@ -89,6 +98,18 @@ def negative_volume(root: Path) -> SnapshotFixture:
         )
     ]
     return _fixture("negative_volume", root, ["SPY"], paths)
+
+
+def zero_volume_bars(root: Path) -> SnapshotFixture:
+    paths = [
+        _write_snapshot(
+            root,
+            symbol="DBA",
+            offsets=[0, 5, 10],
+            zero_volume_offsets={5},
+        )
+    ]
+    return _fixture("zero_volume_bars", root, ["DBA"], paths)
 
 
 def malformed_jsonl_line(root: Path) -> SnapshotFixture:
@@ -157,10 +178,12 @@ def _write_snapshot(
     timestamp_slug: str = SNAPSHOT_TIMESTAMP,
     invalid_ohlc_offsets: set[int] | None = None,
     negative_volume_offsets: set[int] | None = None,
+    zero_volume_offsets: set[int] | None = None,
     malformed_line: bool = False,
 ) -> tuple[Path, Path]:
     invalid_ohlc_offsets = invalid_ohlc_offsets or set()
     negative_volume_offsets = negative_volume_offsets or set()
+    zero_volume_offsets = zero_volume_offsets or set()
     snapshot_dir = root / symbol / "5_mins" / WHAT_TO_SHOW
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     bars_path = snapshot_dir / f"{timestamp_slug}_bars.jsonl"
@@ -172,6 +195,7 @@ def _write_snapshot(
             offset,
             invalid_ohlc=offset in invalid_ohlc_offsets,
             negative_volume=offset in negative_volume_offsets,
+            zero_volume=offset in zero_volume_offsets,
         )
         for offset in offsets
     ]
@@ -207,8 +231,10 @@ def _bar_payload(
     *,
     invalid_ohlc: bool = False,
     negative_volume: bool = False,
+    zero_volume: bool = False,
 ) -> dict[str, Any]:
     timestamp = BASE_TIME + timedelta(minutes=offset_minutes)
+    volume = "-10" if negative_volume else "0" if zero_volume else "1000"
     payload: dict[str, Any] = {
         "symbol": symbol,
         "contract_id": 1001,
@@ -217,7 +243,7 @@ def _bar_payload(
         "high": "101",
         "low": "99",
         "close": "100.50",
-        "volume": "-10" if negative_volume else "1000",
+        "volume": volume,
         "wap": "100.25",
         "bar_count": 10,
         "source": "fixture",

@@ -10,6 +10,7 @@ This repo opens a socket only when explicitly asked to run a read-only probe:
 python -m trader.cli broker-probe
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
 python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins"
+python -m trader.cli paper-readiness-run
 ```
 
 The probe requests current server time and managed accounts. Account identifiers are masked in CLI output and reports.
@@ -17,6 +18,9 @@ The market-data probe requests contract details, market-data type, quote ticks,
 and optional small historical-bar samples. It does not route orders.
 The historical snapshot command requests bounded historical bars and stores
 local data files for future offline analysis. It does not route orders.
+The paper readiness command runs the first broker-connected program test
+sequentially, requires a real broker account summary, then uses offline loading
+and analysis. It does not route orders.
 
 ## IBKR API Dependency
 
@@ -87,6 +91,8 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - Successful probes report current server time and masked managed accounts when returned.
 - `market-probe` defaults to delayed data and writes `market_probe` reports.
 - `history-snapshot` writes ignored JSONL snapshots and manifests under `data/historical/`.
+- `paper-readiness-run` runs broker probe, broker account summary, historical snapshot, offline load, commodity proxy universe, and analytical signal evaluation sequentially.
+- `paper-readiness-run` fails if broker account summary is unavailable or only mock fallback data is available.
 - Paper execution remains blocked by the refusing paper executor.
 - Live trading remains impossible.
 
@@ -122,12 +128,12 @@ python -m trader.cli positions --connect
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
 python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
+python -m trader.cli paper-readiness-run
 ```
 
 `account --connect` and `positions --connect` are read-only. If the broker is unavailable, they clearly fall back to mock data instead of pretending mock data came from TWS or Gateway.
 
 ## References
 
-- IBKR initial setup and API settings: https://interactivebrokers.github.io/tws-api/initial_setup.html
-- IBKR connection flow: https://interactivebrokers.github.io/tws-api/connection.html
-- IBKR default Gateway/TWS port notes: https://interactivebrokers.github.io/tws-api/rtd_simple_syntax.html
+- IBKR TWS API setup and paper/live ports: https://www.interactivebrokers.com/campus/trading-lessons/installing-configuring-tws-for-the-api/
+- IBKR contracts API reference: https://www.interactivebrokers.com/campus/ibkr-api-page/contracts/

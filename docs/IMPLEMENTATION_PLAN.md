@@ -1388,8 +1388,8 @@ Completion criteria:
 
 Objective:
 
-- Design `v0.13` as the first broker-free analytical signal evaluator scaffold.
-- The evaluator may calculate non-actionable diagnostic observations from offline
+- Implement `v0.13` as the first broker-free analytical signal evaluator scaffold.
+- The evaluator calculates non-actionable diagnostic observations from offline
   historical feed frames.
 - The evaluator must not produce trading instructions, order-shaped records,
   portfolio decisions, fills, accounting, or performance claims.
@@ -1400,6 +1400,11 @@ Current baseline:
 - The offline loader, feed adapter, backtest engine, strategy contract, inert
   strategy runner, signal contract, and disabled signal runner are operational.
 - `signal-runner` still reports `signal_evaluation_enabled=false`,
+  `generated_signals=false`, `signal_count=0`, `generated_orders=false`,
+  `order_intents_generated=false`, `orders_simulated=false`,
+  `fills_simulated=false`, `pnl_calculated=false`,
+  `portfolio_accounting=false`, and `broker_contacted=false`.
+- `signal-evaluate` reports `signal_evaluation_enabled=true`,
   `generated_signals=false`, `signal_count=0`, `generated_orders=false`,
   `order_intents_generated=false`, `orders_simulated=false`,
   `fills_simulated=false`, `pnl_calculated=false`,
@@ -1423,8 +1428,7 @@ Allowed behavior:
 - Build a read-only per-symbol analytical context from bars with timestamps at
   or before the current frame timestamp.
 - Emit analytical observations that use only the approved diagnostic vocabulary.
-- Write JSON/Markdown reports only when a future implementation task explicitly
-  approves the command and report surface.
+- Write JSON/Markdown reports for the approved `signal-evaluate` command only.
 
 Forbidden behavior:
 
@@ -1436,12 +1440,12 @@ Forbidden behavior:
 - Do not create order-intent schemas beyond explicit false safety flags.
 - Do not interpret an observation as a trade recommendation.
 
-Model/schema proposal:
+Implemented model/schema:
 
-- Add `AnalyticalSignalConditionState` with exactly:
+- `AnalyticalSignalConditionState` has exactly:
   `condition_met`, `condition_not_met`, `insufficient_data`, and
   `invalid_data`.
-- Add `AnalyticalSignalObservation` with:
+- `AnalyticalSignalObservation` includes:
   `evaluator_name`, `evaluator_version`, `symbol`, `timestamp`,
   `frame_index`, `condition_name`, `condition_state`, `numeric_value`,
   `threshold_or_reference_value`, `required_lookback_bars`,
@@ -1449,11 +1453,11 @@ Model/schema proposal:
   `signal_count=0`, `order_intents_generated=false`,
   `broker_contacted=false`, `pnl_calculated=false`, and
   `portfolio_accounting=false`.
-- Add `AnalyticalSignalEvaluatorMetadata` with:
+- `AnalyticalSignalEvaluatorMetadata` includes:
   `name`, `version`, `description`, `required_fields`,
   `required_lookback_bars`, `supported_bar_sizes`, `broker_required=false`,
   `emits_trading_actions=false`, and `emits_order_intents=false`.
-- Add run/report models only in the implementation milestone, preserving
+- Run/report models preserve
   `generated_signals=false`, `signal_count=0`, `generated_orders=false`,
   `order_intents_generated=false`, `orders_simulated=false`,
   `fills_simulated=false`, `pnl_calculated=false`,
@@ -1462,9 +1466,9 @@ Model/schema proposal:
 
 Evaluator interface:
 
-- Proposed module: `src/trader/strategy/signal_evaluation.py`.
-- Proposed interface:
-  `evaluate_frame(context, history_window, metadata) -> list[AnalyticalSignalObservation]`.
+- Module: `src/trader/strategy/signal_evaluation.py`.
+- Public evaluation interface:
+  `evaluate_moving_average_relationship(context, history_by_symbol, metadata, ...) -> list[AnalyticalSignalObservation]`.
 - The interface accepts read-only frame context plus bounded historical bars for
   each symbol.
 - The interface returns observations only. It must not return `Signal`,
@@ -1473,12 +1477,12 @@ Evaluator interface:
 - The implementation should expose validation helpers that reject unsupported
   condition states or forbidden vocabulary in observation fields.
 
-First evaluator proposal:
+First evaluator:
 
 - Name: `moving_average_relationship_diagnostic`.
 - Purpose: compare a short moving average with a long moving average using close
   prices available at the current frame timestamp.
-- Default proposed windows: short window `5`, long window `20`.
+- Default windows: short window `5`, long window `20`.
 - Required lookback bars: `max(short_window, long_window)`.
 - The evaluator may calculate short average, long average, difference, and a
   safe ratio when the long average is non-zero.
@@ -1617,6 +1621,8 @@ Validation commands:
 .venv/bin/python -m trader.cli history-load --symbols SPY,AAPL || true
 .venv/bin/python -m trader.cli backtest-feed --symbols SPY,AAPL || true
 .venv/bin/python -m trader.cli signal-runner --symbols SPY,AAPL || true
+.venv/bin/python -m trader.cli signal-evaluate --symbols SPY,AAPL || true
+.venv/bin/python -m pytest tests/test_signal_evaluation.py tests/test_offline_stress_signal_evaluation.py
 git diff --check
 ```
 
@@ -1627,3 +1633,167 @@ Future v0.14 boundary:
   evaluator comparison, but it still must not add order intents, execution,
   fills, P&L, portfolio accounting, paper execution, or live trading unless a
   separate explicit plan approves those behaviors.
+
+## Milestone 16 - Broker-free commodity research universe scaffold
+
+Objective:
+
+- Add an offline commodity research universe that lists commodity-linked
+  security proxies only.
+- Keep direct futures contracts, futures data requests, rollover modeling,
+  margin modeling, signal evaluation, order intents, fills, portfolio
+  accounting, P&L, and broker contact disabled.
+
+Implemented behavior:
+
+- `python -m trader.cli commodity-universe`
+- `python -m trader.cli commodity-universe --symbols GLD,USO,DBA`
+- `scripts/run-commodity-universe.sh`
+- JSON/Markdown reports under `reports/commodity_universe_<timestamp>.*`.
+- Report flags include `commodity_proxy_universe=true`,
+  `futures_contracts_enabled=false`, `direct_futures_data_enabled=false`,
+  `broker_contacted=false`, `signal_evaluation_enabled=false`,
+  `generated_signals=false`, `signal_count=0`, `order_intents_generated=false`,
+  `orders_simulated=false`, `fills_simulated=false`,
+  `pnl_calculated=false`, and `portfolio_accounting=false`.
+
+Futures boundary:
+
+- Before direct futures support, add explicit IBKR futures contract descriptors,
+  exchange/month/multiplier validation, rollover rules, margin/risk models,
+  data-permission checks, and paper-only execution activation review.
+- Until then, commodity research remains limited to security proxies supported
+  by the existing SMART/USD stock-data path.
+
+## Milestone 17 - Read-only paper readiness orchestration
+
+Objective:
+
+- Add one sequential command for the first IBKR paper-client program run.
+- Keep the run read-only and require a real broker account summary.
+- Use commodity-linked security proxies only: `SPY,AAPL,GLD,USO,DBA`.
+- Keep paper execution blocked and direct futures out of scope.
+
+Implemented behavior:
+
+- `python -m trader.cli paper-readiness-run`
+- `scripts/run-paper-readiness-run.sh`
+- JSON/Markdown reports under `reports/paper_readiness_run_<timestamp>.*`.
+- Stage reports for broker probe, account summary, historical snapshot,
+  historical readiness, historical load, commodity universe, and signal
+  evaluation.
+- Final report flags include `broker_connected`,
+  `account_summary_verified`, `history_snapshot_written`,
+  `signal_evaluation_completed`, `submitted_orders=false`,
+  `paper_orders_enabled=false`, `read_only_api_expected=true`, and
+  `order_routing_enabled=false`.
+
+Stage order:
+
+```text
+broker-probe --timeout 15
+account --connect --timeout 15
+history-snapshot --symbols SPY,AAPL,GLD,USO,DBA --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1 --timeout 30
+history-load --symbols SPY,AAPL,GLD,USO,DBA --bar-size "5 mins" --what-to-show TRADES
+commodity-universe --symbols GLD,USO,DBA
+signal-evaluate --symbols SPY,AAPL,GLD,USO,DBA --bar-size "5 mins" --what-to-show TRADES --short-window 5 --long-window 20
+```
+
+Final statuses:
+
+- `completed`: all required stages pass with ready data.
+- `completed_with_warnings`: broker/account verified and evaluation completed,
+  but one or more symbols are partial.
+- `failed`: broker probe fails, broker account summary is unavailable, no
+  usable snapshots load, or signal evaluation fails.
+
+Safety boundary:
+
+- `ALLOW_PAPER_ORDERS` must remain `false`.
+- Mock account fallback is not readiness success.
+- The paper executor remains a refusing stub.
+- Direct futures require a separate milestone for contract descriptors,
+  expiry/multiplier validation, rollover, margin/risk modeling, and
+  paper-order gating.
+
+## Milestone 18 - Broker-free data-quality gate
+
+Objective:
+
+- Add an offline acceptance gate for local historical snapshots before
+  interpreting analytical evaluator output.
+- Make partial commodity-linked proxy readiness explicit, including
+  zero-volume bars for symbols such as `DBA`.
+- Keep the milestone broker-free, no-order, and futures-disabled.
+
+Implemented behavior:
+
+- `python -m trader.cli data-quality-gate --symbols SPY,AAPL,GLD,USO,DBA`
+- `scripts/run-data-quality-gate.sh`
+- JSON/Markdown reports under `reports/data_quality_gate_<timestamp>.*`.
+- Report flags include `broker_contacted=false`,
+  `signal_evaluation_enabled=false`, `generated_signals=false`,
+  `signal_count=0`, `order_intents_generated=false`,
+  `orders_simulated=false`, `fills_simulated=false`,
+  `pnl_calculated=false`, `portfolio_accounting=false`,
+  `futures_contracts_enabled=false`, and
+  `direct_futures_data_enabled=false`.
+
+Gate checks:
+
+- minimum loaded bars;
+- zero-volume bars;
+- duplicate timestamps;
+- missing timestamp gaps;
+- malformed JSONL records;
+- invalid OHLC;
+- negative volume;
+- stale snapshots.
+
+Acceptance criteria:
+
+- Clean fixture data passes.
+- Zero-volume `DBA`-style data fails by default.
+- Explicit threshold overrides can document a known partial symbol without
+  contacting a broker or enabling execution.
+- CLI writes JSON/Markdown reports and exits non-zero on failed gates.
+- Static scans prove no broker imports and no forbidden order APIs.
+
+## Milestone 19 - Broker-free analytical evaluator comparison
+
+Objective:
+
+- Add an offline comparison command for approved analytical evaluator
+  parameter candidates.
+- Compare diagnostic condition counts across chronological train/test segments.
+- Avoid profitability, ranking, or tradability claims.
+
+Implemented behavior:
+
+- `python -m trader.cli evaluator-compare --symbols SPY,AAPL,GLD,USO,DBA --window-pairs 5:20,10:30`
+- `scripts/run-evaluator-compare.sh`
+- JSON/Markdown reports under `reports/evaluator_comparison_<timestamp>.*`.
+- Report flags include `broker_contacted=false`,
+  `signal_evaluation_enabled=true`, `generated_signals=false`,
+  `signal_count=0`, `order_intents_generated=false`,
+  `orders_simulated=false`, `fills_simulated=false`,
+  `pnl_calculated=false`, `portfolio_accounting=false`, and
+  `order_routing_enabled=false`.
+
+Comparison rules:
+
+- Candidate syntax is comma-separated `short:long` moving-average windows.
+- Every candidate uses the approved
+  `moving_average_relationship_diagnostic` evaluator.
+- Output is limited to condition counts and condition-met rates for train/test
+  segments.
+- The command must not rank a trade recommendation, optimize P&L, generate
+  trading signals, create order intents, simulate fills, contact IBKR, or route
+  orders.
+
+Acceptance criteria:
+
+- Fixture data produces deterministic candidate summaries.
+- Missing data fails closed.
+- Bad window syntax exits with a CLI error.
+- Static scans prove no broker imports and no forbidden order APIs.
