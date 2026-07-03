@@ -1715,3 +1715,85 @@ Safety boundary:
 - Direct futures require a separate milestone for contract descriptors,
   expiry/multiplier validation, rollover, margin/risk modeling, and
   paper-order gating.
+
+## Milestone 18 - Broker-free data-quality gate
+
+Objective:
+
+- Add an offline acceptance gate for local historical snapshots before
+  interpreting analytical evaluator output.
+- Make partial commodity-linked proxy readiness explicit, including
+  zero-volume bars for symbols such as `DBA`.
+- Keep the milestone broker-free, no-order, and futures-disabled.
+
+Implemented behavior:
+
+- `python -m trader.cli data-quality-gate --symbols SPY,AAPL,GLD,USO,DBA`
+- `scripts/run-data-quality-gate.sh`
+- JSON/Markdown reports under `reports/data_quality_gate_<timestamp>.*`.
+- Report flags include `broker_contacted=false`,
+  `signal_evaluation_enabled=false`, `generated_signals=false`,
+  `signal_count=0`, `order_intents_generated=false`,
+  `orders_simulated=false`, `fills_simulated=false`,
+  `pnl_calculated=false`, `portfolio_accounting=false`,
+  `futures_contracts_enabled=false`, and
+  `direct_futures_data_enabled=false`.
+
+Gate checks:
+
+- minimum loaded bars;
+- zero-volume bars;
+- duplicate timestamps;
+- missing timestamp gaps;
+- malformed JSONL records;
+- invalid OHLC;
+- negative volume;
+- stale snapshots.
+
+Acceptance criteria:
+
+- Clean fixture data passes.
+- Zero-volume `DBA`-style data fails by default.
+- Explicit threshold overrides can document a known partial symbol without
+  contacting a broker or enabling execution.
+- CLI writes JSON/Markdown reports and exits non-zero on failed gates.
+- Static scans prove no broker imports and no forbidden order APIs.
+
+## Milestone 19 - Broker-free analytical evaluator comparison
+
+Objective:
+
+- Add an offline comparison command for approved analytical evaluator
+  parameter candidates.
+- Compare diagnostic condition counts across chronological train/test segments.
+- Avoid profitability, ranking, or tradability claims.
+
+Implemented behavior:
+
+- `python -m trader.cli evaluator-compare --symbols SPY,AAPL,GLD,USO,DBA --window-pairs 5:20,10:30`
+- `scripts/run-evaluator-compare.sh`
+- JSON/Markdown reports under `reports/evaluator_comparison_<timestamp>.*`.
+- Report flags include `broker_contacted=false`,
+  `signal_evaluation_enabled=true`, `generated_signals=false`,
+  `signal_count=0`, `order_intents_generated=false`,
+  `orders_simulated=false`, `fills_simulated=false`,
+  `pnl_calculated=false`, `portfolio_accounting=false`, and
+  `order_routing_enabled=false`.
+
+Comparison rules:
+
+- Candidate syntax is comma-separated `short:long` moving-average windows.
+- Every candidate uses the approved
+  `moving_average_relationship_diagnostic` evaluator.
+- Output is limited to condition counts and condition-met rates for train/test
+  segments.
+- The command must not rank a trade recommendation, optimize P&L, generate
+  trading signals, create order intents, simulate fills, contact IBKR, or route
+  orders.
+
+Acceptance criteria:
+
+- Fixture data produces deterministic candidate summaries.
+- Missing data fails closed.
+- Bad window syntax exits with a CLI error.
+- Static scans prove no broker imports and no forbidden order APIs.

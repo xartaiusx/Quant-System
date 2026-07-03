@@ -28,6 +28,9 @@
 - Milestone 15 implemented: broker-free analytical signal evaluator with non-actionable condition observations and signal-evaluation reports.
 - Milestone 16 implemented: broker-free commodity research universe with commodity-linked security proxies only.
 - Milestone 17 implemented: read-only paper readiness orchestration for first paper-client program testing.
+- Milestone 18 implemented: broker-free data-quality gate for local historical snapshots.
+- Milestone 19 implemented: broker-free analytical evaluator comparison diagnostics.
+- GitHub Actions CI added for tests, lint, typecheck, whitespace, and safety scans.
 - Optional `ibapi` dependency check script.
 - Deterministic mock data.
 - Momentum and mean-reversion strategy modules.
@@ -59,6 +62,8 @@
 - `v0.13`: broker-free analytical signal evaluator scaffold implemented in working tree.
 - `v0.14`: broker-free commodity research universe scaffold implemented in working tree.
 - `v0.15`: read-only paper readiness orchestration implemented in working tree.
+- `v0.16`: broker-free data-quality gate implemented in working tree.
+- `v0.17`: broker-free analytical evaluator comparison implemented in working tree.
 
 ## Intentionally Blocked
 
@@ -84,6 +89,8 @@
 - Analytical signal-evaluation checks creating trading instructions, order intents, fills, portfolio accounting, P&L, broker routing, paper execution, or live trading.
 - Commodity universe checks enabling direct futures contracts, futures data requests, futures margin or roll modeling, order intents, fills, portfolio accounting, P&L, broker routing, paper execution, or live trading.
 - Paper readiness checks submitting orders, enabling paper orders, disabling the expected TWS Read-Only API setting, accepting mock account fallback as success, enabling direct futures contracts, or merging without review.
+- Data-quality gates contacting IBKR, evaluating signals, generating order intents, simulating fills, calculating P&L, enabling direct futures contracts, or routing execution.
+- Evaluator comparisons contacting IBKR, ranking trade recommendations, optimizing P&L, generating trading signals, creating order intents, simulating fills, enabling direct futures contracts, or routing execution.
 
 ## Current Blockers
 
@@ -108,11 +115,16 @@
 - Offline `signal-evaluate` evaluates non-actionable moving-average relationship observations from local feed frames only, reports `broker_contacted=false`, `signal_evaluation_enabled=true`, `generated_signals=false`, `signal_count=0`, `generated_orders=false`, `order_intents_generated=false`, `orders_simulated=false`, `fills_simulated=false`, `portfolio_accounting=false`, and `pnl_calculated=false`.
 - Offline `commodity-universe` lists commodity-linked security proxies only, reports `broker_contacted=false`, `futures_contracts_enabled=false`, `direct_futures_data_enabled=false`, `signal_evaluation_enabled=false`, `generated_signals=false`, `signal_count=0`, `order_intents_generated=false`, `orders_simulated=false`, `fills_simulated=false`, `portfolio_accounting=false`, and `pnl_calculated=false`.
 - `paper-readiness-run` runs broker probe, broker account summary, historical snapshot, historical load, commodity universe, and analytical signal evaluation sequentially. It reports `submitted_orders=false`, `paper_orders_enabled=false`, `read_only_api_expected=true`, `order_routing_enabled=false`, and rejects mock account fallback as readiness success.
+- Offline `data-quality-gate` validates local snapshots only, reports `broker_contacted=false`, `signal_evaluation_enabled=false`, `generated_signals=false`, `order_intents_generated=false`, `pnl_calculated=false`, `futures_contracts_enabled=false`, and `direct_futures_data_enabled=false`.
+- Offline `evaluator-compare` compares approved moving-average diagnostic condition counts across explicit window candidates only, reports `broker_contacted=false`, `generated_signals=false`, `signal_count=0`, `order_intents_generated=false`, `orders_simulated=false`, `portfolio_accounting=false`, and `pnl_calculated=false`.
+- Latest local data-quality check found `DBA` has `2` zero-volume bars; default gate fails closed, while an explicit `--max-zero-volume-bars 2` threshold documents the known partial symbol.
+- Latest local `evaluator-compare` completed for `SPY,AAPL,GLD,USO,DBA` with window pairs `5:20,10:30`, `390` observations per candidate, and no generated signals or P&L.
 
 ## Next Recommended Steps
 
-1. Run `python -m trader.cli paper-readiness-run` with TWS paper open on `7497`, API socket enabled, and Read-Only API still enabled.
-2. Review `reports/latest_paper_readiness_run.json`, `reports/latest_history_readiness.json`, and `reports/latest_signal_evaluation.json`.
-3. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
-4. Keep future signal-evaluation work free of order intents, execution, fills, portfolio accounting, and P&L until explicitly approved.
-5. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.
+1. Run `python -m trader.cli data-quality-gate --symbols SPY,AAPL,GLD,USO,DBA --bar-size "5 mins" --what-to-show TRADES` before interpreting evaluator output.
+2. Investigate any partial symbol, especially low-volume commodity-linked proxies such as `DBA`, through `reports/latest_history_readiness.json`, `reports/latest_history_load.json`, and `reports/latest_data_quality_gate.json`.
+3. Run `python -m trader.cli evaluator-compare --symbols SPY,AAPL,GLD,USO,DBA --window-pairs 5:20,10:30` only after the data-quality gate is reviewed.
+4. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
+5. Keep future signal-evaluation work free of order intents, execution, fills, portfolio accounting, and P&L until explicitly approved.
+6. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

@@ -149,6 +149,22 @@ rejects mock account fallback as readiness success, keeps
 `paper_orders_enabled=false`, does not activate the paper executor, and keeps
 direct futures contracts out of scope.
 
+Milestone 18 adds a broker-free data-quality gate. `data-quality-gate` reads
+local snapshot loader and readiness diagnostics only. It may fail or warn on
+minimum bars, zero-volume bars, duplicate timestamps, missing gaps, malformed
+records, invalid OHLC, negative volume, or stale snapshots. It never contacts a
+broker, invokes order APIs, evaluates signals, creates order intents, simulates
+fills, maintains portfolio accounting, computes P&L, submits to the paper
+executor, routes execution, or enables direct futures contracts.
+
+Milestone 19 adds a broker-free analytical evaluator comparison.
+`evaluator-compare` reruns approved diagnostic condition evaluators over
+explicit parameter candidates and reports train/test condition counts only. It
+never contacts a broker, invokes order APIs, ranks trade recommendations,
+optimizes P&L, generates trading signals, creates order intents, simulates
+fills, maintains portfolio accounting, submits to the paper executor, routes
+execution, or enables direct futures contracts.
+
 ## Quantitative Research Gate
 
 No current milestone supports profitability, performance, or tradability claims.

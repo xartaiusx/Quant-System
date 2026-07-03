@@ -161,6 +161,22 @@ class PaperReadinessStageStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class DataQualityGateStatus(StrEnum):
+    """Offline data-quality gate states."""
+
+    PASSED = "passed"
+    PASSED_WITH_WARNINGS = "passed_with_warnings"
+    FAILED = "failed"
+
+
+class EvaluatorComparisonStatus(StrEnum):
+    """Broker-free evaluator comparison states."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    FAILED = "failed"
+
+
 class Instrument(SerializableModel):
     """Tradable instrument descriptor."""
 
@@ -2154,6 +2170,351 @@ class PaperReadinessRunReport(SerializableModel):
         return self
 
 
+class DataQualityGateRequest(SerializableModel):
+    """Offline historical data-quality acceptance request."""
+
+    symbols: list[str] = Field(
+        default_factory=lambda: ["SPY", "AAPL", "GLD", "USO", "DBA"]
+    )
+    bar_size: str | None = "5 mins"
+    what_to_show: str | None = "TRADES"
+    latest: bool = True
+    strict: bool = False
+    base_data_path: str = "data/historical"
+    min_bars: int = 50
+    max_zero_volume_bars: int = 0
+    max_duplicate_timestamps: int = 0
+    max_missing_gap_count: int = 0
+    max_malformed_lines: int = 0
+    max_invalid_ohlc_count: int = 0
+    max_negative_volume_count: int = 0
+    allow_stale_snapshot: bool = False
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        symbols = [symbol.strip().upper() for symbol in value if symbol.strip()]
+        if not symbols:
+            raise ValueError("data-quality symbols must not be empty")
+        return symbols
+
+    @field_validator("bar_size", "what_to_show")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("what_to_show")
+    @classmethod
+    def normalize_what_to_show(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+    @field_validator("base_data_path")
+    @classmethod
+    def validate_base_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("base_data_path must not be empty")
+        return normalized
+
+    @field_validator(
+        "min_bars",
+        "max_zero_volume_bars",
+        "max_duplicate_timestamps",
+        "max_missing_gap_count",
+        "max_malformed_lines",
+        "max_invalid_ohlc_count",
+        "max_negative_volume_count",
+    )
+    @classmethod
+    def validate_non_negative_int(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("data-quality thresholds must be non-negative")
+        return value
+
+
+class DataQualityGateIssue(SerializableModel):
+    """One offline data-quality gate issue."""
+
+    symbol: str
+    severity: str
+    code: str
+    message: str
+    observed_value: int | float | str | bool | None = None
+    threshold_value: int | float | str | bool | None = None
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("symbol is required")
+        return normalized
+
+    @field_validator("severity", "code", "message")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("data-quality issue text fields must not be empty")
+        return normalized
+
+
+class DataQualityGateSymbolResult(SerializableModel):
+    """Per-symbol offline data-quality gate result."""
+
+    symbol: str
+    status: DataQualityGateStatus
+    bars_count: int = 0
+    zero_volume_bars: int = 0
+    duplicate_timestamps_count: int = 0
+    missing_gap_count: int = 0
+    malformed_line_count: int = 0
+    invalid_ohlc_count: int = 0
+    negative_volume_count: int = 0
+    stale_snapshot: bool = False
+    load_status: str = "unknown"
+    readiness_status: str = "unknown"
+    snapshot_path: str | None = None
+    manifest_path: str | None = None
+    issues: list[DataQualityGateIssue] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("symbol is required")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_symbol_gate_safety(self) -> DataQualityGateSymbolResult:
+        if self.broker_contacted:
+            raise ValueError("broker_contacted must remain false")
+        if self.order_routing_enabled:
+            raise ValueError("order_routing_enabled must remain false")
+        if not self.no_order_guarantee:
+            raise ValueError("no_order_guarantee must remain true")
+        return self
+
+
+class DataQualityGateReport(SerializableModel):
+    """Offline data-quality gate report."""
+
+    title: str = "Broker-free Data Quality Gate"
+    report_type: str = "data_quality_gate"
+    command: str = "data-quality-gate"
+    ok: bool
+    request: DataQualityGateRequest
+    symbols_requested: list[str] = Field(default_factory=list)
+    results: list[DataQualityGateSymbolResult] = Field(default_factory=list)
+    readiness_final_status: str = "unknown"
+    loader_final_status: str = "unknown"
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    signal_evaluation_enabled: bool = False
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    futures_contracts_enabled: bool = False
+    direct_futures_data_enabled: bool = False
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This data-quality gate reads local historical snapshots only and does "
+        "not contact a broker."
+    )
+    final_status: DataQualityGateStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_gate_safety(self) -> DataQualityGateReport:
+        return _validate_data_quality_gate_flags(self)
+
+
+class EvaluatorWindowCandidate(SerializableModel):
+    """One diagnostic analytical evaluator parameter candidate."""
+
+    short_window: int
+    long_window: int
+    label: str | None = None
+
+    @field_validator("short_window", "long_window")
+    @classmethod
+    def validate_windows_positive(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("comparison windows must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_window_order(self) -> EvaluatorWindowCandidate:
+        if self.short_window > self.long_window:
+            raise ValueError("short_window must be less than or equal to long_window")
+        return self
+
+
+class EvaluatorComparisonRequest(SerializableModel):
+    """Broker-free analytical evaluator comparison request."""
+
+    symbols: list[str] = Field(
+        default_factory=lambda: ["SPY", "AAPL", "GLD", "USO", "DBA"]
+    )
+    candidates: list[EvaluatorWindowCandidate] = Field(
+        default_factory=lambda: [
+            EvaluatorWindowCandidate(short_window=5, long_window=20),
+            EvaluatorWindowCandidate(short_window=10, long_window=30),
+        ]
+    )
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    requested_bar_size: str | None = "5 mins"
+    requested_what_to_show: str | None = "TRADES"
+    latest: bool = True
+    strict: bool = False
+    snapshot_timestamp: str | None = None
+    base_data_path: str = "data/historical"
+    train_fraction: float = 0.7
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        symbols = [symbol.strip().upper() for symbol in value if symbol.strip()]
+        if not symbols:
+            raise ValueError("comparison symbols must not be empty")
+        return symbols
+
+    @field_validator(
+        "requested_bar_size",
+        "requested_what_to_show",
+        "snapshot_timestamp",
+        "base_data_path",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("requested_what_to_show")
+    @classmethod
+    def normalize_requested_what_to_show(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+    @field_validator("train_fraction")
+    @classmethod
+    def validate_train_fraction(cls, value: float) -> float:
+        if value <= 0 or value >= 1:
+            raise ValueError("train_fraction must be greater than 0 and less than 1")
+        return value
+
+    @field_validator("candidates")
+    @classmethod
+    def validate_candidates(
+        cls,
+        value: list[EvaluatorWindowCandidate],
+    ) -> list[EvaluatorWindowCandidate]:
+        if not value:
+            raise ValueError("at least one evaluator candidate is required")
+        return value
+
+
+class EvaluatorComparisonSegmentSummary(SerializableModel):
+    """Train/test segment summary for one evaluator candidate."""
+
+    segment: str
+    frame_count: int = 0
+    observation_count: int = 0
+    condition_met_count: int = 0
+    condition_not_met_count: int = 0
+    insufficient_data_count: int = 0
+    invalid_data_count: int = 0
+    condition_met_rate: float | None = None
+
+
+class EvaluatorComparisonResult(SerializableModel):
+    """One broker-free evaluator comparison result."""
+
+    candidate: EvaluatorWindowCandidate
+    ok: bool
+    final_status: EvaluatorComparisonStatus
+    diagnostics_status: str = "unknown"
+    total_observations: int = 0
+    train: EvaluatorComparisonSegmentSummary
+    test: EvaluatorComparisonSegmentSummary
+    condition_met_rate_delta: float | None = None
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    signal_evaluation_enabled: bool = True
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+    @model_validator(mode="after")
+    def validate_comparison_result_safety(self) -> EvaluatorComparisonResult:
+        return _validate_analytical_signal_safety_flags(self)
+
+
+class EvaluatorComparisonReport(SerializableModel):
+    """Broker-free analytical evaluator comparison report."""
+
+    title: str = "Broker-free Analytical Evaluator Comparison"
+    report_type: str = "evaluator_comparison"
+    command: str = "evaluator-compare"
+    ok: bool
+    request: EvaluatorComparisonRequest
+    symbols_requested: list[str] = Field(default_factory=list)
+    results: list[EvaluatorComparisonResult] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    signal_evaluation_enabled: bool = True
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This evaluator comparison reads local historical snapshots only and "
+        "emits diagnostic condition summaries, not trading signals."
+    )
+    no_execution_statement: str = (
+        "No trading signals, order intents, order simulation, broker routing, "
+        "fills, portfolio accounting, or P&L calculation were produced."
+    )
+    final_status: EvaluatorComparisonStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_comparison_report_safety(self) -> EvaluatorComparisonReport:
+        return _validate_analytical_signal_safety_flags(self)
+
+
 class DisabledSignalRunnerRequest(SerializableModel):
     """Offline disabled signal diagnostic runner request."""
 
@@ -2391,6 +2752,38 @@ def _validate_commodity_universe_flags(model: T) -> T:
         raise ValueError("pnl_calculated must remain false")
     if getattr(model, "portfolio_accounting", True):
         raise ValueError("portfolio_accounting must remain false")
+    if getattr(model, "order_routing_enabled", True):
+        raise ValueError("order_routing_enabled must remain false")
+    if getattr(model, "no_order_guarantee", False) is not True:
+        raise ValueError("no_order_guarantee must remain true")
+    return model
+
+
+def _validate_data_quality_gate_flags(model: T) -> T:
+    if getattr(model, "broker_contacted", True):
+        raise ValueError("broker_contacted must remain false")
+    if getattr(model, "signal_evaluation_enabled", True):
+        raise ValueError("signal_evaluation_enabled must remain false")
+    if getattr(model, "generated_signals", True):
+        raise ValueError("generated_signals must remain false")
+    if getattr(model, "signal_count", 1) != 0:
+        raise ValueError("signal_count must remain 0")
+    if getattr(model, "generated_orders", True):
+        raise ValueError("generated_orders must remain false")
+    if getattr(model, "order_intents_generated", True):
+        raise ValueError("order_intents_generated must remain false")
+    if getattr(model, "orders_simulated", True):
+        raise ValueError("orders_simulated must remain false")
+    if getattr(model, "fills_simulated", True):
+        raise ValueError("fills_simulated must remain false")
+    if getattr(model, "pnl_calculated", True):
+        raise ValueError("pnl_calculated must remain false")
+    if getattr(model, "portfolio_accounting", True):
+        raise ValueError("portfolio_accounting must remain false")
+    if getattr(model, "futures_contracts_enabled", True):
+        raise ValueError("futures_contracts_enabled must remain false")
+    if getattr(model, "direct_futures_data_enabled", True):
+        raise ValueError("direct_futures_data_enabled must remain false")
     if getattr(model, "order_routing_enabled", True):
         raise ValueError("order_routing_enabled must remain false")
     if getattr(model, "no_order_guarantee", False) is not True:

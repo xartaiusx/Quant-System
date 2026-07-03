@@ -30,6 +30,8 @@ The current project is infrastructure only. It must support research, signal gen
 - Analytical signal evaluator commands must remain broker-free and non-actionable. They may emit approved diagnostic condition states only; they must not generate trading signals, order intents, simulated fills, P&L, portfolio accounting, or contact brokers.
 - Commodity universe commands must remain broker-free and security-proxy-only. They must not enable direct futures contracts, futures data requests, futures margin or roll modeling, signal evaluation, order intents, simulated fills, P&L, portfolio accounting, or contact brokers.
 - Paper readiness orchestration may contact IBKR through read-only broker, account-summary, and historical-data requests only. It must run stages sequentially, require a real broker account summary, reject mock fallback as readiness success, keep `ALLOW_PAPER_ORDERS=false`, report `submitted_orders=false`, and keep direct futures out of scope.
+- Data-quality gate commands must remain broker-free and local-file-only. They may fail or warn on snapshot quality, but they must not contact IBKR, evaluate signals, generate order intents, simulate fills, compute P&L, or enable direct futures.
+- Evaluator comparison commands must remain broker-free and diagnostic-only. They may compare approved analytical condition counts across parameter candidates, but they must not rank trade recommendations, optimize P&L, generate trading signals, create order intents, simulate fills, route orders, or contact brokers.
 - Do not commit `.env`, secrets, account numbers, API credentials, tokens, or sensitive logs.
 - Missing or invalid config must fail closed.
 
@@ -109,6 +111,15 @@ Run offline analytical signal evaluation:
 ```bash
 python -m trader.cli signal-evaluate --symbols SPY,AAPL
 scripts/run-signal-evaluate.sh
+```
+
+Run offline data-quality and evaluator comparison gates:
+
+```bash
+python -m trader.cli data-quality-gate --symbols SPY,AAPL,GLD,USO,DBA
+scripts/run-data-quality-gate.sh
+python -m trader.cli evaluator-compare --symbols SPY,AAPL,GLD,USO,DBA
+scripts/run-evaluator-compare.sh
 ```
 
 Run read-only paper readiness orchestration:

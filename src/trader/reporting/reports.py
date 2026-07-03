@@ -23,6 +23,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return history_index_markdown(payload)
     if payload.get("report_type") == "history_load":
         return history_load_markdown(payload)
+    if payload.get("report_type") == "data_quality_gate":
+        return data_quality_gate_markdown(payload)
     if payload.get("report_type") == "backtest_feed":
         return backtest_feed_markdown(payload)
     if payload.get("report_type") == "backtest_run":
@@ -37,6 +39,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return signal_runner_markdown(payload)
     if payload.get("report_type") == "signal_evaluation":
         return signal_evaluation_markdown(payload)
+    if payload.get("report_type") == "evaluator_comparison":
+        return evaluator_comparison_markdown(payload)
     if payload.get("report_type") == "commodity_universe":
         return commodity_universe_markdown(payload)
     if payload.get("report_type") == "paper_readiness_run":
@@ -544,6 +548,84 @@ def history_load_markdown(payload: Mapping[str, Any]) -> str:
             )
     else:
         lines.append("- None")
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def data_quality_gate_markdown(payload: Mapping[str, Any]) -> str:
+    """Render an offline historical data-quality gate report."""
+
+    request = payload.get("request", {})
+    results = payload.get("results", [])
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+
+    lines = [
+        f"# {payload.get('title', 'Broker-free Data Quality Gate')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'data-quality-gate')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Loader final status: `{payload.get('loader_final_status', 'unknown')}`",
+        f"- Readiness final status: `{payload.get('readiness_final_status', 'unknown')}`",
+        f"- Symbols requested: `{', '.join(payload.get('symbols_requested', []))}`",
+        f"- Base data path: `{request.get('base_data_path', 'data/historical')}`",
+        f"- Bar size filter: `{request.get('bar_size')}`",
+        f"- What-to-show filter: `{request.get('what_to_show')}`",
+        f"- Minimum bars: `{request.get('min_bars')}`",
+        f"- Max zero-volume bars: `{request.get('max_zero_volume_bars')}`",
+        f"- Max missing gaps: `{request.get('max_missing_gap_count')}`",
+        f"- Allow stale snapshot: `{request.get('allow_stale_snapshot')}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Signal evaluation enabled: `{payload.get('signal_evaluation_enabled', True)}`",
+        f"- Generated signals: `{payload.get('generated_signals', True)}`",
+        f"- Signal count: `{payload.get('signal_count', 0)}`",
+        f"- Order intents generated: `{payload.get('order_intents_generated', True)}`",
+        f"- Orders simulated: `{payload.get('orders_simulated', True)}`",
+        f"- P&L calculated: `{payload.get('pnl_calculated', True)}`",
+        f"- Futures contracts enabled: `{payload.get('futures_contracts_enabled', True)}`",
+        f"- Direct futures data enabled: `{payload.get('direct_futures_data_enabled', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
+        "",
+        "## Scope",
+        "",
+        str(
+            payload.get(
+                "no_order_guarantee_statement",
+                "This data-quality gate reads local historical snapshots only and "
+                "does not contact a broker.",
+            )
+        ),
+        "",
+        "No order APIs invoked.",
+        "",
+        "## Symbol Gates",
+        "",
+    ]
+    if results:
+        for result in results:
+            issue_codes = [
+                issue.get("code", "unknown")
+                for issue in result.get("issues", [])
+                if isinstance(issue, Mapping)
+            ]
+            lines.append(
+                "- "
+                f"`{result.get('symbol')}` status=`{result.get('status')}` "
+                f"bars=`{result.get('bars_count')}` "
+                f"zero_volume=`{result.get('zero_volume_bars')}` "
+                f"duplicates=`{result.get('duplicate_timestamps_count')}` "
+                f"gaps=`{result.get('missing_gap_count')}` "
+                f"malformed=`{result.get('malformed_line_count')}` "
+                f"invalid_ohlc=`{result.get('invalid_ohlc_count')}` "
+                f"negative_volume=`{result.get('negative_volume_count')}` "
+                f"stale=`{result.get('stale_snapshot')}` "
+                f"issues=`{', '.join(issue_codes) if issue_codes else 'none'}`"
+            )
+    else:
+        lines.append("- None")
+
     lines.extend(_warnings_and_errors(warnings, errors))
     return "\n".join(lines) + "\n"
 
@@ -1127,6 +1209,67 @@ def signal_evaluation_markdown(payload: Mapping[str, Any]) -> str:
     if state_counts:
         for state, count in sorted(state_counts.items()):
             lines.append(f"- `{state}` observations=`{count}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def evaluator_comparison_markdown(payload: Mapping[str, Any]) -> str:
+    """Render a broker-free analytical evaluator comparison report."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    results = payload.get("results", [])
+
+    lines = [
+        f"# {payload.get('title', 'Broker-free Analytical Evaluator Comparison')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'evaluator-compare')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Symbols requested: `{', '.join(payload.get('symbols_requested', []))}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Generated signals: `{payload.get('generated_signals', True)}`",
+        f"- Signal count: `{payload.get('signal_count', 0)}`",
+        f"- Order intents generated: `{payload.get('order_intents_generated', True)}`",
+        f"- P&L calculated: `{payload.get('pnl_calculated', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        "",
+        "## Scope",
+        "",
+        str(
+            payload.get(
+                "no_order_guarantee_statement",
+                "This comparison is broker-free and diagnostic only.",
+            )
+        ),
+        "",
+        str(
+            payload.get(
+                "no_execution_statement",
+                "No trading signals or execution artifacts were produced.",
+            )
+        ),
+        "",
+        "## Candidates",
+        "",
+    ]
+    if results:
+        for result in results:
+            candidate = result.get("candidate", {})
+            train = result.get("train", {})
+            test = result.get("test", {})
+            lines.append(
+                "- "
+                f"`{candidate.get('short_window')}:{candidate.get('long_window')}` "
+                f"status=`{result.get('final_status')}` "
+                f"observations=`{result.get('total_observations')}` "
+                f"train_met_rate=`{train.get('condition_met_rate')}` "
+                f"test_met_rate=`{test.get('condition_met_rate')}` "
+                f"delta=`{result.get('condition_met_rate_delta')}`"
+            )
     else:
         lines.append("- None")
 

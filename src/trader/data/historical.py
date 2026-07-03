@@ -372,7 +372,19 @@ def _resolve_snapshot_path(
     manifest_path: str | Path | None,
 ) -> Path:
     if manifest.snapshot_path:
-        return Path(manifest.snapshot_path)
+        configured = Path(manifest.snapshot_path)
+        if configured.is_absolute() or manifest_path is None:
+            return configured
+        manifest_parent = Path(manifest_path).parent
+        candidates = [
+            manifest_parent / configured.name,
+            manifest_parent / configured,
+            configured,
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0]
     if manifest_path is None:
         raise ValueError("manifest has no snapshot_path")
     inferred_name = Path(manifest_path).name.replace("_manifest.json", "_bars.jsonl")

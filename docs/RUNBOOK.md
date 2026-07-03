@@ -273,6 +273,43 @@ partial load; `--strict` marks malformed records as failed. Common failures:
 - Invalid OHLC or negative volume: treat the dataset as failed for simulation input.
 - Stale snapshot: refresh historical data when a current dataset is required.
 
+## Offline Data Quality Gate
+
+```bash
+python -m trader.cli data-quality-gate --symbols SPY,AAPL,GLD,USO,DBA --bar-size "5 mins" --what-to-show TRADES
+python -m trader.cli data-quality-gate --symbols DBA --max-zero-volume-bars 1
+scripts/run-data-quality-gate.sh
+```
+
+Expected behavior:
+
+- opens no broker socket
+- reads local historical snapshots through the offline loader and readiness checks
+- validates minimum bars, zero-volume bars, duplicate timestamps, missing gaps,
+  malformed records, invalid OHLC, negative volume, and stale snapshots
+- writes `reports/data_quality_gate_<timestamp>.json` and `.md`
+- updates `reports/latest_data_quality_gate.json` and `.md`
+- reports `broker_contacted=false`, `signal_evaluation_enabled=false`,
+  `generated_signals=false`, `signal_count=0`, `order_intents_generated=false`,
+  `orders_simulated=false`, `fills_simulated=false`,
+  `portfolio_accounting=false`, `pnl_calculated=false`,
+  `futures_contracts_enabled=false`, and `direct_futures_data_enabled=false`
+- does not contact IBKR, evaluate signals, create order intents, simulate fills,
+  maintain portfolio accounting, compute P&L, or route orders
+
+Use the default gate before interpreting `signal-evaluate` or
+`evaluator-compare` output. Known partial symbols such as a low-volume
+commodity-linked proxy can be documented with an explicit threshold override,
+but the default command should fail closed until the data issue is reviewed.
+Common failures:
+
+- No snapshots found: run `history-snapshot` while TWS paper is available.
+- Minimum bars failed: collect a longer or more liquid historical sample.
+- Zero-volume bars: inspect the symbol, market hours, and product liquidity before using the data.
+- Duplicate timestamps or missing gaps: regenerate the snapshot or document the partial data boundary.
+- Invalid OHLC, malformed lines, or negative volume: treat the snapshot as failed input.
+- Stale snapshot: refresh historical data before current readiness claims.
+
 ## Offline Backtest Feed
 
 ```bash
@@ -551,6 +588,40 @@ Common failures:
 - Warm-up observations: collect more local bars before interpreting condition counts.
 - Invalid data observations: inspect OHLCV quality in the source snapshot.
 
+## Offline Evaluator Comparison
+
+```bash
+python -m trader.cli evaluator-compare --symbols SPY,AAPL,GLD,USO,DBA --window-pairs 5:20,10:30
+python -m trader.cli evaluator-compare --symbols SPY,AAPL --window-pairs 5:20,10:20 --train-fraction 0.7
+scripts/run-evaluator-compare.sh
+```
+
+Expected behavior:
+
+- opens no broker socket
+- loads local snapshots through the offline historical loader
+- builds a broker-free feed
+- reruns the approved `moving_average_relationship_diagnostic` evaluator for
+  each `short:long` candidate pair
+- compares chronological train/test condition counts and condition-met rates
+- writes `reports/evaluator_comparison_<timestamp>.json` and `.md`
+- updates `reports/latest_evaluator_comparison.json` and `.md`
+- reports `broker_contacted=false`, `signal_evaluation_enabled=true`,
+  `generated_signals=false`, `signal_count=0`, `order_intents_generated=false`,
+  `orders_simulated=false`, `fills_simulated=false`,
+  `portfolio_accounting=false`, and `pnl_calculated=false`
+- does not rank a trade recommendation, optimize P&L, create order intents,
+  simulate fills, contact IBKR, or route orders
+
+Run `data-quality-gate` first. Treat comparison output as research diagnostics
+only; it is not evidence of profitability or readiness to submit paper orders.
+Common failures:
+
+- Bad `--window-pairs`: use comma-separated `short:long` pairs such as `5:20,10:30`.
+- No snapshots or empty feed: run `history-index`, `history-load`, and the data-quality gate.
+- Warm-up-heavy output: collect more bars or use smaller windows for diagnostics.
+- Failed data feed: fix loader and data-quality errors before comparing candidates.
+
 ## Offline Commodity Research Universe
 
 ```bash
@@ -647,6 +718,8 @@ python -m pytest tests/test_offline_stress_signal_runner.py
 python -m pytest tests/test_offline_stress_signal_evaluation.py
 python -m pytest tests/test_commodity_universe.py
 python -m pytest tests/test_paper_readiness_run.py
+python -m pytest tests/test_data_quality_gate.py
+python -m pytest tests/test_evaluator_comparison.py
 ```
 
 Expected behavior:

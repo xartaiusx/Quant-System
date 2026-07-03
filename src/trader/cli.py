@@ -25,6 +25,7 @@ from trader.data.historical_loader import (
     build_history_index_report,
     load_historical_snapshots,
 )
+from trader.data.quality_gate import build_data_quality_gate_report
 from trader.data.snapshots import deterministic_history, deterministic_quotes, mock_positions
 from trader.data.universe import parse_symbols
 from trader.execution.router import ExecutionRouter
@@ -39,8 +40,12 @@ from trader.models import (
     BrokerDiagnosticReport,
     CommodityResearchUniverseReport,
     CommodityResearchUniverseRequest,
+    DataQualityGateReport,
+    DataQualityGateRequest,
     DisabledSignalRunnerReport,
     DisabledSignalRunnerRequest,
+    EvaluatorComparisonReport,
+    EvaluatorComparisonRequest,
     HistoricalLoaderReport,
     HistoricalReadinessReport,
     HistoricalSnapshotLoadRequest,
@@ -63,6 +68,10 @@ from trader.portfolio.construction import build_trade_plans
 from trader.reporting.journal import Journal
 from trader.risk.rules import evaluate_trade_plans
 from trader.strategy import get_strategy
+from trader.strategy.evaluator_comparison import (
+    build_evaluator_comparison_report,
+    parse_window_candidates,
+)
 from trader.strategy.interface import build_strategy_contract_report
 from trader.strategy.runner import build_inert_strategy_runner_report
 from trader.strategy.signal_evaluation import build_analytical_signal_evaluation_report
@@ -404,6 +413,68 @@ def history_load(
     console.print("Order routing: disabled.")
     console.print("No order APIs invoked.")
     _print_history_load_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("data-quality-gate")
+def data_quality_gate(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols to validate from local snapshots."),
+    ] = "SPY,AAPL,GLD,USO,DBA",
+    bar_size: Annotated[
+        str | None,
+        typer.Option("--bar-size", help="Optional bar-size filter."),
+    ] = "5 mins",
+    what_to_show: Annotated[
+        str | None,
+        typer.Option("--what-to-show", help="Optional data-type filter."),
+    ] = "TRADES",
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical snapshot root."),
+    ] = Path("data/historical"),
+    min_bars: Annotated[
+        int,
+        typer.Option("--min-bars", help="Minimum loaded bars required per symbol."),
+    ] = 50,
+    max_zero_volume_bars: Annotated[
+        int,
+        typer.Option("--max-zero-volume-bars", help="Maximum zero-volume bars allowed."),
+    ] = 0,
+    max_missing_gap_count: Annotated[
+        int,
+        typer.Option("--max-missing-gap-count", help="Maximum timestamp gaps allowed."),
+    ] = 0,
+    allow_stale_snapshot: Annotated[
+        bool,
+        typer.Option("--allow-stale-snapshot/--reject-stale-snapshot"),
+    ] = False,
+) -> None:
+    """Run broker-free data-quality gates over local historical snapshots."""
+
+    config = _load_config_or_exit()
+    request = DataQualityGateRequest(
+        symbols=parse_symbols(symbols),
+        bar_size=bar_size,
+        what_to_show=what_to_show,
+        base_data_path=base_path.as_posix(),
+        min_bars=min_bars,
+        max_zero_volume_bars=max_zero_volume_bars,
+        max_missing_gap_count=max_missing_gap_count,
+        allow_stale_snapshot=allow_stale_snapshot,
+    )
+    report = build_data_quality_gate_report(config, request)
+    json_path, md_path = Journal().write_cycle("data_quality_gate", _report_dict(report))
+
+    console.print("[bold]Broker-free data quality gate[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    _print_data_quality_gate_result(report)
     console.print(f"JSON report: {json_path}")
     console.print(f"Markdown report: {md_path}")
     if not report.ok:
@@ -1082,6 +1153,73 @@ def signal_evaluate(
         raise typer.Exit(code=1)
 
 
+@app.command("evaluator-compare")
+def evaluator_compare(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols to compare against local snapshots."),
+    ] = "SPY,AAPL,GLD,USO,DBA",
+    window_pairs: Annotated[
+        str,
+        typer.Option(
+            "--window-pairs",
+            help="Comma-separated short:long moving-average windows.",
+        ),
+    ] = "5:20,10:30",
+    alignment: Annotated[
+        BacktestAlignmentMode,
+        typer.Option("--alignment", help="Timestamp alignment mode."),
+    ] = BacktestAlignmentMode.UNION,
+    bar_size: Annotated[
+        str | None,
+        typer.Option("--bar-size", help="Optional bar-size filter."),
+    ] = "5 mins",
+    what_to_show: Annotated[
+        str | None,
+        typer.Option("--what-to-show", help="Optional data-type filter."),
+    ] = "TRADES",
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical snapshot root."),
+    ] = Path("data/historical"),
+    train_fraction: Annotated[
+        float,
+        typer.Option("--train-fraction", help="Chronological train segment fraction."),
+    ] = 0.7,
+) -> None:
+    """Compare broker-free analytical evaluator diagnostics over local data."""
+
+    try:
+        candidates = parse_window_candidates(window_pairs)
+    except ValueError as exc:
+        console.print(f"[red]Invalid --window-pairs:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    request = EvaluatorComparisonRequest(
+        symbols=parse_symbols(symbols),
+        candidates=candidates,
+        alignment_mode=alignment,
+        requested_bar_size=bar_size,
+        requested_what_to_show=what_to_show,
+        base_data_path=base_path.as_posix(),
+        train_fraction=train_fraction,
+    )
+    report = build_evaluator_comparison_report(request)
+    json_path, md_path = Journal().write_cycle("evaluator_comparison", _report_dict(report))
+
+    console.print("[bold]Broker-free analytical evaluator comparison[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    console.print("Generated trading signals: false.")
+    console.print("P&L calculated: false.")
+    _print_evaluator_comparison_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("history-snapshot")
 def history_snapshot(
     symbols: Annotated[
@@ -1533,7 +1671,9 @@ def _report_dict(
         | BacktestRunReport
         | BrokerDiagnosticReport
         | CommodityResearchUniverseReport
+        | DataQualityGateReport
         | DisabledSignalRunnerReport
+        | EvaluatorComparisonReport
         | HistoricalLoaderReport
         | HistoricalReadinessReport
         | HistoricalSnapshotReport
@@ -1940,6 +2080,39 @@ def _print_signal_evaluation_result(report: AnalyticalSignalEvaluationReport) ->
             console.print(f"- {escape(error)}")
 
 
+def _print_evaluator_comparison_result(report: EvaluatorComparisonReport) -> None:
+    table = Table(title="Evaluator Comparison")
+    table.add_column("Candidate")
+    table.add_column("Status")
+    table.add_column("Observations")
+    table.add_column("Train Met Rate")
+    table.add_column("Test Met Rate")
+    table.add_column("Delta")
+    for result in report.results:
+        candidate = f"{result.candidate.short_window}:{result.candidate.long_window}"
+        table.add_row(
+            candidate,
+            _enum_value(result.final_status),
+            str(result.total_observations),
+            _format_optional_rate(result.train.condition_met_rate),
+            _format_optional_rate(result.test.condition_met_rate),
+            _format_optional_rate(result.condition_met_rate_delta),
+        )
+    console.print(table)
+    console.print(f"Broker contacted: {str(report.broker_contacted).lower()}.")
+    console.print(f"Generated signals: {str(report.generated_signals).lower()}.")
+    console.print(f"P&L calculated: {str(report.pnl_calculated).lower()}.")
+    console.print(f"Final status: {_enum_value(report.final_status)}")
+    if report.warnings:
+        console.print("[yellow]Evaluator comparison warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Evaluator comparison errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
 def _print_paper_readiness_run_result(report: PaperReadinessRunReport) -> None:
     table = Table(title="Paper Readiness Run")
     table.add_column("Check")
@@ -2253,6 +2426,40 @@ def _print_history_load_result(report: HistoricalLoaderReport) -> None:
     _print_loader_messages(report)
 
 
+def _print_data_quality_gate_result(report: DataQualityGateReport) -> None:
+    table = Table(title="Data Quality Gate")
+    table.add_column("Symbol")
+    table.add_column("Status")
+    table.add_column("Bars")
+    table.add_column("Zero Vol")
+    table.add_column("Duplicates")
+    table.add_column("Gaps")
+    table.add_column("Invalid OHLC")
+    table.add_column("Negative Vol")
+    for result in report.results:
+        table.add_row(
+            result.symbol,
+            _enum_value(result.status),
+            str(result.bars_count),
+            str(result.zero_volume_bars),
+            str(result.duplicate_timestamps_count),
+            str(result.missing_gap_count),
+            str(result.invalid_ohlc_count),
+            str(result.negative_volume_count),
+        )
+    console.print(table)
+    console.print(f"Broker contacted: {str(report.broker_contacted).lower()}.")
+    console.print(f"Final status: {_enum_value(report.final_status)}")
+    if report.warnings:
+        console.print("[yellow]Data-quality warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Data-quality errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
 def _print_loader_messages(report: HistoricalLoaderReport) -> None:
     if report.warnings:
         console.print("[yellow]Loader warnings[/yellow]")
@@ -2389,6 +2596,10 @@ def _broker_next_step(report: BrokerDiagnosticReport) -> str:
 
 def _enum_value(value: object) -> str:
     return str(getattr(value, "value", value))
+
+
+def _format_optional_rate(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.4f}"
 
 
 if __name__ == "__main__":

@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package
+        run: python -m pip install -e ".[dev,broker]"
+      - name: Run tests
+        run: python -m pytest
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package
+        run: python -m pip install -e ".[dev]"
+      - name: Run ruff
+        run: python -m ruff check --no-cache src tests
+
+  types:
+    name: types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package
+        run: python -m pip install -e ".[dev]"
+      - name: Run mypy
+        run: python -m mypy src
+
+  safety:
+    name: safety
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check whitespace
+        run: git diff --check
+      - name: Scan readiness paths for order APIs
+        run: |
+          ! grep -R -n -E "placeOrder|cancelOrder|reqGlobalCancel" \
+            src/trader/paper_readiness.py \
+            src/trader/data/quality_gate.py \
+            src/trader/strategy/evaluator_comparison.py \
+            scripts/run-paper-readiness-run.sh \
+            scripts/run-data-quality-gate.sh \
+            scripts/run-evaluator-compare.sh \
+            tests/test_paper_readiness_run.py \
+            tests/test_data_quality_gate.py \
+            tests/test_evaluator_comparison.py
+      - name: Scan offline analytical modules for broker/execution imports
+        run: |
+          ! grep -R -n -E "trader\.broker|ibapi|trader\.execution|PaperExecutor" \
+            src/trader/strategy/signal_evaluation.py \
+            src/trader/strategy/evaluator_comparison.py \
+            src/trader/data/commodity_universe.py \
+            src/trader/data/quality_gate.py
+      - name: Check order flags stay rejected
+        run: |
+          ! grep -R -n -E "ALLOW_PAPER_ORDERS=true|ALLOW_LIVE_ORDERS=true" \
+            scripts .env.example

@@ -181,12 +181,20 @@ Implemented commands:
 ```bash
 python -m trader.cli signal-evaluate --symbols SPY,AAPL
 python -m trader.cli signal-evaluate --symbols SPY,AAPL --short-window 5 --long-window 20
+python -m trader.cli evaluator-compare --symbols SPY,AAPL --window-pairs 5:20,10:30
 scripts/run-signal-evaluate.sh
+scripts/run-evaluator-compare.sh
 ```
 
 The command must remain offline only. It should read local snapshots through the
 historical loader, build a broker-free feed, evaluate observations, and print
 that outputs are diagnostic-only and non-actionable.
+
+`evaluator-compare` must remain offline only. It may rerun the approved
+`moving_average_relationship_diagnostic` evaluator for explicit `short:long`
+window candidates and report train/test condition counts. It must not rank
+trade recommendations, optimize P&L, generate trading signals, create order
+intents, simulate fills, contact IBKR, or route orders.
 
 ## Reports
 
@@ -196,6 +204,10 @@ Implemented report files:
 - `reports/signal_evaluation_<timestamp>.md`
 - `reports/latest_signal_evaluation.json`
 - `reports/latest_signal_evaluation.md`
+- `reports/evaluator_comparison_<timestamp>.json`
+- `reports/evaluator_comparison_<timestamp>.md`
+- `reports/latest_evaluator_comparison.json`
+- `reports/latest_evaluator_comparison.md`
 
 Reports must include:
 
@@ -243,6 +255,8 @@ Implementation tests cover:
 - CLI fixture runs using temporary local snapshots;
 - static scans for broker, `ibapi`, execution, portfolio, risk, and order API
   dependencies;
+- evaluator-comparison parser and report serialization;
+- evaluator-comparison missing-data failure mode;
 - paper executor refusal;
 - live port rejection.
 

@@ -30,6 +30,9 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Broker-free analytical signal evaluator that emits non-actionable condition observations only.
 - Broker-free commodity research universe for commodity-linked security proxies only.
 - Read-only paper readiness orchestration for the first broker-connected program run.
+- Broker-free data-quality gate for local historical snapshots.
+- Broker-free analytical evaluator comparison diagnostics for approved moving-average windows.
+- GitHub Actions CI for tests, lint, typecheck, whitespace, and safety scans.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
 
@@ -51,6 +54,7 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Real signal evaluation, buy/sell/hold outputs, order intents, order simulation, fill simulation, portfolio accounting, or P&L from signal-contract checks.
 - Real signal evaluation, buy/sell/hold outputs, order intents, order simulation, fill simulation, portfolio accounting, or P&L from signal-runner checks.
 - Trading instructions, order intents, execution, fill simulation, portfolio accounting, or P&L from analytical signal-evaluation checks.
+- Trading instructions, order intents, execution, fill simulation, portfolio accounting, P&L, or broker contact from data-quality gates or evaluator comparisons.
 - Direct futures contracts, futures roll modeling, futures margin modeling, or commodity futures execution.
 
 ## Safety Design
@@ -101,8 +105,9 @@ Do not commit `.env`.
 
 ```bash
 pytest
-ruff check .
+ruff check --no-cache src tests
 mypy src
+git diff --check
 ```
 
 ## Dry-Run Commands
@@ -119,6 +124,7 @@ python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-
 python -m trader.cli history-readiness --latest
 python -m trader.cli history-index
 python -m trader.cli history-load --symbols SPY,AAPL
+python -m trader.cli data-quality-gate --symbols SPY,AAPL,GLD,USO,DBA --bar-size "5 mins" --what-to-show TRADES
 python -m trader.cli history-inspect --symbol SPY
 python -m trader.cli backtest-feed --symbols SPY,AAPL
 python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment intersection
@@ -134,6 +140,7 @@ python -m trader.cli signal-runner --symbols SPY,AAPL
 python -m trader.cli signal-runner --symbols SPY,AAPL --alignment intersection
 python -m trader.cli signal-evaluate --symbols SPY,AAPL
 python -m trader.cli signal-evaluate --symbols SPY,AAPL --short-window 5 --long-window 20
+python -m trader.cli evaluator-compare --symbols SPY,AAPL,GLD,USO,DBA --window-pairs 5:20,10:30
 python -m trader.cli commodity-universe
 python -m trader.cli commodity-universe --symbols GLD,USO,DBA
 python -m trader.cli paper-readiness-run
@@ -160,6 +167,7 @@ scripts/run-market-probe.sh
 scripts/run-market-probe.sh --symbols SPY,AAPL,NVDA --data-type delayed --historical
 scripts/run-history-snapshot.sh
 scripts/run-history-load.sh
+scripts/run-data-quality-gate.sh
 scripts/run-backtest-feed.sh
 scripts/run-backtest-run.sh
 scripts/run-strategy-contract.sh
@@ -167,6 +175,7 @@ scripts/run-strategy-runner.sh
 scripts/run-signal-contract.sh
 scripts/run-signal-runner.sh
 scripts/run-signal-evaluate.sh
+scripts/run-evaluator-compare.sh
 scripts/run-commodity-universe.sh
 scripts/run-paper-readiness-run.sh
 ```
@@ -193,6 +202,13 @@ simulation work. The snapshots are generated artifacts and are ignored by Git.
 `history-index`, `history-load`, and `history-inspect` are offline-only. They
 read local snapshot JSONL and manifest files, normalize bars into reusable
 datasets, write loader reports, and do not contact IBKR or import broker clients.
+
+`data-quality-gate` is offline-only. It reads local snapshot loader and
+readiness diagnostics, applies explicit symbol gates for minimum bars,
+zero-volume bars, duplicate timestamps, missing gaps, malformed records,
+invalid OHLC, negative volume, and stale snapshots, then writes reports. It does
+not contact IBKR, evaluate signals, generate order intents, model direct
+futures, simulate fills, perform portfolio accounting, or compute P&L.
 
 `backtest-feed` is also offline-only. It reads loaded local historical datasets,
 normalizes them into aligned bar-feed frames, writes feed reports, and does not
@@ -235,6 +251,13 @@ observations. It does not contact IBKR, generate trading signals, create order
 intents, simulate orders or fills, perform portfolio accounting, or compute
 P&L. Reports state `signal_evaluation_enabled=true`,
 `generated_signals=false`, and `signal_count=0`.
+
+`evaluator-compare` is an offline analytical comparison diagnostic. It reruns
+the approved moving-average relationship evaluator over configured short/long
+window pairs and compares chronological train/test condition counts. It does
+not rank a tradable strategy, optimize P&L, generate trading signals, create
+order intents, simulate fills, perform portfolio accounting, contact IBKR, or
+route orders.
 
 `commodity-universe` is an offline commodity research helper. It lists
 commodity-linked security proxies such as metals, energy, agriculture, and broad
