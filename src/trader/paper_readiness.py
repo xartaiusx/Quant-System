@@ -104,6 +104,12 @@ def default_broker_client_factory(config: TraderConfig) -> PaperReadinessBrokerC
     return cast(PaperReadinessBrokerClient, IBKRClient(config))
 
 
+def _broker_stage_config(config: TraderConfig, *, stage_offset: int) -> TraderConfig:
+    """Use isolated client IDs for sequential IBKR broker-contact stages."""
+
+    return config.model_copy(update={"ibkr_client_id": config.ibkr_client_id + stage_offset})
+
+
 def run_paper_readiness_run(
     config: TraderConfig,
     request: PaperReadinessRunRequest | None = None,
@@ -140,7 +146,7 @@ def run_paper_readiness_run(
         )
 
     broker_stage, broker_report = _run_broker_probe_stage(
-        config,
+        _broker_stage_config(config, stage_offset=0),
         readiness_request,
         journal=selected_journal,
         broker_client_factory=broker_client_factory,
@@ -157,7 +163,7 @@ def run_paper_readiness_run(
         )
 
     account_stage, account_report = _run_account_summary_stage(
-        config,
+        _broker_stage_config(config, stage_offset=1),
         readiness_request,
         journal=selected_journal,
         broker_client_factory=broker_client_factory,
@@ -174,7 +180,7 @@ def run_paper_readiness_run(
         )
 
     snapshot_stage, snapshot_report, readiness_report = _run_history_snapshot_stage(
-        config,
+        _broker_stage_config(config, stage_offset=2),
         readiness_request,
         journal=selected_journal,
         broker_client_factory=broker_client_factory,
