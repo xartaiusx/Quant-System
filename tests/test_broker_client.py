@@ -301,6 +301,14 @@ class MissingContractFakeApp(MarketDataSuccessFakeApp):
         self.contract_details_events.setdefault(reqId, threading.Event()).set()
 
 
+class ConnectionClosedContractFakeApp(MarketDataSuccessFakeApp):
+    def reqContractDetails(self, reqId: int, _contract: object) -> None:
+        self.connected = False
+        self.warnings.append("IBKR connection closed")
+        self.contract_details[reqId] = []
+        self.contract_details_events.setdefault(reqId, threading.Event()).set()
+
+
 class MissingBidAskFakeApp(MarketDataSuccessFakeApp):
     def reqMktData(
         self,
@@ -571,6 +579,69 @@ def test_ibkr_farm_status_codes_are_non_fatal_warnings() -> None:
     assert app.warnings == [f"IBKR {code}: farm status {code}" for code in (2103, 2105, 2107, 2108)]
 
 
+def test_ibkr_informational_error_does_not_release_pending_request_events() -> None:
+    app = _ReadOnlyIBKRApp()
+    contract_event = threading.Event()
+    app.contract_details_events[101] = contract_event
+
+    app.error(-1, 2104, "Market data farm connection is OK")
+
+    assert contract_event.is_set() is False
+    assert app.errors == []
+    assert app.warnings == ["IBKR 2104: Market data farm connection is OK"]
+
+
+def test_ibkr_request_error_releases_matching_pending_request_event() -> None:
+    app = _ReadOnlyIBKRApp()
+    contract_event = threading.Event()
+    market_event = threading.Event()
+    app.contract_details_events[101] = contract_event
+    app.market_data_events[202] = market_event
+
+    app.error(101, 200, "No security definition has been found")
+
+    assert contract_event.is_set() is True
+    assert market_event.is_set() is False
+    assert app.errors == [
+        BrokerErrorEvent(
+            req_id=101,
+            code=200,
+            message="No security definition has been found",
+        )
+    ]
+
+
+def test_ibkr_global_request_error_releases_all_pending_request_events() -> None:
+    app = _ReadOnlyIBKRApp()
+    contract_event = threading.Event()
+    market_event = threading.Event()
+    historical_event = threading.Event()
+    app.contract_details_events[101] = contract_event
+    app.market_data_events[202] = market_event
+    app.historical_data_events[303] = historical_event
+
+    app.error(-1, 504, "Not connected")
+
+    assert contract_event.is_set() is True
+    assert market_event.is_set() is True
+    assert historical_event.is_set() is True
+    assert app.errors == [BrokerErrorEvent(req_id=-1, code=504, message="Not connected")]
+
+
+def test_ibkr_connection_closed_releases_all_pending_request_events() -> None:
+    app = _ReadOnlyIBKRApp()
+    contract_event = threading.Event()
+    historical_event = threading.Event()
+    app.contract_details_events[101] = contract_event
+    app.historical_data_events[303] = historical_event
+
+    app.connectionClosed()
+
+    assert contract_event.is_set() is True
+    assert historical_event.is_set() is True
+    assert app.warnings == ["IBKR connection closed"]
+
+
 def test_broker_probe_success_with_mocked_read_only_callbacks() -> None:
     config = load_config(env={}, load_dotenv_file=False)
     fake_app = SuccessFakeApp()
@@ -629,6 +700,27 @@ def test_contract_resolution_failure_is_structured() -> None:
     assert result.errors
     assert result.errors[0].code == 200
     assert "no security definition" in " ".join(result.warnings).lower()
+    client.disconnect()
+
+
+def test_contract_resolution_connection_close_is_structured_error() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = ConnectionClosedContractFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    result = client.resolve_contract("SPY", timeout=0.1)
+
+    assert result.resolved is False
+    assert result.errors
+    assert result.errors[0].req_id is not None
+    assert result.errors[0].req_id > 0
+    assert "connection closed before contract details returned" in result.errors[0].message
+    assert "no contract details returned" in " ".join(result.warnings).lower()
     client.disconnect()
 
 

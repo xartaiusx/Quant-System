@@ -407,6 +407,7 @@ class _ReadOnlyIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
     def connectionClosed(self) -> None:  # noqa: N802
         with self._lock:
             self.warnings.append("IBKR connection closed")
+        self._release_pending_request_events()
 
     def error(  # noqa: N802 - IBKR callback name
         self,
@@ -424,6 +425,26 @@ class _ReadOnlyIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
                 self.warnings.append(f"IBKR {errorCode}: {message}")
             else:
                 self.errors.append(event)
+        if errorCode not in _INFORMATIONAL_ERROR_CODES:
+            self._release_pending_request_events(reqId)
+
+    def _release_pending_request_events(self, req_id: int | None = None) -> None:
+        with self._lock:
+            event_maps = (
+                self.contract_details_events,
+                self.market_data_events,
+                self.historical_data_events,
+            )
+            if req_id is None or req_id < 0:
+                events = [event for event_map in event_maps for event in event_map.values()]
+            else:
+                events = [
+                    event
+                    for event_map in event_maps
+                    if (event := event_map.get(req_id)) is not None
+                ]
+        for event in events:
+            event.set()
 
 
 @dataclass(frozen=True)
@@ -1267,6 +1288,16 @@ class IBKRClient:
         details = list(app.contract_details.get(req_id, []))
         req_errors = self._errors_for_req(req_id)
         if not details:
+            connection_closed = "IBKR connection closed" in self._client_warnings
+            if connection_closed and not req_errors:
+                self._record_error(
+                    f"IBKR connection closed before contract details returned for {symbol}",
+                    req_id=req_id,
+                    failure_stage="contract_resolution",
+                )
+                req_errors = self._errors_for_req(req_id)
+            if req_errors and self._failure_stage is None:
+                self._failure_stage = "contract_resolution"
             missing_warnings = [f"no contract details returned for {symbol}"]
             if any(error.code in _CONTRACT_ERROR_CODES for error in req_errors):
                 missing_warnings.append(
