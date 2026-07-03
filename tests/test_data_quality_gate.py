@@ -65,7 +65,13 @@ def test_data_quality_gate_fails_zero_volume_by_default(tmp_path: Path) -> None:
     assert report.ok is False
     assert report.final_status == DataQualityGateStatus.FAILED
     assert report.results[0].zero_volume_bars == 1
+    assert report.results[0].zero_volume_sample_timestamps == [
+        "2026-05-18T21:35:00+00:00"
+    ]
     assert [issue.code for issue in report.results[0].issues] == ["zero_volume_bars"]
+    assert "sample timestamps: 2026-05-18T21:35:00+00:00" in (
+        report.results[0].issues[0].message
+    )
 
 
 def test_data_quality_gate_threshold_can_document_known_partial_data(tmp_path: Path) -> None:
@@ -78,6 +84,9 @@ def test_data_quality_gate_threshold_can_document_known_partial_data(tmp_path: P
     assert report.ok is True
     assert report.final_status == DataQualityGateStatus.PASSED
     assert report.results[0].zero_volume_bars == 1
+    assert report.results[0].zero_volume_sample_timestamps == [
+        "2026-05-18T21:35:00+00:00"
+    ]
 
 
 def test_data_quality_gate_fails_duplicate_timestamps(tmp_path: Path) -> None:
@@ -106,6 +115,18 @@ def test_data_quality_gate_report_serializes_to_markdown(tmp_path: Path) -> None
     assert payload["report_type"] == "data_quality_gate"
     assert "Broker-free Data Quality Gate" in markdown
     assert "No order APIs invoked" in markdown
+
+
+def test_data_quality_gate_markdown_includes_zero_volume_samples(tmp_path: Path) -> None:
+    scenario = zero_volume_bars(tmp_path / "data" / "historical")
+    report = build_data_quality_gate_report(
+        load_config(load_dotenv_file=False),
+        gate_request(scenario.root, "DBA"),
+    )
+
+    markdown = markdown_summary(report.model_dump(mode="json"))
+
+    assert "zero_samples=`2026-05-18T21:35:00+00:00`" in markdown
 
 
 def test_data_quality_gate_handles_relative_manifest_paths_from_other_cwd(
@@ -168,8 +189,12 @@ def test_data_quality_gate_cli_fails_closed_for_zero_volume(
     assert result.exit_code == 1
     assert "Broker contacted: false" in result.output
     assert "zero-volume bars observed 1" in result.output
+    assert "sample timestamps: 2026-05-18T21:35:00+00:00" in result.output
     payload = json.loads(Path("reports/latest_data_quality_gate.json").read_text())
     assert payload["ok"] is False
+    assert payload["results"][0]["zero_volume_sample_timestamps"] == [
+        "2026-05-18T21:35:00+00:00"
+    ]
     assert payload["broker_contacted"] is False
     assert payload["order_routing_enabled"] is False
 

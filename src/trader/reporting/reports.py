@@ -424,6 +424,9 @@ def history_readiness_markdown(payload: Mapping[str, Any]) -> str:
                 f"last=`{summary.get('last_timestamp')}` "
                 f"duplicates=`{summary.get('duplicate_timestamps_count')}` "
                 f"gaps=`{len(summary.get('missing_timestamp_gaps', []))}` "
+                f"zero_volume=`{summary.get('zero_volume_bars')}` "
+                "zero_samples="
+                f"`{_sample_values(summary.get('zero_volume_sample_timestamps', []))}` "
                 f"invalid_ohlc=`{summary.get('invalid_ohlc_bars')}` "
                 f"negative_volume=`{summary.get('negative_volume_bars')}`"
             )
@@ -542,6 +545,9 @@ def history_load_markdown(payload: Mapping[str, Any]) -> str:
                 f"last=`{summary.get('last_timestamp')}` "
                 f"duplicates=`{summary.get('duplicate_timestamps_count')}` "
                 f"gaps=`{summary.get('missing_gap_count')}` "
+                f"zero_volume=`{summary.get('zero_volume_count')}` "
+                "zero_samples="
+                f"`{_sample_values(summary.get('zero_volume_sample_timestamps', []))}` "
                 f"malformed=`{summary.get('malformed_line_count')}` "
                 f"invalid_ohlc=`{summary.get('invalid_ohlc_count')}` "
                 f"negative_volume=`{summary.get('negative_volume_count')}`"
@@ -615,6 +621,7 @@ def data_quality_gate_markdown(payload: Mapping[str, Any]) -> str:
                 f"`{result.get('symbol')}` status=`{result.get('status')}` "
                 f"bars=`{result.get('bars_count')}` "
                 f"zero_volume=`{result.get('zero_volume_bars')}` "
+                f"zero_samples=`{_sample_values(result.get('zero_volume_sample_timestamps', []))}` "
                 f"duplicates=`{result.get('duplicate_timestamps_count')}` "
                 f"gaps=`{result.get('missing_gap_count')}` "
                 f"malformed=`{result.get('malformed_line_count')}` "
@@ -1454,3 +1461,9 @@ def _warnings_and_errors(warnings: list[Any], errors: list[Any]) -> list[str]:
     else:
         lines.append("- None")
     return lines
+
+
+def _sample_values(values: Any) -> str:
+    if not isinstance(values, list) or not values:
+        return "none"
+    return ", ".join(str(value) for value in values)

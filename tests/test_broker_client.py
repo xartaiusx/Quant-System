@@ -1098,6 +1098,20 @@ def test_readiness_detects_negative_volume() -> None:
     assert summary.negative_volume_bars == 1
 
 
+def test_readiness_reports_zero_volume_sample_timestamps() -> None:
+    bars = [
+        snapshot_bar(timestamp="20260518  09:30:00"),
+        snapshot_bar(timestamp="20260518  09:35:00", volume=Decimal("0")),
+    ]
+    manifest = snapshot_manifest(bars)
+
+    summary = readiness_summary_for_snapshot(manifest, bars, now=manifest.generated_at)
+
+    assert summary.readiness_status == HistoricalReadinessStatus.PARTIAL
+    assert summary.zero_volume_bars == 1
+    assert summary.zero_volume_sample_timestamps == ["2026-05-18T09:35:00+00:00"]
+
+
 def test_readiness_handles_empty_bars() -> None:
     manifest = snapshot_manifest([])
 

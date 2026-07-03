@@ -2421,6 +2421,8 @@ def _print_history_load_result(report: HistoricalLoaderReport) -> None:
     table.add_column("Last")
     table.add_column("Duplicates")
     table.add_column("Gaps")
+    table.add_column("Zero Vol")
+    table.add_column("Zero Samples")
     table.add_column("Malformed")
     table.add_column("Invalid OHLC")
     table.add_column("Negative Vol")
@@ -2433,11 +2435,14 @@ def _print_history_load_result(report: HistoricalLoaderReport) -> None:
             summary.last_timestamp.isoformat() if summary.last_timestamp else "n/a",
             str(summary.duplicate_timestamps_count),
             str(summary.missing_gap_count),
+            str(summary.zero_volume_count),
+            _format_sample_values(summary.zero_volume_sample_timestamps),
             str(summary.malformed_line_count),
             str(summary.invalid_ohlc_count),
             str(summary.negative_volume_count),
         )
     console.print(table)
+    _print_zero_volume_samples(report.summaries)
     if report.results and not report.summaries:
         for result in report.results:
             console.print(f"{result.symbol}: {_enum_value(result.load_status)}")
@@ -2452,6 +2457,7 @@ def _print_data_quality_gate_result(report: DataQualityGateReport) -> None:
     table.add_column("Status")
     table.add_column("Bars")
     table.add_column("Zero Vol")
+    table.add_column("Zero Samples")
     table.add_column("Duplicates")
     table.add_column("Gaps")
     table.add_column("Invalid OHLC")
@@ -2462,12 +2468,14 @@ def _print_data_quality_gate_result(report: DataQualityGateReport) -> None:
             _enum_value(result.status),
             str(result.bars_count),
             str(result.zero_volume_bars),
+            _format_sample_values(result.zero_volume_sample_timestamps),
             str(result.duplicate_timestamps_count),
             str(result.missing_gap_count),
             str(result.invalid_ohlc_count),
             str(result.negative_volume_count),
         )
     console.print(table)
+    _print_zero_volume_samples(report.results)
     console.print(f"Broker contacted: {str(report.broker_contacted).lower()}.")
     console.print(f"Final status: {_enum_value(report.final_status)}")
     if report.warnings:
@@ -2561,6 +2569,8 @@ def _print_history_readiness_result(report: HistoricalReadinessReport) -> None:
     table.add_column("Sorted")
     table.add_column("Duplicates")
     table.add_column("Gaps")
+    table.add_column("Zero Vol")
+    table.add_column("Zero Samples")
     table.add_column("Invalid OHLC")
     table.add_column("Negative Vol")
     table.add_column("Stale")
@@ -2574,11 +2584,14 @@ def _print_history_readiness_result(report: HistoricalReadinessReport) -> None:
             str(summary.sorted_timestamps),
             str(summary.duplicate_timestamps_count),
             str(len(summary.missing_timestamp_gaps)),
+            str(summary.zero_volume_bars),
+            _format_sample_values(summary.zero_volume_sample_timestamps),
             str(summary.invalid_ohlc_bars),
             str(summary.negative_volume_bars),
             str(summary.stale_snapshot),
         )
     console.print(table)
+    _print_zero_volume_samples(report.summaries)
     console.print(f"Final status: {report.final_status}")
     console.print("Order routing: disabled.")
     console.print("No order APIs invoked.")
@@ -2616,6 +2629,29 @@ def _broker_next_step(report: BrokerDiagnosticReport) -> str:
 
 def _enum_value(value: object) -> str:
     return str(getattr(value, "value", value))
+
+
+def _format_sample_values(values: list[str]) -> str:
+    return ", ".join(values) if values else "none"
+
+
+def _print_zero_volume_samples(items: list[Any]) -> None:
+    rows = [
+        (
+            str(item.symbol),
+            list(item.zero_volume_sample_timestamps),
+        )
+        for item in items
+        if item.zero_volume_sample_timestamps
+    ]
+    if not rows:
+        return
+
+    console.print("[yellow]Zero-volume samples[/yellow]")
+    for symbol, samples in rows:
+        console.print(
+            f"- {escape(symbol)} sample timestamps: {escape(', '.join(samples))}"
+        )
 
 
 def _format_optional_rate(value: float | None) -> str:

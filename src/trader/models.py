@@ -829,6 +829,7 @@ class HistoricalReadinessSummary(SerializableModel):
     missing_timestamp_gaps: list[str] = Field(default_factory=list)
     largest_gap_seconds: float | None = None
     zero_volume_bars: int = 0
+    zero_volume_sample_timestamps: list[str] = Field(default_factory=list)
     negative_volume_bars: int = 0
     invalid_ohlc_bars: int = 0
     stale_snapshot: bool = False
@@ -965,6 +966,8 @@ class HistoricalDatasetSummary(SerializableModel):
     duplicate_timestamps_count: int = 0
     missing_gap_count: int = 0
     largest_gap_seconds: float | None = None
+    zero_volume_count: int = 0
+    zero_volume_sample_timestamps: list[str] = Field(default_factory=list)
     malformed_line_count: int = 0
     invalid_ohlc_count: int = 0
     negative_volume_count: int = 0
@@ -2277,6 +2280,7 @@ class DataQualityGateSymbolResult(SerializableModel):
     status: DataQualityGateStatus
     bars_count: int = 0
     zero_volume_bars: int = 0
+    zero_volume_sample_timestamps: list[str] = Field(default_factory=list)
     duplicate_timestamps_count: int = 0
     missing_gap_count: int = 0
     malformed_line_count: int = 0

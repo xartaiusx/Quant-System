@@ -27,6 +27,7 @@ from trader.models import (
 DEFAULT_HISTORICAL_ROOT = Path("data/historical")
 _SNAPSHOT_STALE_AFTER_SECONDS = 48 * 60 * 60
 _MIN_READY_BARS = 1
+_QUALITY_SAMPLE_LIMIT = 5
 
 
 def write_historical_snapshot_result(
@@ -294,7 +295,12 @@ def readiness_summary_for_snapshot(
                 f"{previous.isoformat()} to {current.isoformat()} gap {gap_seconds:g}s"
             )
 
-    zero_volume_bars = sum(1 for _timestamp, bar in parsed if bar.volume == 0)
+    zero_volume_timestamps = [
+        timestamp.isoformat()
+        for timestamp, bar in parsed
+        if bar.volume is not None and bar.volume == 0
+    ]
+    zero_volume_bars = len(zero_volume_timestamps)
     negative_volume_bars = sum(
         1 for _timestamp, bar in parsed if bar.volume is not None and bar.volume < 0
     )
@@ -354,6 +360,7 @@ def readiness_summary_for_snapshot(
         missing_timestamp_gaps=missing_timestamp_gaps,
         largest_gap_seconds=largest_gap_seconds,
         zero_volume_bars=zero_volume_bars,
+        zero_volume_sample_timestamps=zero_volume_timestamps[:_QUALITY_SAMPLE_LIMIT],
         negative_volume_bars=negative_volume_bars,
         invalid_ohlc_bars=invalid_ohlc_bars,
         stale_snapshot=stale_snapshot,
