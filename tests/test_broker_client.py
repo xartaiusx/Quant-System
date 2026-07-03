@@ -602,13 +602,10 @@ def test_ibkr_request_error_releases_matching_pending_request_event() -> None:
 
     assert contract_event.is_set() is True
     assert market_event.is_set() is False
-    assert app.errors == [
-        BrokerErrorEvent(
-            req_id=101,
-            code=200,
-            message="No security definition has been found",
-        )
-    ]
+    assert len(app.errors) == 1
+    assert app.errors[0].req_id == 101
+    assert app.errors[0].code == 200
+    assert app.errors[0].message == "No security definition has been found"
 
 
 def test_ibkr_global_request_error_releases_all_pending_request_events() -> None:
@@ -625,7 +622,10 @@ def test_ibkr_global_request_error_releases_all_pending_request_events() -> None
     assert contract_event.is_set() is True
     assert market_event.is_set() is True
     assert historical_event.is_set() is True
-    assert app.errors == [BrokerErrorEvent(req_id=-1, code=504, message="Not connected")]
+    assert len(app.errors) == 1
+    assert app.errors[0].req_id == -1
+    assert app.errors[0].code == 504
+    assert app.errors[0].message == "Not connected"
 
 
 def test_ibkr_connection_closed_releases_all_pending_request_events() -> None:
