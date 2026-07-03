@@ -213,6 +213,10 @@ not contact IBKR, evaluate signals, generate order intents, model direct
 futures, simulate fills, perform portfolio accounting, or compute P&L.
 Zero-volume diagnostics include bounded sample timestamps so partial ETF data
 warnings can be audited without opening raw snapshot JSONL files.
+Optional average-volume and average-dollar-volume thresholds can be set for
+broker-free liquidity screening before a symbol is promoted into later
+research gates. These thresholds do not generate signals, orders, fills, or
+P&L.
 
 `backtest-feed` is also offline-only. It reads loaded local historical datasets,
 normalizes them into aligned bar-feed frames, writes feed reports, and does not

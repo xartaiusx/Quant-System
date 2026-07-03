@@ -580,6 +580,8 @@ def data_quality_gate_markdown(payload: Mapping[str, Any]) -> str:
         f"- What-to-show filter: `{request.get('what_to_show')}`",
         f"- Minimum bars: `{request.get('min_bars')}`",
         f"- Max zero-volume bars: `{request.get('max_zero_volume_bars')}`",
+        f"- Minimum average volume: `{request.get('min_average_volume')}`",
+        f"- Minimum average dollar volume: `{request.get('min_average_dollar_volume')}`",
         f"- Max missing gaps: `{request.get('max_missing_gap_count')}`",
         f"- Allow stale snapshot: `{request.get('allow_stale_snapshot')}`",
         f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
@@ -622,6 +624,8 @@ def data_quality_gate_markdown(payload: Mapping[str, Any]) -> str:
                 f"bars=`{result.get('bars_count')}` "
                 f"zero_volume=`{result.get('zero_volume_bars')}` "
                 f"zero_samples=`{_sample_values(result.get('zero_volume_sample_timestamps', []))}` "
+                f"avg_volume=`{result.get('average_volume')}` "
+                f"avg_dollar_volume=`{result.get('average_dollar_volume')}` "
                 f"duplicates=`{result.get('duplicate_timestamps_count')}` "
                 f"gaps=`{result.get('missing_gap_count')}` "
                 f"malformed=`{result.get('malformed_line_count')}` "

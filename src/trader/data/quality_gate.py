@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 from trader.config import TraderConfig
@@ -115,6 +116,8 @@ def _symbol_result(
         zero_volume_sample_timestamps=(
             readiness_summary.zero_volume_sample_timestamps if readiness_summary else []
         ),
+        average_volume=summary.average_volume if summary else None,
+        average_dollar_volume=summary.average_dollar_volume if summary else None,
         duplicate_timestamps_count=summary.duplicate_timestamps_count if summary else 0,
         missing_gap_count=summary.missing_gap_count if summary else 0,
         malformed_line_count=summary.malformed_line_count if summary else 0,
@@ -170,6 +173,22 @@ def _quality_issues(
         comparison="min",
     )
     _zero_volume_issue(issues, symbol, request, readiness_summary)
+    _min_decimal_issue(
+        issues,
+        symbol,
+        code="average_volume",
+        label="average volume",
+        observed=summary.average_volume,
+        threshold=request.min_average_volume,
+    )
+    _min_decimal_issue(
+        issues,
+        symbol,
+        code="average_dollar_volume",
+        label="average dollar volume",
+        observed=summary.average_dollar_volume,
+        threshold=request.min_average_dollar_volume,
+    )
     _max_issue(
         issues,
         symbol,
@@ -278,14 +297,41 @@ def _zero_volume_issue(
     )
 
 
+def _min_decimal_issue(
+    issues: list[DataQualityGateIssue],
+    symbol: str,
+    *,
+    code: str,
+    label: str,
+    observed: Decimal | None,
+    threshold: Decimal,
+) -> None:
+    if threshold == 0:
+        return
+    if observed is not None and observed >= threshold:
+        return
+
+    observed_text = "missing" if observed is None else str(observed)
+    issues.append(
+        _issue(
+            symbol,
+            "error",
+            code,
+            f"{label} observed {observed_text}; expected at least {threshold}",
+            observed=observed,
+            threshold=threshold,
+        )
+    )
+
+
 def _issue(
     symbol: str,
     severity: str,
     code: str,
     message: str,
     *,
-    observed: int | float | str | bool | None = None,
-    threshold: int | float | str | bool | None = None,
+    observed: int | float | str | bool | Decimal | None = None,
+    threshold: int | float | str | bool | Decimal | None = None,
 ) -> DataQualityGateIssue:
     return DataQualityGateIssue(
         symbol=symbol,

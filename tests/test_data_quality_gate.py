@@ -89,6 +89,74 @@ def test_data_quality_gate_threshold_can_document_known_partial_data(tmp_path: P
     ]
 
 
+def test_data_quality_gate_records_liquidity_metrics(tmp_path: Path) -> None:
+    scenario = clean_two_symbol_dataset(tmp_path / "data" / "historical")
+
+    report = build_data_quality_gate_report(
+        load_config(load_dotenv_file=False),
+        gate_request(scenario.root, "SPY"),
+    )
+
+    assert report.ok is True
+    assert report.results[0].average_volume == Decimal("1000")
+    assert report.results[0].average_dollar_volume == Decimal("100500.00")
+
+
+def test_data_quality_gate_fails_min_average_volume_threshold(tmp_path: Path) -> None:
+    scenario = clean_two_symbol_dataset(tmp_path / "data" / "historical")
+    request = gate_request(scenario.root, "SPY")
+    request = request.model_copy(update={"min_average_volume": Decimal("1001")})
+
+    report = build_data_quality_gate_report(load_config(load_dotenv_file=False), request)
+
+    assert report.ok is False
+    assert report.final_status == DataQualityGateStatus.FAILED
+    assert report.results[0].average_volume == Decimal("1000")
+    assert "average_volume" in {issue.code for issue in report.results[0].issues}
+    assert "average volume observed 1000; expected at least 1001" in report.errors
+
+
+def test_data_quality_gate_fails_min_average_dollar_volume_threshold(
+    tmp_path: Path,
+) -> None:
+    scenario = clean_two_symbol_dataset(tmp_path / "data" / "historical")
+    request = gate_request(scenario.root, "SPY")
+    request = request.model_copy(
+        update={"min_average_dollar_volume": Decimal("100500.01")}
+    )
+
+    report = build_data_quality_gate_report(load_config(load_dotenv_file=False), request)
+
+    assert report.ok is False
+    assert report.final_status == DataQualityGateStatus.FAILED
+    assert report.results[0].average_dollar_volume == Decimal("100500.00")
+    assert "average_dollar_volume" in {
+        issue.code for issue in report.results[0].issues
+    }
+    assert (
+        "average dollar volume observed 100500.00; expected at least 100500.01"
+        in report.errors
+    )
+
+
+def test_data_quality_gate_passes_liquidity_thresholds_at_observed_values(
+    tmp_path: Path,
+) -> None:
+    scenario = clean_two_symbol_dataset(tmp_path / "data" / "historical")
+    request = gate_request(scenario.root, "SPY")
+    request = request.model_copy(
+        update={
+            "min_average_volume": Decimal("1000"),
+            "min_average_dollar_volume": Decimal("100500.00"),
+        }
+    )
+
+    report = build_data_quality_gate_report(load_config(load_dotenv_file=False), request)
+
+    assert report.ok is True
+    assert report.final_status == DataQualityGateStatus.PASSED
+
+
 def test_data_quality_gate_fails_duplicate_timestamps(tmp_path: Path) -> None:
     scenario = duplicate_timestamps(tmp_path / "data" / "historical")
 
@@ -197,6 +265,36 @@ def test_data_quality_gate_cli_fails_closed_for_zero_volume(
     ]
     assert payload["broker_contacted"] is False
     assert payload["order_routing_enabled"] is False
+
+
+def test_data_quality_gate_cli_accepts_liquidity_threshold_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = clean_two_symbol_dataset(tmp_path / "data" / "historical")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "data-quality-gate",
+            "--symbols",
+            "SPY",
+            "--base-path",
+            scenario.root.as_posix(),
+            "--min-bars",
+            "3",
+            "--min-average-volume",
+            "1000",
+            "--min-average-dollar-volume",
+            "100500",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(Path("reports/latest_data_quality_gate.json").read_text())
+    assert payload["results"][0]["average_volume"] == "1000"
+    assert payload["results"][0]["average_dollar_volume"] == "100500.00"
 
 
 def test_data_quality_gate_path_has_no_socket_dependencies() -> None:

@@ -968,6 +968,12 @@ class HistoricalDatasetSummary(SerializableModel):
     largest_gap_seconds: float | None = None
     zero_volume_count: int = 0
     zero_volume_sample_timestamps: list[str] = Field(default_factory=list)
+    volume_count: int = 0
+    total_volume: Decimal = Decimal("0")
+    average_volume: Decimal | None = None
+    dollar_volume_count: int = 0
+    total_dollar_volume: Decimal = Decimal("0")
+    average_dollar_volume: Decimal | None = None
     malformed_line_count: int = 0
     invalid_ohlc_count: int = 0
     negative_volume_count: int = 0
@@ -2194,6 +2200,8 @@ class DataQualityGateRequest(SerializableModel):
     base_data_path: str = "data/historical"
     min_bars: int = 50
     max_zero_volume_bars: int = 0
+    min_average_volume: Decimal = Decimal("0")
+    min_average_dollar_volume: Decimal = Decimal("0")
     max_duplicate_timestamps: int = 0
     max_missing_gap_count: int = 0
     max_malformed_lines: int = 0
@@ -2245,6 +2253,13 @@ class DataQualityGateRequest(SerializableModel):
             raise ValueError("data-quality thresholds must be non-negative")
         return value
 
+    @field_validator("min_average_volume", "min_average_dollar_volume")
+    @classmethod
+    def validate_non_negative_decimal(cls, value: Decimal) -> Decimal:
+        if value < 0:
+            raise ValueError("data-quality liquidity thresholds must be non-negative")
+        return value
+
 
 class DataQualityGateIssue(SerializableModel):
     """One offline data-quality gate issue."""
@@ -2253,8 +2268,8 @@ class DataQualityGateIssue(SerializableModel):
     severity: str
     code: str
     message: str
-    observed_value: int | float | str | bool | None = None
-    threshold_value: int | float | str | bool | None = None
+    observed_value: int | float | str | bool | Decimal | None = None
+    threshold_value: int | float | str | bool | Decimal | None = None
 
     @field_validator("symbol")
     @classmethod
@@ -2281,6 +2296,8 @@ class DataQualityGateSymbolResult(SerializableModel):
     bars_count: int = 0
     zero_volume_bars: int = 0
     zero_volume_sample_timestamps: list[str] = Field(default_factory=list)
+    average_volume: Decimal | None = None
+    average_dollar_volume: Decimal | None = None
     duplicate_timestamps_count: int = 0
     missing_gap_count: int = 0
     malformed_line_count: int = 0
