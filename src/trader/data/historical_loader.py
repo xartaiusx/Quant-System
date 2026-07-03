@@ -29,6 +29,7 @@ from trader.models import (
 _SNAPSHOT_STALE_AFTER_SECONDS = 48 * 60 * 60
 _MANIFEST_SUFFIX = "_manifest.json"
 _BARS_SUFFIX = "_bars.jsonl"
+_QUALITY_SAMPLE_LIMIT = 5
 
 
 def discover_snapshots(
@@ -426,6 +427,11 @@ def _dataset_summary(
     malformed_count = sum(1 for issue in issues if issue.code == "malformed_jsonl_line")
     invalid_ohlc_count = sum(1 for issue in issues if issue.code == "invalid_ohlc")
     negative_volume_count = sum(1 for issue in issues if issue.code == "negative_volume")
+    zero_volume_timestamps = [
+        bar.timestamp.isoformat()
+        for bar in bars
+        if bar.volume is not None and bar.volume == 0
+    ]
     manifest_matches_bars = manifest.bar_count == len(bars)
     stale_snapshot = (
         now - manifest.generated_at
@@ -472,6 +478,8 @@ def _dataset_summary(
         duplicate_timestamps_count=duplicates,
         missing_gap_count=missing_gap_count,
         largest_gap_seconds=largest_gap,
+        zero_volume_count=len(zero_volume_timestamps),
+        zero_volume_sample_timestamps=zero_volume_timestamps[:_QUALITY_SAMPLE_LIMIT],
         malformed_line_count=malformed_count,
         invalid_ohlc_count=invalid_ohlc_count,
         negative_volume_count=negative_volume_count,

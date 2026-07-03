@@ -112,6 +112,9 @@ def _symbol_result(
         status=status,
         bars_count=summary.bars_count if summary else 0,
         zero_volume_bars=readiness_summary.zero_volume_bars if readiness_summary else 0,
+        zero_volume_sample_timestamps=(
+            readiness_summary.zero_volume_sample_timestamps if readiness_summary else []
+        ),
         duplicate_timestamps_count=summary.duplicate_timestamps_count if summary else 0,
         missing_gap_count=summary.missing_gap_count if summary else 0,
         malformed_line_count=summary.malformed_line_count if summary else 0,
@@ -166,14 +169,7 @@ def _quality_issues(
         threshold=request.min_bars,
         comparison="min",
     )
-    _max_issue(
-        issues,
-        symbol,
-        code="zero_volume_bars",
-        label="zero-volume bars",
-        observed=readiness_summary.zero_volume_bars,
-        threshold=request.max_zero_volume_bars,
-    )
+    _zero_volume_issue(issues, symbol, request, readiness_summary)
     _max_issue(
         issues,
         symbol,
@@ -253,6 +249,33 @@ def _max_issue(
                 threshold=threshold,
             )
         )
+
+
+def _zero_volume_issue(
+    issues: list[DataQualityGateIssue],
+    symbol: str,
+    request: DataQualityGateRequest,
+    readiness_summary: HistoricalReadinessSummary,
+) -> None:
+    observed = readiness_summary.zero_volume_bars
+    threshold = request.max_zero_volume_bars
+    if observed <= threshold:
+        return
+
+    message = f"zero-volume bars observed {observed}; expected no more than {threshold}"
+    if readiness_summary.zero_volume_sample_timestamps:
+        samples = ", ".join(readiness_summary.zero_volume_sample_timestamps)
+        message = f"{message}; sample timestamps: {samples}"
+    issues.append(
+        _issue(
+            symbol,
+            "error",
+            "zero_volume_bars",
+            message,
+            observed=observed,
+            threshold=threshold,
+        )
+    )
 
 
 def _issue(

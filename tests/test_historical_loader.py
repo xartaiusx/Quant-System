@@ -268,6 +268,22 @@ def test_detects_negative_volume(tmp_path: Path) -> None:
     assert report.summaries[0].negative_volume_count == 1
 
 
+def test_loader_summarizes_zero_volume_sample_timestamps(tmp_path: Path) -> None:
+    bars = [
+        fixture_bar(timestamp="20260518  21:30:00"),
+        fixture_bar(timestamp="20260518  21:35:00", volume=Decimal("0")),
+    ]
+    write_fixture_snapshot(tmp_path, bars=bars)
+
+    report = load_historical_snapshots(load_request(tmp_path, "SPY"))
+
+    assert report.results[0].load_status == HistoricalLoadStatus.LOADED
+    assert report.summaries[0].zero_volume_count == 1
+    assert report.summaries[0].zero_volume_sample_timestamps == [
+        "2026-05-18T21:35:00+00:00"
+    ]
+
+
 def test_detects_bar_count_mismatch(tmp_path: Path) -> None:
     write_fixture_snapshot(tmp_path, manifest_bar_count=99)
 

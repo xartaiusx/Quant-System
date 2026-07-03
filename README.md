@@ -211,6 +211,8 @@ zero-volume bars, duplicate timestamps, missing gaps, malformed records,
 invalid OHLC, negative volume, and stale snapshots, then writes reports. It does
 not contact IBKR, evaluate signals, generate order intents, model direct
 futures, simulate fills, perform portfolio accounting, or compute P&L.
+Zero-volume diagnostics include bounded sample timestamps so partial ETF data
+warnings can be audited without opening raw snapshot JSONL files.
 
 `backtest-feed` is also offline-only. It reads loaded local historical datasets,
 normalizes them into aligned bar-feed frames, writes feed reports, and does not
