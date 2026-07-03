@@ -665,6 +665,7 @@ Prerequisites:
 ```bash
 python -m trader.cli paper-readiness-run
 python -m trader.cli paper-readiness-run --symbols SPY,AAPL,GLD,USO,DBA --commodity-symbols GLD,USO,DBA
+python -m trader.cli paper-readiness-run --broker-stage-pause 2
 scripts/run-paper-readiness-run.sh
 ```
 
@@ -672,7 +673,9 @@ The command runs these stages sequentially:
 
 ```text
 broker-probe --timeout 15
+pause between broker-contact stages, default 1 second
 account --connect --timeout 15
+pause between broker-contact stages, default 1 second
 history-snapshot --symbols SPY,AAPL,GLD,USO,DBA --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1 --timeout 30
 history-load --symbols SPY,AAPL,GLD,USO,DBA --bar-size "5 mins" --what-to-show TRADES
 commodity-universe --symbols GLD,USO,DBA
@@ -682,6 +685,7 @@ signal-evaluate --symbols SPY,AAPL,GLD,USO,DBA --bar-size "5 mins" --what-to-sho
 Expected behavior:
 
 - contacts IBKR only through read-only broker, account-summary, and historical-data requests
+- uses distinct IBKR client IDs for broker-contact stages: base ID, base ID + 1, and base ID + 2
 - rejects mock account fallback as readiness success
 - writes stage reports under `reports/`
 - writes `reports/paper_readiness_run_<timestamp>.json` and `.md`

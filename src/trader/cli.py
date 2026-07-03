@@ -1326,6 +1326,13 @@ def paper_readiness_run(
         float,
         typer.Option("--history-timeout", help="Historical request timeout seconds."),
     ] = 30,
+    broker_stage_pause: Annotated[
+        float,
+        typer.Option(
+            "--broker-stage-pause",
+            help="Pause seconds between broker-contact stages.",
+        ),
+    ] = 1,
     base_path: Annotated[
         Path,
         typer.Option("--base-path", help="Historical snapshot root."),
@@ -1344,6 +1351,7 @@ def paper_readiness_run(
     config = _load_config_or_exit()
     broker_timeout = _validate_timeout_option(broker_timeout) or 15
     history_timeout = _validate_timeout_option(history_timeout) or 30
+    broker_stage_pause = _validate_non_negative_seconds_option(broker_stage_pause, 30)
     use_rth = _validate_use_rth_option(use_rth)
     request = PaperReadinessRunRequest(
         symbols=parse_symbols(symbols),
@@ -1354,6 +1362,7 @@ def paper_readiness_run(
         use_rth=use_rth,
         broker_timeout_seconds=broker_timeout,
         history_timeout_seconds=history_timeout,
+        broker_stage_pause_seconds=broker_stage_pause,
         base_data_path=base_path.as_posix(),
         short_window=short_window,
         long_window=long_window,
@@ -1655,6 +1664,13 @@ def _validate_timeout_option(timeout: float | None) -> float | None:
         console.print("[red]Timeout must be greater than zero seconds.[/red]")
         raise typer.Exit(code=2)
     return timeout
+
+
+def _validate_non_negative_seconds_option(value: float, maximum: float) -> float:
+    if value < 0 or value > maximum:
+        console.print(f"[red]Value must be between 0 and {maximum:g} seconds.[/red]")
+        raise typer.Exit(code=2)
+    return value
 
 
 def _validate_use_rth_option(use_rth: int) -> int:
@@ -2120,6 +2136,10 @@ def _print_paper_readiness_run_result(report: PaperReadinessRunReport) -> None:
     table.add_row("Final status", _enum_value(report.final_status))
     table.add_row("Selected universe", ", ".join(report.selected_universe))
     table.add_row("Commodity proxies", ", ".join(report.commodity_symbols))
+    table.add_row(
+        "Broker stage pause",
+        f"{report.request.broker_stage_pause_seconds:g}s",
+    )
     table.add_row("Broker connected", str(report.broker_connected).lower())
     table.add_row(
         "Account summary verified",
