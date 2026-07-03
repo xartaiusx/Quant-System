@@ -47,6 +47,12 @@ class TimeoutFakeApp:
         self.managed_accounts_event = threading.Event()
         self.account_summary_event = threading.Event()
         self.positions_event = threading.Event()
+        self.market_data_farm_ready_event = threading.Event()
+        self.historical_data_farm_ready_event = threading.Event()
+        self.security_definition_farm_ready_event = threading.Event()
+        self.market_data_farm_ready_event.set()
+        self.historical_data_farm_ready_event.set()
+        self.security_definition_farm_ready_event.set()
         self.contract_details_events: dict[int, threading.Event] = {}
         self.market_data_events: dict[int, threading.Event] = {}
         self.historical_data_events: dict[int, threading.Event] = {}
@@ -307,6 +313,17 @@ class ConnectionClosedContractFakeApp(MarketDataSuccessFakeApp):
         self.warnings.append("IBKR connection closed")
         self.contract_details[reqId] = []
         self.contract_details_events.setdefault(reqId, threading.Event()).set()
+
+
+class SecurityDefinitionFarmNotReadyFakeApp(MarketDataSuccessFakeApp):
+    def __init__(self) -> None:
+        super().__init__()
+        self.security_definition_farm_ready_event.clear()
+        self.contract_details_requested = False
+
+    def reqContractDetails(self, reqId: int, contract: object) -> None:
+        self.contract_details_requested = True
+        super().reqContractDetails(reqId, contract)
 
 
 class MissingBidAskFakeApp(MarketDataSuccessFakeApp):
@@ -579,6 +596,19 @@ def test_ibkr_farm_status_codes_are_non_fatal_warnings() -> None:
     assert app.warnings == [f"IBKR {code}: farm status {code}" for code in (2103, 2105, 2107, 2108)]
 
 
+def test_ibkr_data_farm_ok_codes_set_readiness_events() -> None:
+    app = _ReadOnlyIBKRApp()
+
+    app.error(-1, 2104, "Market data farm connection is OK")
+    app.error(-1, 2106, "HMDS data farm connection is OK")
+    app.error(-1, 2158, "Sec-def data farm connection is OK")
+
+    assert app.market_data_farm_ready_event.is_set() is True
+    assert app.historical_data_farm_ready_event.is_set() is True
+    assert app.security_definition_farm_ready_event.is_set() is True
+    assert app.errors == []
+
+
 def test_ibkr_informational_error_does_not_release_pending_request_events() -> None:
     app = _ReadOnlyIBKRApp()
     contract_event = threading.Event()
@@ -721,6 +751,25 @@ def test_contract_resolution_connection_close_is_structured_error() -> None:
     assert result.errors[0].req_id > 0
     assert "connection closed before contract details returned" in result.errors[0].message
     assert "no contract details returned" in " ".join(result.warnings).lower()
+    client.disconnect()
+
+
+def test_contract_resolution_requires_security_definition_farm_readiness() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = SecurityDefinitionFarmNotReadyFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    result = client.resolve_contract("SPY", timeout=0.01)
+
+    assert result.resolved is False
+    assert fake_app.contract_details_requested is False
+    assert result.errors
+    assert "security-definition farm readiness was not observed" in result.errors[0].message
     client.disconnect()
 
 

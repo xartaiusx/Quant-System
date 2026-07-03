@@ -190,6 +190,8 @@ IB Gateway paper is documented as `4002`; IB Gateway live is documented as `4001
 
 Broker-probe reports include `connection_attempted`, `failure_stage`, `ibapi_available`, `ibapi_import_error`, `order_routing_enabled=false`, and `no_order_guarantee=true`.
 
+Broker data requests treat IBKR farm-status callbacks as readiness diagnostics. Contract resolution waits for the security-definition farm OK callback before requesting contract details, so startup races fail with a clear readiness error instead of routing ahead while TWS is still initializing API services.
+
 `market-probe` is also read-only. It may call IBKR contract, market-data, and
 historical-data request APIs, then cleans up data requests with `cancelMktData`
 and `cancelHistoricalData`. It does not submit, modify, or cancel orders.

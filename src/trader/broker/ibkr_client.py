@@ -88,6 +88,9 @@ IBKR_PORT_NOTES = {
 }
 
 _INFORMATIONAL_ERROR_CODES = {2103, 2104, 2105, 2106, 2107, 2108, 2158, 10167}
+_MARKET_DATA_FARM_READY_CODES = {2104}
+_HISTORICAL_DATA_FARM_READY_CODES = {2106}
+_SECURITY_DEFINITION_FARM_READY_CODES = {2158}
 _CONTRACT_ERROR_CODES = {200}
 _MARKET_DATA_PERMISSION_CODES = {354, 10167}
 _ACCOUNT_SUMMARY_TAGS = "NetLiquidation,TotalCashValue,BuyingPower,DailyPnL"
@@ -95,6 +98,7 @@ _DEFAULT_HISTORICAL_DURATION = "1 D"
 _DEFAULT_HISTORICAL_BAR_SIZE = "5 mins"
 _DEFAULT_HISTORICAL_WHAT_TO_SHOW = "TRADES"
 _HISTORICAL_PACING_DELAY_SECONDS = 0.25
+_DATA_FARM_READY_WAIT_SECONDS = 5.0
 _MARKET_DATA_TYPE_CODES = {
     "live": 1,
     "frozen": 2,
@@ -141,6 +145,9 @@ class ReadOnlyAppProtocol(Protocol):
     managed_accounts_event: threading.Event
     account_summary_event: threading.Event
     positions_event: threading.Event
+    market_data_farm_ready_event: threading.Event
+    historical_data_farm_ready_event: threading.Event
+    security_definition_farm_ready_event: threading.Event
     contract_details_events: dict[int, threading.Event]
     market_data_events: dict[int, threading.Event]
     historical_data_events: dict[int, threading.Event]
@@ -233,6 +240,9 @@ class _ReadOnlyIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
         self.managed_accounts_event = threading.Event()
         self.account_summary_event = threading.Event()
         self.positions_event = threading.Event()
+        self.market_data_farm_ready_event = threading.Event()
+        self.historical_data_farm_ready_event = threading.Event()
+        self.security_definition_farm_ready_event = threading.Event()
         self.server_time: datetime | None = None
         self.raw_server_time: int | None = None
         self.managed_accounts: list[str] = []
@@ -423,10 +433,19 @@ class _ReadOnlyIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
         with self._lock:
             if errorCode in _INFORMATIONAL_ERROR_CODES:
                 self.warnings.append(f"IBKR {errorCode}: {message}")
+                self._mark_data_farm_ready(errorCode)
             else:
                 self.errors.append(event)
         if errorCode not in _INFORMATIONAL_ERROR_CODES:
             self._release_pending_request_events(reqId)
+
+    def _mark_data_farm_ready(self, error_code: int) -> None:
+        if error_code in _MARKET_DATA_FARM_READY_CODES:
+            self.market_data_farm_ready_event.set()
+        if error_code in _HISTORICAL_DATA_FARM_READY_CODES:
+            self.historical_data_farm_ready_event.set()
+        if error_code in _SECURITY_DEFINITION_FARM_READY_CODES:
+            self.security_definition_farm_ready_event.set()
 
     def _release_pending_request_events(self, req_id: int | None = None) -> None:
         with self._lock:
@@ -1257,6 +1276,20 @@ class IBKRClient:
         contract = _make_stock_contract(symbol)
         primary_exchange = getattr(contract, "primaryExchange", None) or None
 
+        if not self._wait_for_security_definition_farm_ready(app, request_timeout):
+            message = (
+                "security-definition farm readiness was not observed before "
+                f"contract resolution for {symbol}"
+            )
+            self._record_error(message, req_id=req_id, failure_stage="contract_resolution")
+            return None, ContractResolutionResult(
+                symbol=symbol,
+                primary_exchange=primary_exchange,
+                resolved=False,
+                errors=self._errors_for_req(req_id),
+                warnings=[message],
+            )
+
         try:
             app.reqContractDetails(req_id, contract)
         except RuntimeError as exc:
@@ -1818,6 +1851,27 @@ class IBKRClient:
 
     def _errors_for_req(self, req_id: int) -> list[BrokerErrorEvent]:
         return [error for error in self._client_errors if error.req_id in {req_id, -1}]
+
+    def _wait_for_security_definition_farm_ready(
+        self,
+        app: ReadOnlyAppProtocol,
+        timeout: float,
+    ) -> bool:
+        if app.security_definition_farm_ready_event.is_set():
+            return True
+
+        deadline = time.monotonic() + min(timeout, _DATA_FARM_READY_WAIT_SECONDS)
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            if app.security_definition_farm_ready_event.wait(
+                timeout=min(0.05, max(0, remaining))
+            ):
+                self._collect_app_events()
+                return True
+            self._collect_app_events()
+
+        self._collect_app_events()
+        return app.security_definition_farm_ready_event.is_set()
 
     def _wait_for_connection_ready(
         self,
