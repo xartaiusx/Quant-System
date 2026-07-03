@@ -11,6 +11,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
 
     if payload.get("report_type") == "broker_probe":
         return broker_probe_markdown(payload)
+    if payload.get("report_type") == "account_summary":
+        return account_summary_markdown(payload)
     if payload.get("report_type") == "market_probe":
         return market_probe_markdown(payload)
     if payload.get("report_type") == "history_snapshot":
@@ -33,6 +35,12 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return signal_contract_markdown(payload)
     if payload.get("report_type") == "signal_runner":
         return signal_runner_markdown(payload)
+    if payload.get("report_type") == "signal_evaluation":
+        return signal_evaluation_markdown(payload)
+    if payload.get("report_type") == "commodity_universe":
+        return commodity_universe_markdown(payload)
+    if payload.get("report_type") == "paper_readiness_run":
+        return paper_readiness_run_markdown(payload)
 
     lines = [
         f"# {payload.get('title', 'Trading Report')}",
@@ -141,6 +149,47 @@ def broker_probe_markdown(payload: Mapping[str, Any]) -> str:
     else:
         lines.append("- None")
 
+    return "\n".join(lines) + "\n"
+
+
+def account_summary_markdown(payload: Mapping[str, Any]) -> str:
+    """Render a read-only account-summary report."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    account_ids = payload.get("account_ids_masked", [])
+    account_fields = payload.get("account_summary_fields_by_account", {})
+
+    lines = [
+        f"# {payload.get('title', 'Read-only Broker Account Summary')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'account --connect')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Account summary verified: `{payload.get('account_summary_verified', False)}`",
+        f"- Account summary source: `{payload.get('account_summary_source', 'unknown')}`",
+        f"- Broker connected: `{payload.get('broker_connected', False)}`",
+        f"- Submitted orders: `{payload.get('submitted_orders', False)}`",
+        f"- Paper orders enabled: `{payload.get('paper_orders_enabled', False)}`",
+        f"- Read-Only API expected: `{payload.get('read_only_api_expected', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', False)}`",
+        f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
+        "",
+        "## Masked Accounts",
+        "",
+    ]
+    if account_ids:
+        for account_id in account_ids:
+            fields = (
+                account_fields.get(account_id, [])
+                if isinstance(account_fields, Mapping)
+                else []
+            )
+            lines.append(f"- `{account_id}` fields=`{', '.join(fields)}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
     return "\n".join(lines) + "\n"
 
 
@@ -994,6 +1043,248 @@ def signal_runner_markdown(payload: Mapping[str, Any]) -> str:
     if diagnostics.get("symbols"):
         for symbol in diagnostics.get("symbols", []):
             lines.append(f"- `{symbol}` missing_frames=`{missing.get(symbol, 0)}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def signal_evaluation_markdown(payload: Mapping[str, Any]) -> str:
+    """Render a broker-free analytical signal evaluation report."""
+
+    request = payload.get("request", {})
+    metadata = payload.get("metadata", {})
+    diagnostics = payload.get("diagnostics") or {}
+    feed_summary = payload.get("feed_summary") or {}
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    state_counts = diagnostics.get("observations_by_state", {})
+
+    lines = [
+        f"# {payload.get('title', 'Broker-free Analytical Signal Evaluation')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'signal-evaluate')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Evaluator: `{metadata.get('name', 'unknown')}`",
+        f"- Evaluator version: `{metadata.get('version', 'unknown')}`",
+        f"- Symbols requested: `{', '.join(payload.get('symbols_requested', []))}`",
+        f"- Alignment mode: `{request.get('alignment_mode', 'union')}`",
+        f"- Bar size filter: `{request.get('requested_bar_size')}`",
+        f"- What-to-show filter: `{request.get('requested_what_to_show')}`",
+        f"- Signal evaluation enabled: `{payload.get('signal_evaluation_enabled', False)}`",
+        f"- Generated signals: `{payload.get('generated_signals', True)}`",
+        f"- Signal count: `{payload.get('signal_count', 0)}`",
+        f"- Order intents generated: `{payload.get('order_intents_generated', True)}`",
+        f"- Orders simulated: `{payload.get('orders_simulated', True)}`",
+        f"- Fills simulated: `{payload.get('fills_simulated', True)}`",
+        f"- P&L calculated: `{payload.get('pnl_calculated', True)}`",
+        f"- Portfolio accounting: `{payload.get('portfolio_accounting', True)}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
+        "",
+        "## Scope",
+        "",
+        str(
+            payload.get(
+                "no_order_guarantee_statement",
+                "This report reads local files only and no orders were routed.",
+            )
+        ),
+        "",
+        str(
+            payload.get(
+                "no_execution_statement",
+                "This run emitted non-actionable analytical observations only. No "
+                "trading signals, order intents, order simulation, broker routing, "
+                "portfolio accounting, or P&L calculation was performed.",
+            )
+        ),
+        "",
+        "## Evaluation Summary",
+        "",
+        f"- Evaluation status: `{diagnostics.get('evaluation_status', 'unknown')}`",
+        f"- Feed status: `{diagnostics.get('feed_status', 'unknown')}`",
+        f"- Frame count: `{diagnostics.get('frame_count', 0)}`",
+        f"- Contexts built: `{diagnostics.get('contexts_built', 0)}`",
+        f"- Observations: `{diagnostics.get('observations_count', 0)}`",
+        f"- First timestamp: `{diagnostics.get('first_timestamp')}`",
+        f"- Last timestamp: `{diagnostics.get('last_timestamp')}`",
+        f"- Warmup observations: `{diagnostics.get('warmup_observations', 0)}`",
+        f"- Invalid-data observations: `{diagnostics.get('invalid_data_observations', 0)}`",
+        "",
+        "## Feed Summary",
+        "",
+        f"- Feed frames: `{feed_summary.get('frame_count', 0)}`",
+        f"- Feed bars: `{feed_summary.get('total_bars', 0)}`",
+        f"- Feed status: `{feed_summary.get('feed_status', 'unknown')}`",
+        "",
+        "## Condition States",
+        "",
+    ]
+    if state_counts:
+        for state, count in sorted(state_counts.items()):
+            lines.append(f"- `{state}` observations=`{count}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def commodity_universe_markdown(payload: Mapping[str, Any]) -> str:
+    """Render a broker-free commodity research universe report."""
+
+    instruments = payload.get("instruments", [])
+    categories = payload.get("categories", {})
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+
+    lines = [
+        f"# {payload.get('title', 'Broker-free Commodity Research Universe')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'commodity-universe')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Symbols requested: `{', '.join(payload.get('symbols_requested', []))}`",
+        f"- Commodity proxy universe: `{payload.get('commodity_proxy_universe', False)}`",
+        f"- Futures contracts enabled: `{payload.get('futures_contracts_enabled', True)}`",
+        f"- Direct futures data enabled: `{payload.get('direct_futures_data_enabled', True)}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Signal evaluation enabled: `{payload.get('signal_evaluation_enabled', True)}`",
+        f"- Generated signals: `{payload.get('generated_signals', True)}`",
+        f"- Signal count: `{payload.get('signal_count', 0)}`",
+        f"- Order intents generated: `{payload.get('order_intents_generated', True)}`",
+        f"- Orders simulated: `{payload.get('orders_simulated', True)}`",
+        f"- Fills simulated: `{payload.get('fills_simulated', True)}`",
+        f"- P&L calculated: `{payload.get('pnl_calculated', True)}`",
+        f"- Portfolio accounting: `{payload.get('portfolio_accounting', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
+        "",
+        "## Scope",
+        "",
+        str(
+            payload.get(
+                "no_order_guarantee_statement",
+                "This report is offline-only and does not contact a broker.",
+            )
+        ),
+        "",
+        str(
+            payload.get(
+                "no_execution_statement",
+                "This command lists commodity-linked security proxies for research only.",
+            )
+        ),
+        "",
+        "## Instruments",
+        "",
+    ]
+    if instruments:
+        for instrument in instruments:
+            lines.append(
+                "- "
+                f"`{instrument.get('symbol')}` category=`{instrument.get('category')}` "
+                f"sec_type=`{instrument.get('ibkr_sec_type')}` "
+                f"exposure=`{instrument.get('underlying_exposure')}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Categories", ""])
+    if categories:
+        for category, symbols in sorted(categories.items()):
+            lines.append(f"- `{category}`: `{', '.join(symbols)}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def paper_readiness_run_markdown(payload: Mapping[str, Any]) -> str:
+    """Render the read-only paper readiness orchestration report."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    stages = payload.get("stages", [])
+    report_paths = payload.get("report_paths", {})
+    account_ids = payload.get("account_ids_masked", [])
+    partial_symbols = payload.get("partial_symbols", [])
+
+    lines = [
+        f"# {payload.get('title', 'Read-only IBKR Paper Readiness Run')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'paper-readiness-run')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Selected universe: `{', '.join(payload.get('selected_universe', []))}`",
+        f"- Commodity symbols: `{', '.join(payload.get('commodity_symbols', []))}`",
+        f"- Broker connected: `{payload.get('broker_connected', False)}`",
+        f"- Account summary verified: `{payload.get('account_summary_verified', False)}`",
+        f"- History snapshot written: `{payload.get('history_snapshot_written', False)}`",
+        f"- History load completed: `{payload.get('history_load_completed', False)}`",
+        f"- Commodity universe verified: `{payload.get('commodity_universe_verified', False)}`",
+        f"- Signal evaluation completed: `{payload.get('signal_evaluation_completed', False)}`",
+        f"- Submitted orders: `{payload.get('submitted_orders', True)}`",
+        f"- Paper orders enabled: `{payload.get('paper_orders_enabled', True)}`",
+        f"- Configured allow paper orders: `{payload.get('configured_allow_paper_orders', True)}`",
+        f"- Read-Only API expected: `{payload.get('read_only_api_expected', False)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- Broker contact read-only: `{payload.get('broker_contact_read_only', False)}`",
+        f"- Futures contracts enabled: `{payload.get('futures_contracts_enabled', True)}`",
+        f"- Direct futures data enabled: `{payload.get('direct_futures_data_enabled', True)}`",
+        f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
+        "",
+        "## Scope",
+        "",
+        str(
+            payload.get(
+                "no_order_guarantee_statement",
+                "This readiness run is read-only and no orders were routed.",
+            )
+        ),
+        "",
+        str(
+            payload.get(
+                "futures_scope_statement",
+                "Direct futures contracts remain out of scope.",
+            )
+        ),
+        "",
+        "## Stages",
+        "",
+    ]
+    if stages:
+        for stage in stages:
+            lines.append(
+                "- "
+                f"`{stage.get('name', 'unknown')}` "
+                f"status=`{stage.get('final_status', 'unknown')}` "
+                f"ok=`{stage.get('ok', False)}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Masked Accounts", ""])
+    if account_ids:
+        lines.extend(f"- `{account_id}`" for account_id in account_ids)
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Partial Symbols", ""])
+    if partial_symbols:
+        lines.extend(f"- `{symbol}`" for symbol in partial_symbols)
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Report Paths", ""])
+    if report_paths:
+        for label, path in sorted(report_paths.items()):
+            lines.append(f"- `{label}`: `{path}`")
     else:
         lines.append("- None")
 

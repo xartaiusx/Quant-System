@@ -63,6 +63,15 @@ class MarketDataRequestType(StrEnum):
     DELAYED_FROZEN = "delayed_frozen"
 
 
+class CommodityProxyCategory(StrEnum):
+    """Commodity-linked research proxy groups."""
+
+    METALS = "metals"
+    ENERGY = "energy"
+    AGRICULTURE = "agriculture"
+    BROAD_BASKET = "broad_basket"
+
+
 class HistoricalReadinessStatus(StrEnum):
     """Historical snapshot readiness states for future simulation inputs."""
 
@@ -116,6 +125,40 @@ class DisabledSignalRunnerStatus(StrEnum):
     COMPLETED = "completed"
     PARTIAL = "partial"
     FAILED = "failed"
+
+
+class AnalyticalSignalConditionState(StrEnum):
+    """Approved non-actionable analytical condition states."""
+
+    CONDITION_MET = "condition_met"
+    CONDITION_NOT_MET = "condition_not_met"
+    INSUFFICIENT_DATA = "insufficient_data"
+    INVALID_DATA = "invalid_data"
+
+
+class AnalyticalSignalEvaluationStatus(StrEnum):
+    """Offline analytical signal evaluation run states."""
+
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class PaperReadinessRunStatus(StrEnum):
+    """Read-only IBKR paper-client readiness run states."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    FAILED = "failed"
+
+
+class PaperReadinessStageStatus(StrEnum):
+    """Stage-level status for the paper readiness orchestration."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 class Instrument(SerializableModel):
@@ -496,6 +539,110 @@ class HistoricalDataDiagnostic(SerializableModel):
     historical_end: str | None = None
     errors: list[BrokerErrorEvent] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class CommodityProxyInstrument(SerializableModel):
+    """Broker-free commodity-linked security proxy for research."""
+
+    symbol: str
+    name: str
+    category: CommodityProxyCategory
+    proxy_kind: str = "exchange_traded_product"
+    ibkr_sec_type: str = "STK"
+    exchange: str = "SMART"
+    currency: str = "USD"
+    underlying_exposure: str
+    futures_contract_enabled: bool = False
+    direct_futures_data_enabled: bool = False
+    notes: str = ""
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("symbol is required")
+        return normalized
+
+    @field_validator(
+        "name",
+        "proxy_kind",
+        "ibkr_sec_type",
+        "exchange",
+        "currency",
+        "underlying_exposure",
+    )
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("commodity proxy text fields cannot be empty")
+        return normalized.upper() if normalized.upper() in {"STK", "SMART", "USD"} else normalized
+
+    @model_validator(mode="after")
+    def validate_proxy_safety(self) -> CommodityProxyInstrument:
+        if self.ibkr_sec_type != "STK":
+            raise ValueError("commodity proxy instruments must remain STK securities")
+        if self.futures_contract_enabled:
+            raise ValueError("futures_contract_enabled must remain false")
+        if self.direct_futures_data_enabled:
+            raise ValueError("direct_futures_data_enabled must remain false")
+        return self
+
+
+class CommodityResearchUniverseRequest(SerializableModel):
+    """Offline commodity proxy universe request."""
+
+    symbols: list[str] = Field(default_factory=list)
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        return [symbol.strip().upper() for symbol in value if symbol.strip()]
+
+
+class CommodityResearchUniverseReport(SerializableModel):
+    """Report for the broker-free commodity research proxy universe."""
+
+    title: str = "Broker-free Commodity Research Universe"
+    report_type: str = "commodity_universe"
+    command: str = "commodity-universe"
+    ok: bool
+    request: CommodityResearchUniverseRequest
+    symbols_requested: list[str] = Field(default_factory=list)
+    instruments: list[CommodityProxyInstrument] = Field(default_factory=list)
+    categories: dict[str, list[str]] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    commodity_proxy_universe: bool = True
+    futures_contracts_enabled: bool = False
+    direct_futures_data_enabled: bool = False
+    broker_contacted: bool = False
+    signal_evaluation_enabled: bool = False
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This commodity universe report is offline-only and does not contact a broker."
+    )
+    no_execution_statement: str = (
+        "This command lists commodity-linked security proxies for research only. "
+        "Direct futures contracts, signal evaluation, order intents, execution, "
+        "fills, portfolio accounting, and P&L are disabled."
+    )
+    final_status: str = "unknown"
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_commodity_universe_safety(self) -> CommodityResearchUniverseReport:
+        return _validate_commodity_universe_flags(self)
 
 
 class HistoricalSnapshotRequest(SerializableModel):
@@ -1522,6 +1669,491 @@ class SignalContractReport(SerializableModel):
     timestamp: datetime = Field(default_factory=utc_now)
 
 
+class AnalyticalSignalEvaluatorMetadata(SerializableModel):
+    """Metadata for a broker-free analytical signal evaluator."""
+
+    name: str
+    version: str = "0.0.0"
+    description: str = ""
+    required_fields: list[str] = Field(
+        default_factory=lambda: ["open", "high", "low", "close", "volume"]
+    )
+    required_lookback_bars: int = 20
+    supported_bar_sizes: list[str] = Field(default_factory=lambda: ["5 mins"])
+    broker_required: bool = False
+    emits_trading_actions: bool = False
+    emits_order_intents: bool = False
+
+    @field_validator("name", "version")
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("analytical evaluator metadata text fields cannot be empty")
+        return normalized
+
+    @field_validator("required_fields", "supported_bar_sizes")
+    @classmethod
+    def normalize_text_list(cls, value: list[str]) -> list[str]:
+        return [item.strip() for item in value if item.strip()]
+
+    @field_validator("required_lookback_bars")
+    @classmethod
+    def validate_required_lookback(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("required_lookback_bars must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_broker_free_metadata(self) -> AnalyticalSignalEvaluatorMetadata:
+        if self.broker_required:
+            raise ValueError("broker_required must remain false")
+        if self.emits_trading_actions:
+            raise ValueError("emits_trading_actions must remain false")
+        if self.emits_order_intents:
+            raise ValueError("emits_order_intents must remain false")
+        if not self.required_fields:
+            raise ValueError("required_fields must not be empty")
+        if not self.supported_bar_sizes:
+            raise ValueError("supported_bar_sizes must not be empty")
+        return self
+
+
+class AnalyticalSignalEvaluationRequest(SerializableModel):
+    """Offline analytical signal evaluation request."""
+
+    symbols: list[str] = Field(default_factory=list)
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    requested_bar_size: str | None = None
+    requested_what_to_show: str | None = None
+    latest: bool = True
+    snapshot_timestamp: str | None = None
+    strict: bool = False
+    base_data_path: str = "data/historical"
+    evaluator_name: str = "moving_average_relationship_diagnostic"
+    short_window: int = 5
+    long_window: int = 20
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        return [symbol.strip().upper() for symbol in value if symbol.strip()]
+
+    @field_validator(
+        "requested_bar_size",
+        "requested_what_to_show",
+        "snapshot_timestamp",
+        "evaluator_name",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("requested_what_to_show")
+    @classmethod
+    def normalize_optional_what_to_show(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+    @field_validator("short_window", "long_window")
+    @classmethod
+    def validate_windows_positive(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("evaluator windows must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_window_order(self) -> AnalyticalSignalEvaluationRequest:
+        if self.short_window > self.long_window:
+            raise ValueError("short_window must be less than or equal to long_window")
+        return self
+
+
+class AnalyticalSignalObservation(SerializableModel):
+    """One non-actionable analytical observation for a symbol and frame."""
+
+    evaluator_name: str
+    evaluator_version: str
+    symbol: str
+    timestamp: datetime
+    frame_index: int
+    condition_name: str
+    condition_state: AnalyticalSignalConditionState
+    numeric_value: Decimal | None = None
+    threshold_or_reference_value: Decimal | None = None
+    required_lookback_bars: int
+    available_bars: int = 0
+    used_bars: int = 0
+    warmup_complete: bool = False
+    data_valid: bool = False
+    explanation: str = ""
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+    @field_validator("evaluator_name", "evaluator_version", "condition_name")
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("analytical observation text fields cannot be empty")
+        return normalized
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("symbol is required")
+        return normalized
+
+    @field_validator("condition_name", "explanation")
+    @classmethod
+    def validate_non_actionable_text(cls, value: str) -> str:
+        return _validate_no_analytical_action_vocabulary(value)
+
+    @field_validator("required_lookback_bars")
+    @classmethod
+    def validate_required_lookback(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("required_lookback_bars must be positive")
+        return value
+
+    @field_validator("available_bars", "used_bars", "frame_index")
+    @classmethod
+    def validate_non_negative_count(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("analytical observation counts must be non-negative")
+        return value
+
+    @model_validator(mode="after")
+    def validate_observation_safety(self) -> AnalyticalSignalObservation:
+        return _validate_analytical_signal_safety_flags(self)
+
+
+class AnalyticalSignalEvaluationDiagnostics(SerializableModel):
+    """Run-level diagnostics for analytical signal evaluation."""
+
+    evaluator_name: str = "moving_average_relationship_diagnostic"
+    evaluator_version: str = "0.1.0"
+    symbols: list[str] = Field(default_factory=list)
+    alignment_mode: BacktestAlignmentMode = BacktestAlignmentMode.UNION
+    feed_status: BacktestFeedStatus = BacktestFeedStatus.FAILED
+    evaluation_status: AnalyticalSignalEvaluationStatus = (
+        AnalyticalSignalEvaluationStatus.FAILED
+    )
+    frame_count: int = 0
+    contexts_built: int = 0
+    observations_count: int = 0
+    observations_by_state: dict[str, int] = Field(default_factory=dict)
+    first_timestamp: datetime | None = None
+    last_timestamp: datetime | None = None
+    warmup_observations: int = 0
+    invalid_data_observations: int = 0
+    missing_symbols_by_frame_count: int = 0
+    missing_symbols_by_symbol: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    signal_evaluation_enabled: bool = True
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+
+    @model_validator(mode="after")
+    def validate_diagnostic_safety(self) -> AnalyticalSignalEvaluationDiagnostics:
+        return _validate_analytical_signal_safety_flags(self)
+
+
+class AnalyticalSignalEvaluationResult(SerializableModel):
+    """Result of evaluating analytical observations over an offline feed."""
+
+    ok: bool
+    request: AnalyticalSignalEvaluationRequest
+    metadata: AnalyticalSignalEvaluatorMetadata
+    feed_summary: BacktestDataFeedSummary | None = None
+    diagnostics: AnalyticalSignalEvaluationDiagnostics
+    observations: list[AnalyticalSignalObservation] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    signal_evaluation_enabled: bool = True
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_result_safety(self) -> AnalyticalSignalEvaluationResult:
+        return _validate_analytical_signal_safety_flags(self)
+
+
+class AnalyticalSignalEvaluationReport(SerializableModel):
+    """Report for the broker-free analytical signal evaluator."""
+
+    title: str = "Broker-free Analytical Signal Evaluation"
+    report_type: str = "signal_evaluation"
+    command: str = "signal-evaluate"
+    ok: bool
+    request: AnalyticalSignalEvaluationRequest
+    metadata: AnalyticalSignalEvaluatorMetadata
+    symbols_requested: list[str] = Field(default_factory=list)
+    feed_summary: BacktestDataFeedSummary | None = None
+    result: AnalyticalSignalEvaluationResult
+    diagnostics: AnalyticalSignalEvaluationDiagnostics
+    observations: list[AnalyticalSignalObservation] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    signal_evaluation_enabled: bool = True
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This analytical signal evaluation report reads local historical snapshots "
+        "only and does not contact a broker."
+    )
+    no_execution_statement: str = (
+        "This run emitted non-actionable analytical observations only. No trading "
+        "signals, order intents, order simulation, broker routing, fills, portfolio "
+        "accounting, or P&L calculation was performed."
+    )
+    final_status: str = "unknown"
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_report_safety(self) -> AnalyticalSignalEvaluationReport:
+        return _validate_analytical_signal_safety_flags(self)
+
+
+class PaperReadinessRunRequest(SerializableModel):
+    """Read-only first paper-client orchestration request."""
+
+    symbols: list[str] = Field(
+        default_factory=lambda: ["SPY", "AAPL", "GLD", "USO", "DBA"]
+    )
+    commodity_symbols: list[str] = Field(default_factory=lambda: ["GLD", "USO", "DBA"])
+    duration: str = "1 D"
+    bar_size: str = "5 mins"
+    what_to_show: str = "TRADES"
+    use_rth: int = 1
+    broker_timeout_seconds: float = 15
+    history_timeout_seconds: float = 30
+    latest: bool = True
+    strict: bool = False
+    base_data_path: str = "data/historical"
+    short_window: int = 5
+    long_window: int = 20
+
+    @field_validator("symbols", "commodity_symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        symbols = [symbol.strip().upper() for symbol in value if symbol.strip()]
+        if not symbols:
+            raise ValueError("paper readiness symbols must not be empty")
+        return symbols
+
+    @field_validator("duration", "bar_size", "what_to_show", "base_data_path")
+    @classmethod
+    def validate_non_empty_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("paper readiness text fields must not be empty")
+        return normalized
+
+    @field_validator("what_to_show")
+    @classmethod
+    def normalize_what_to_show(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("use_rth")
+    @classmethod
+    def validate_use_rth(cls, value: int) -> int:
+        if value not in {0, 1}:
+            raise ValueError("use_rth must be 0 or 1")
+        return value
+
+    @field_validator("broker_timeout_seconds", "history_timeout_seconds")
+    @classmethod
+    def validate_timeout_seconds(cls, value: float) -> float:
+        if value <= 0 or value > 120:
+            raise ValueError("paper readiness timeouts must be greater than 0 and no more than 120")
+        return value
+
+    @field_validator("short_window", "long_window")
+    @classmethod
+    def validate_windows_positive(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("paper readiness evaluator windows must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_window_order(self) -> PaperReadinessRunRequest:
+        if self.short_window > self.long_window:
+            raise ValueError("short_window must be less than or equal to long_window")
+        return self
+
+
+class PaperReadinessRunStage(SerializableModel):
+    """One sequential stage in the paper readiness run."""
+
+    name: str
+    command: str
+    ok: bool
+    final_status: PaperReadinessStageStatus
+    started_at: datetime
+    finished_at: datetime
+    report_paths: dict[str, str] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+    @field_validator("name", "command")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("paper readiness stage text fields must not be empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_failed_stage_has_errors(self) -> PaperReadinessRunStage:
+        if self.final_status == PaperReadinessStageStatus.FAILED and not self.errors:
+            raise ValueError("failed paper readiness stages must include errors")
+        return self
+
+
+class PaperReadinessRunReport(SerializableModel):
+    """Read-only first paper-client orchestration report."""
+
+    title: str = "Read-only IBKR Paper Readiness Run"
+    report_type: str = "paper_readiness_run"
+    command: str = "paper-readiness-run"
+    ok: bool
+    request: PaperReadinessRunRequest
+    selected_universe: list[str] = Field(default_factory=list)
+    commodity_symbols: list[str] = Field(default_factory=list)
+    stages: list[PaperReadinessRunStage] = Field(default_factory=list)
+    stage_statuses: dict[str, str] = Field(default_factory=dict)
+    report_paths: dict[str, str] = Field(default_factory=dict)
+    broker_connected: bool = False
+    account_summary_verified: bool = False
+    account_summary_source: str = "unavailable"
+    account_ids_masked: list[str] = Field(default_factory=list)
+    account_summary_fields_by_account: dict[str, list[str]] = Field(default_factory=dict)
+    history_snapshot_written: bool = False
+    history_load_completed: bool = False
+    commodity_universe_verified: bool = False
+    signal_evaluation_completed: bool = False
+    readiness_status_by_symbol: dict[str, str] = Field(default_factory=dict)
+    load_status_by_symbol: dict[str, str] = Field(default_factory=dict)
+    partial_symbols: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    configured_allow_paper_orders: bool = False
+    read_only_api_expected: bool = True
+    order_routing_enabled: bool = False
+    broker_contacted: bool = False
+    broker_contact_read_only: bool = True
+    signal_evaluation_enabled: bool = True
+    generated_signals: bool = False
+    signal_count: int = 0
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    futures_contracts_enabled: bool = False
+    direct_futures_data_enabled: bool = False
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This readiness run may contact IBKR through read-only account and market-data "
+        "requests, but order routing is disabled and no orders are submitted."
+    )
+    futures_scope_statement: str = (
+        "Direct futures contracts remain out of scope; commodity exposure uses "
+        "security proxies only."
+    )
+    final_status: PaperReadinessRunStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @field_validator("selected_universe", "commodity_symbols", "partial_symbols")
+    @classmethod
+    def normalize_report_symbols(cls, value: list[str]) -> list[str]:
+        return [symbol.strip().upper() for symbol in value if symbol.strip()]
+
+    @model_validator(mode="after")
+    def validate_readiness_safety(self) -> PaperReadinessRunReport:
+        if self.submitted_orders:
+            raise ValueError("submitted_orders must remain false")
+        if self.paper_orders_enabled:
+            raise ValueError("paper_orders_enabled must remain false")
+        if not self.read_only_api_expected:
+            raise ValueError("read_only_api_expected must remain true")
+        if self.order_routing_enabled:
+            raise ValueError("order_routing_enabled must remain false")
+        if not self.broker_contact_read_only:
+            raise ValueError("broker_contact_read_only must remain true")
+        if not self.signal_evaluation_enabled:
+            raise ValueError("signal_evaluation_enabled must remain true")
+        if self.generated_signals:
+            raise ValueError("generated_signals must remain false")
+        if self.signal_count != 0:
+            raise ValueError("signal_count must remain 0")
+        if self.generated_orders:
+            raise ValueError("generated_orders must remain false")
+        if self.order_intents_generated:
+            raise ValueError("order_intents_generated must remain false")
+        if self.orders_simulated:
+            raise ValueError("orders_simulated must remain false")
+        if self.fills_simulated:
+            raise ValueError("fills_simulated must remain false")
+        if self.pnl_calculated:
+            raise ValueError("pnl_calculated must remain false")
+        if self.portfolio_accounting:
+            raise ValueError("portfolio_accounting must remain false")
+        if self.futures_contracts_enabled:
+            raise ValueError("futures_contracts_enabled must remain false")
+        if self.direct_futures_data_enabled:
+            raise ValueError("direct_futures_data_enabled must remain false")
+        if not self.no_order_guarantee:
+            raise ValueError("no_order_guarantee must remain true")
+        return self
+
+
 class DisabledSignalRunnerRequest(SerializableModel):
     """Offline disabled signal diagnostic runner request."""
 
@@ -1707,6 +2339,99 @@ def _validate_disabled_signal_runner_flags(model: T) -> T:
         raise ValueError("signal_contract_validated must remain true")
     if getattr(model, "signal_evaluation_enabled", True):
         raise ValueError("signal_evaluation_enabled must remain false")
+    if getattr(model, "generated_signals", True):
+        raise ValueError("generated_signals must remain false")
+    if getattr(model, "signal_count", 1) != 0:
+        raise ValueError("signal_count must remain 0")
+    if getattr(model, "generated_orders", True):
+        raise ValueError("generated_orders must remain false")
+    if getattr(model, "order_intents_generated", True):
+        raise ValueError("order_intents_generated must remain false")
+    if getattr(model, "orders_simulated", True):
+        raise ValueError("orders_simulated must remain false")
+    if getattr(model, "fills_simulated", True):
+        raise ValueError("fills_simulated must remain false")
+    if getattr(model, "pnl_calculated", True):
+        raise ValueError("pnl_calculated must remain false")
+    if getattr(model, "portfolio_accounting", True):
+        raise ValueError("portfolio_accounting must remain false")
+    if getattr(model, "broker_contacted", True):
+        raise ValueError("broker_contacted must remain false")
+    if getattr(model, "order_routing_enabled", True):
+        raise ValueError("order_routing_enabled must remain false")
+    if getattr(model, "no_order_guarantee", False) is not True:
+        raise ValueError("no_order_guarantee must remain true")
+    return model
+
+
+def _validate_commodity_universe_flags(model: T) -> T:
+    if getattr(model, "commodity_proxy_universe", False) is not True:
+        raise ValueError("commodity_proxy_universe must remain true")
+    if getattr(model, "futures_contracts_enabled", True):
+        raise ValueError("futures_contracts_enabled must remain false")
+    if getattr(model, "direct_futures_data_enabled", True):
+        raise ValueError("direct_futures_data_enabled must remain false")
+    if getattr(model, "broker_contacted", True):
+        raise ValueError("broker_contacted must remain false")
+    if getattr(model, "signal_evaluation_enabled", True):
+        raise ValueError("signal_evaluation_enabled must remain false")
+    if getattr(model, "generated_signals", True):
+        raise ValueError("generated_signals must remain false")
+    if getattr(model, "signal_count", 1) != 0:
+        raise ValueError("signal_count must remain 0")
+    if getattr(model, "generated_orders", True):
+        raise ValueError("generated_orders must remain false")
+    if getattr(model, "order_intents_generated", True):
+        raise ValueError("order_intents_generated must remain false")
+    if getattr(model, "orders_simulated", True):
+        raise ValueError("orders_simulated must remain false")
+    if getattr(model, "fills_simulated", True):
+        raise ValueError("fills_simulated must remain false")
+    if getattr(model, "pnl_calculated", True):
+        raise ValueError("pnl_calculated must remain false")
+    if getattr(model, "portfolio_accounting", True):
+        raise ValueError("portfolio_accounting must remain false")
+    if getattr(model, "order_routing_enabled", True):
+        raise ValueError("order_routing_enabled must remain false")
+    if getattr(model, "no_order_guarantee", False) is not True:
+        raise ValueError("no_order_guarantee must remain true")
+    return model
+
+
+_ANALYTICAL_ACTION_WORDS = frozenset(
+    {
+        "buy",
+        "sell",
+        "hold",
+        "long",
+        "short",
+        "enter",
+        "exit",
+        "order",
+        "position",
+        "allocation",
+        "rebalance",
+    }
+)
+
+
+def _validate_no_analytical_action_vocabulary(value: str) -> str:
+    tokens = {
+        "".join(character for character in token if character.isalpha()).lower()
+        for token in value.replace("_", " ").replace("-", " ").split()
+    }
+    forbidden = sorted(token for token in tokens if token in _ANALYTICAL_ACTION_WORDS)
+    if forbidden:
+        raise ValueError(
+            "analytical observation text contains forbidden action vocabulary: "
+            + ", ".join(forbidden)
+        )
+    return value
+
+
+def _validate_analytical_signal_safety_flags(model: T) -> T:
+    if getattr(model, "signal_evaluation_enabled", True) is not True:
+        raise ValueError("signal_evaluation_enabled must remain true")
     if getattr(model, "generated_signals", True):
         raise ValueError("generated_signals must remain false")
     if getattr(model, "signal_count", 1) != 0:

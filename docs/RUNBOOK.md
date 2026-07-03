@@ -509,6 +509,132 @@ to real signal evaluation and does not produce trading outputs. Common failures:
 - Failed feed: inspect loader and feed adapter errors before rerunning.
 - Partial feed: review missing-symbol summaries in the runner report.
 
+## Offline Analytical Signal Evaluation
+
+```bash
+python -m trader.cli signal-evaluate --symbols SPY,AAPL
+python -m trader.cli signal-evaluate --symbols SPY,AAPL --alignment union
+python -m trader.cli signal-evaluate --symbols SPY,AAPL --alignment intersection
+python -m trader.cli signal-evaluate --symbols SPY,AAPL --short-window 5 --long-window 20
+scripts/run-signal-evaluate.sh
+```
+
+Expected behavior:
+
+- opens no broker socket
+- loads local snapshots through the offline historical loader
+- builds an aligned feed with the broker-free data adapter
+- evaluates the `moving_average_relationship_diagnostic` condition using bars available at or before each frame timestamp
+- writes `reports/signal_evaluation_<timestamp>.json` and `.md`
+- updates `reports/latest_signal_evaluation.json` and `.md`
+- reports `signal_evaluation_enabled=true`, `generated_signals=false`,
+  `signal_count=0`, `generated_orders=false`,
+  `order_intents_generated=false`, `orders_simulated=false`,
+  `fills_simulated=false`, `portfolio_accounting=false`, and
+  `pnl_calculated=false`
+- does not contact IBKR, generate trading signals, create order intents,
+  simulate orders or fills, maintain portfolio accounting, or compute P&L
+
+Workflow relationship:
+
+```text
+history-snapshot -> history-load -> backtest-feed -> backtest-run -> strategy-contract -> strategy-runner -> signal-contract -> signal-runner -> signal-evaluate
+```
+
+`signal-evaluate` is analytical diagnostics only. Its condition states are
+`condition_met`, `condition_not_met`, `insufficient_data`, and `invalid_data`.
+Common failures:
+
+- No snapshots found: run or review `history-index` and `history-load`.
+- Empty feed: inspect the snapshot and loader reports.
+- Failed feed: inspect loader and feed adapter errors before rerunning.
+- Warm-up observations: collect more local bars before interpreting condition counts.
+- Invalid data observations: inspect OHLCV quality in the source snapshot.
+
+## Offline Commodity Research Universe
+
+```bash
+python -m trader.cli commodity-universe
+python -m trader.cli commodity-universe --symbols GLD,USO,DBA
+scripts/run-commodity-universe.sh
+```
+
+Expected behavior:
+
+- opens no broker socket
+- lists configured commodity-linked security proxies only
+- writes `reports/commodity_universe_<timestamp>.json` and `.md`
+- updates `reports/latest_commodity_universe.json` and `.md`
+- reports `commodity_proxy_universe=true`, `futures_contracts_enabled=false`,
+  `direct_futures_data_enabled=false`, `broker_contacted=false`,
+  `signal_evaluation_enabled=false`, `generated_signals=false`,
+  `signal_count=0`, `order_intents_generated=false`,
+  `orders_simulated=false`, `fills_simulated=false`,
+  `portfolio_accounting=false`, and `pnl_calculated=false`
+- does not enable direct futures contracts, request futures data, model futures
+  roll or margin, evaluate signals, create order intents, simulate fills, or
+  compute P&L
+
+Use this command before adding commodity symbols to snapshot or evaluation runs.
+It keeps the current program in commodity-linked securities until a separate
+futures-contract, rollover, margin, and risk-model milestone is explicitly
+approved.
+
+## Read-Only Paper Readiness Run
+
+Prerequisites:
+
+- TWS paper is open and logged in.
+- API socket clients are enabled on paper port `7497`.
+- Read-Only API remains enabled.
+- `TRADING_MODE=paper`.
+- `ALLOW_PAPER_ORDERS=false`.
+- The paper account has a broker account summary available through IBKR.
+
+```bash
+python -m trader.cli paper-readiness-run
+python -m trader.cli paper-readiness-run --symbols SPY,AAPL,GLD,USO,DBA --commodity-symbols GLD,USO,DBA
+scripts/run-paper-readiness-run.sh
+```
+
+The command runs these stages sequentially:
+
+```text
+broker-probe --timeout 15
+account --connect --timeout 15
+history-snapshot --symbols SPY,AAPL,GLD,USO,DBA --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1 --timeout 30
+history-load --symbols SPY,AAPL,GLD,USO,DBA --bar-size "5 mins" --what-to-show TRADES
+commodity-universe --symbols GLD,USO,DBA
+signal-evaluate --symbols SPY,AAPL,GLD,USO,DBA --bar-size "5 mins" --what-to-show TRADES --short-window 5 --long-window 20
+```
+
+Expected behavior:
+
+- contacts IBKR only through read-only broker, account-summary, and historical-data requests
+- rejects mock account fallback as readiness success
+- writes stage reports under `reports/`
+- writes `reports/paper_readiness_run_<timestamp>.json` and `.md`
+- updates `reports/latest_paper_readiness_run.json` and `.md`
+- reports `submitted_orders=false`, `paper_orders_enabled=false`,
+  `read_only_api_expected=true`, and `order_routing_enabled=false`
+- uses commodity-linked security proxies only and keeps direct futures out of scope
+- keeps signal evaluation diagnostic-only with `generated_signals=false` and
+  `signal_count=0`
+
+Final statuses:
+
+- `completed`: broker/account verified, snapshots loaded, and evaluator completed with ready data.
+- `completed_with_warnings`: broker/account verified and evaluator completed, but at least one symbol is partial.
+- `failed`: broker probe failed, broker account summary was unavailable, no usable snapshots loaded, or signal evaluation failed.
+
+Common failures:
+
+- Account stage falls back to mock data: keep TWS paper logged in, confirm API socket settings, and rerun.
+- No historical snapshots: check market-data permissions, symbol availability, market hours, and pacing.
+- Partial symbol readiness: inspect `reports/latest_history_readiness.json` and
+  `reports/latest_history_load.json` before expanding the universe.
+- Signal evaluation failed: inspect loader/feed errors before changing evaluator logic.
+
 ## Offline Fixture Stress Tests
 
 ```bash
@@ -518,6 +644,9 @@ python -m pytest tests/test_offline_stress_backtest_engine.py
 python -m pytest tests/test_offline_stress_strategy_runner.py
 python -m pytest tests/test_offline_stress_signal_contract.py
 python -m pytest tests/test_offline_stress_signal_runner.py
+python -m pytest tests/test_offline_stress_signal_evaluation.py
+python -m pytest tests/test_commodity_universe.py
+python -m pytest tests/test_paper_readiness_run.py
 ```
 
 Expected behavior:
@@ -529,7 +658,7 @@ Expected behavior:
 - verifies loader diagnostics for malformed JSONL, missing manifests, missing bars files, duplicate timestamps, timestamp gaps, invalid OHLC, negative volume, and empty datasets
 - verifies `backtest-feed` union/intersection alignment and explicit missing-bar counts
 - verifies `backtest-run` ready, partial, and failed feed diagnostics
-- verifies `strategy-contract`, `strategy-runner`, `signal-contract`, and `signal-runner` missing-symbol handling and diagnostics-only behavior
+- verifies `strategy-contract`, `strategy-runner`, `signal-contract`, `signal-runner`, and `signal-evaluate` missing-symbol handling and diagnostics-only behavior
 - places no orders and invokes no order APIs
 - does not perform real strategy evaluation, generate signals, generate order intents, simulate orders, simulate fills, maintain portfolio accounting, or compute P&L
 
@@ -594,11 +723,11 @@ If `broker-probe` fails:
 - Keep the host on `127.0.0.1` or `localhost`.
 - Remember that market data subscriptions are not required for current-time probing.
 - The Python `ibapi` `connect()` call may return `None` even when the API session is healthy; readiness is confirmed by callbacks such as `connectAck`, `nextValidId`, or a successful current-time response.
-- IBKR farm-status messages such as `2104`, `2106`, `2107`, and `2158` are non-fatal for the current-time probe. `2107` means the historical-data farm is inactive until needed and should not block this read-only check.
+- IBKR farm-status messages such as `2103`, `2104`, `2105`, `2106`, `2107`, `2108`, and `2158` are non-fatal for the current-time probe. Request-specific timeouts or permission errors still fail the affected market-data or historical-data stage.
 
 ## Safe Next Milestones
 
-1. Review the disabled `signal-runner` reports before designing any future signal-evaluation milestone.
-2. Keep `v0.13` unimplemented until there is an explicitly approved plan for real signal evaluation.
-3. Do not add real signal evaluation, buy/sell/hold outputs, order intents, order simulation, fills, portfolio accounting, P&L, broker routing, paper execution, or live trading in the next planning pass.
+1. Review `signal-evaluate` reports after each new read-only historical snapshot refresh.
+2. Keep analytical evaluator expansion broker-free and non-actionable until a future milestone explicitly changes the boundary.
+3. Do not add buy/sell/hold outputs, order intents, order simulation, fills, portfolio accounting, P&L, broker routing, paper execution, or live trading in the next planning pass.
 4. Write a paper-execution activation proposal before changing `PaperExecutor` to submit anything.

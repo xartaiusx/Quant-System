@@ -1,11 +1,12 @@
 # Signal Evaluation Spec
 
-Status: design-only for planned `v0.13`. No implementation is added by this
-document.
+Status: implemented for `v0.13` as a broker-free analytical diagnostics
+scaffold. The implementation adds `signal-evaluate`, report models, Markdown
+reports, and tests while preserving all no-execution safety boundaries.
 
 ## Purpose
 
-`v0.13` should introduce the first broker-free analytical signal evaluator
+`v0.13` introduces the first broker-free analytical signal evaluator
 scaffold. The evaluator may produce non-actionable diagnostic observations from
 offline historical feed frames. It must not produce trading instructions, order
 intents, fills, P&L, portfolio accounting, or broker contact.
@@ -31,7 +32,7 @@ analytical condition is true, false, unready, or invalid.
 
 ## Analytical Observation Model
 
-Proposed model: `AnalyticalSignalObservation`.
+Implemented model: `AnalyticalSignalObservation`.
 
 Fields:
 
@@ -83,7 +84,7 @@ boundaries, not as evaluator output.
 
 ## Evaluator Metadata
 
-Proposed model: `AnalyticalSignalEvaluatorMetadata`.
+Implemented model: `AnalyticalSignalEvaluatorMetadata`.
 
 Fields:
 
@@ -135,7 +136,7 @@ Invalid bars must not be silently repaired or converted into actionable output.
 
 ## First Evaluator
 
-Proposed evaluator name: `moving_average_relationship_diagnostic`.
+Implemented evaluator name: `moving_average_relationship_diagnostic`.
 
 Purpose:
 
@@ -173,23 +174,23 @@ Forbidden outputs:
 - `enter`
 - `exit`
 
-## CLI Proposal
+## CLI
 
-Proposed future commands:
+Implemented commands:
 
 ```bash
 python -m trader.cli signal-evaluate --symbols SPY,AAPL
-python -m trader.cli signal-evaluate --symbols SPY,AAPL --evaluator moving_average_relationship
 python -m trader.cli signal-evaluate --symbols SPY,AAPL --short-window 5 --long-window 20
+scripts/run-signal-evaluate.sh
 ```
 
 The command must remain offline only. It should read local snapshots through the
 historical loader, build a broker-free feed, evaluate observations, and print
 that outputs are diagnostic-only and non-actionable.
 
-## Report Proposal
+## Reports
 
-Proposed future report files:
+Implemented report files:
 
 - `reports/signal_evaluation_<timestamp>.json`
 - `reports/signal_evaluation_<timestamp>.md`
@@ -218,16 +219,16 @@ Reports must include:
 - `order_routing_enabled=false`;
 - `no_order_guarantee=true`.
 
-`signal_evaluation_enabled=true` may be used only if a future implementation
-task explicitly approves analytical evaluation execution. Even then,
-`generated_signals=false` and `signal_count=0` remain required for this scaffold.
+`signal_evaluation_enabled=true` is used for this approved analytical
+diagnostic execution path. `generated_signals=false` and `signal_count=0`
+remain required for this scaffold.
 
 Reports must state that observations are non-actionable diagnostics and must not
 make profitability, tradability, or performance claims.
 
 ## Test Plan
 
-Future implementation tests should cover:
+Implementation tests cover:
 
 - model serialization;
 - metadata validation;
@@ -272,7 +273,7 @@ Every stress path must keep:
 
 ## Acceptance Criteria
 
-The future implementation milestone may be accepted only if:
+The implementation milestone is accepted only if:
 
 - unit tests pass without IB Gateway;
 - the evaluator path is broker-free;

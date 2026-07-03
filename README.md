@@ -27,6 +27,9 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Broker-free offline fixture stress tests for partial, gapped, duplicate, malformed, missing, and invalid historical datasets.
 - Broker-free disabled signal contract scaffold with diagnostics only.
 - Broker-free disabled signal diagnostic runner that records per-frame signal diagnostics only.
+- Broker-free analytical signal evaluator that emits non-actionable condition observations only.
+- Broker-free commodity research universe for commodity-linked security proxies only.
+- Read-only paper readiness orchestration for the first broker-connected program run.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
 
@@ -47,7 +50,8 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Real strategy evaluation, buy/sell/hold signal generation, order-intent generation, fill simulation, portfolio accounting, or P&L from strategy-runner checks.
 - Real signal evaluation, buy/sell/hold outputs, order intents, order simulation, fill simulation, portfolio accounting, or P&L from signal-contract checks.
 - Real signal evaluation, buy/sell/hold outputs, order intents, order simulation, fill simulation, portfolio accounting, or P&L from signal-runner checks.
-- Future `v0.13` signal evaluation or trading behavior.
+- Trading instructions, order intents, execution, fill simulation, portfolio accounting, or P&L from analytical signal-evaluation checks.
+- Direct futures contracts, futures roll modeling, futures margin modeling, or commodity futures execution.
 
 ## Safety Design
 
@@ -128,6 +132,11 @@ python -m trader.cli signal-contract --symbols SPY,AAPL
 python -m trader.cli signal-contract --symbols SPY,AAPL --alignment intersection
 python -m trader.cli signal-runner --symbols SPY,AAPL
 python -m trader.cli signal-runner --symbols SPY,AAPL --alignment intersection
+python -m trader.cli signal-evaluate --symbols SPY,AAPL
+python -m trader.cli signal-evaluate --symbols SPY,AAPL --short-window 5 --long-window 20
+python -m trader.cli commodity-universe
+python -m trader.cli commodity-universe --symbols GLD,USO,DBA
+python -m trader.cli paper-readiness-run
 scripts/check-ibapi.sh
 scripts/run-broker-preflight.sh
 python -m trader.cli account --mock
@@ -157,6 +166,9 @@ scripts/run-strategy-contract.sh
 scripts/run-strategy-runner.sh
 scripts/run-signal-contract.sh
 scripts/run-signal-runner.sh
+scripts/run-signal-evaluate.sh
+scripts/run-commodity-universe.sh
+scripts/run-paper-readiness-run.sh
 ```
 
 ## TWS Paper Notes
@@ -216,16 +228,44 @@ create order intents, simulate orders or fills, perform portfolio accounting,
 or compute P&L. Reports always state `disabled_signal_runner=true`,
 `signal_evaluation_enabled=false`, and `signal_count=0`.
 
+`signal-evaluate` is an offline analytical evaluator. It loads local historical
+snapshots, builds broker-free feed frames, compares fast and slow close-price
+averages at each frame timestamp, and writes non-actionable condition
+observations. It does not contact IBKR, generate trading signals, create order
+intents, simulate orders or fills, perform portfolio accounting, or compute
+P&L. Reports state `signal_evaluation_enabled=true`,
+`generated_signals=false`, and `signal_count=0`.
+
+`commodity-universe` is an offline commodity research helper. It lists
+commodity-linked security proxies such as metals, energy, agriculture, and broad
+basket exchange-traded products. It does not contact IBKR, enable direct futures
+contracts, model futures roll or margin, run signal evaluation, create order
+intents, simulate fills, perform portfolio accounting, or compute P&L.
+
+`paper-readiness-run` is the first read-only paper-client orchestration command.
+It runs broker probe, broker account summary, historical snapshot, offline load,
+commodity proxy universe, and analytical signal evaluation sequentially for the
+default universe `SPY,AAPL,GLD,USO,DBA`. It requires a real broker account
+summary with masked account output and funding-style summary tags. Mock account
+fallback is a failed readiness run. It writes
+`reports/paper_readiness_run_<timestamp>.json` plus `.md`, keeps
+`paper_orders_enabled=false`, reports `submitted_orders=false`, and keeps direct
+futures out of scope.
+
 The offline fixture stress suite uses temporary synthetic historical snapshots
 to validate loader, feed, engine, strategy-contract, strategy-runner, and
-signal-contract/signal-runner behavior against partial, gapped, duplicate,
-malformed, missing, empty, and invalid data.
+signal-contract/signal-runner/signal-evaluate behavior against partial, gapped,
+duplicate, malformed, missing, empty, and invalid data.
 It does not read broker data, contact IBKR, evaluate real strategies, generate
 signals, simulate orders or fills, perform portfolio accounting, or compute P&L.
 
 ## References
 
-- Interactive Brokers TWS API initial setup: https://interactivebrokers.github.io/tws-api/initial_setup.html
-- Interactive Brokers TWS API connection parameters: https://interactivebrokers.github.io/tws-api/connection.html
+- IBKR TWS API setup and paper/live ports: https://www.interactivebrokers.com/campus/trading-lessons/installing-configuring-tws-for-the-api/
+- IBKR contracts API reference: https://www.interactivebrokers.com/campus/ibkr-api-page/contracts/
+- CFTC futures market basics: https://www.cftc.gov/LearnAndProtect/AdvisoriesAndArticles/FuturesMarketBasics/index.htm
+- CFTC commodity ETP advisory: https://www.cftc.gov/LearnAndProtect/AdvisoriesAndArticles/CustomerAdvisory_CommodityETPs.htm
+- GitHub status checks: https://docs.github.com/articles/about-status-checks
+- GitHub protected branches: https://docs.github.com/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches
 - QuantConnect Algorithm Framework overview: https://www.quantconnect.com/docs/v1/algorithm-framework/overview
 - OpenAI Codex `AGENTS.md` guidance: https://developers.openai.com/codex/guides/agents-md

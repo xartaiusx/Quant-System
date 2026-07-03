@@ -15,6 +15,7 @@ from rich.table import Table
 from trader.backtest.data_adapter import build_backtest_feed, build_backtest_feed_report
 from trader.backtest.engine import build_backtest_run_report
 from trader.config import ConfigError, TraderConfig, load_config
+from trader.data.commodity_universe import build_commodity_research_universe_report
 from trader.data.historical import (
     attach_snapshot_paths,
     build_readiness_report,
@@ -28,12 +29,16 @@ from trader.data.snapshots import deterministic_history, deterministic_quotes, m
 from trader.data.universe import parse_symbols
 from trader.execution.router import ExecutionRouter
 from trader.models import (
+    AnalyticalSignalEvaluationReport,
+    AnalyticalSignalEvaluationRequest,
     BacktestAlignmentMode,
     BacktestDataAdapterReport,
     BacktestDataAdapterRequest,
     BacktestRunReport,
     BacktestRunRequest,
     BrokerDiagnosticReport,
+    CommodityResearchUniverseReport,
+    CommodityResearchUniverseRequest,
     DisabledSignalRunnerReport,
     DisabledSignalRunnerRequest,
     HistoricalLoaderReport,
@@ -45,18 +50,22 @@ from trader.models import (
     MarketDataDiagnosticReport,
     MarketDataRequestType,
     MarketQuote,
+    PaperReadinessRunReport,
+    PaperReadinessRunRequest,
     RiskDecision,
     SignalContractReport,
     SignalContractValidationRequest,
     StrategyContractReport,
     StrategyContractValidationRequest,
 )
+from trader.paper_readiness import run_paper_readiness_run
 from trader.portfolio.construction import build_trade_plans
 from trader.reporting.journal import Journal
 from trader.risk.rules import evaluate_trade_plans
 from trader.strategy import get_strategy
 from trader.strategy.interface import build_strategy_contract_report
 from trader.strategy.runner import build_inert_strategy_runner_report
+from trader.strategy.signal_evaluation import build_analytical_signal_evaluation_report
 from trader.strategy.signal_runner import build_disabled_signal_runner_report
 from trader.strategy.signals import build_signal_contract_report
 
@@ -265,6 +274,34 @@ def history_readiness(
     console.print("Order routing: disabled.")
     console.print("No order APIs invoked.")
     _print_history_readiness_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("commodity-universe")
+def commodity_universe(
+    symbols: Annotated[
+        str | None,
+        typer.Option(help="Optional comma-separated commodity proxy symbols."),
+    ] = None,
+) -> None:
+    """List broker-free commodity-linked security proxies for research."""
+
+    request = CommodityResearchUniverseRequest(
+        symbols=parse_symbols(symbols) if symbols else []
+    )
+    report = build_commodity_research_universe_report(request)
+    json_path, md_path = Journal().write_cycle("commodity_universe", _report_dict(report))
+
+    console.print("[bold]Broker-free commodity research universe[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    console.print("Direct futures contracts: disabled.")
+    console.print("Signal evaluation: disabled.")
+    _print_commodity_universe_result(report)
     console.print(f"JSON report: {json_path}")
     console.print(f"Markdown report: {md_path}")
     if not report.ok:
@@ -946,6 +983,105 @@ def signal_runner(
         raise typer.Exit(code=1)
 
 
+@app.command("signal-evaluate")
+def signal_evaluate(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols to evaluate against local snapshots."),
+    ] = "SPY,AAPL",
+    alignment: Annotated[
+        BacktestAlignmentMode,
+        typer.Option("--alignment", help="Timestamp alignment mode."),
+    ] = BacktestAlignmentMode.UNION,
+    bar_size: Annotated[
+        str | None,
+        typer.Option("--bar-size", help="Optional bar-size filter."),
+    ] = None,
+    what_to_show: Annotated[
+        str | None,
+        typer.Option("--what-to-show", help="Optional data-type filter."),
+    ] = None,
+    latest: Annotated[
+        bool,
+        typer.Option("--latest/--all", help="Load latest matching snapshot per symbol."),
+    ] = True,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict/--non-strict", help="Fail on malformed records."),
+    ] = False,
+    snapshot_timestamp: Annotated[
+        str | None,
+        typer.Option("--snapshot-timestamp", help="Optional YYYYMMDDTHHMMSSZ filter."),
+    ] = None,
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical snapshot root."),
+    ] = Path("data/historical"),
+    short_window: Annotated[
+        int,
+        typer.Option("--short-window", help="Fast moving-average lookback."),
+    ] = 5,
+    long_window: Annotated[
+        int,
+        typer.Option("--long-window", help="Slow moving-average lookback."),
+    ] = 20,
+) -> None:
+    """Run broker-free analytical signal evaluation over local historical data."""
+
+    request = AnalyticalSignalEvaluationRequest(
+        symbols=parse_symbols(symbols),
+        alignment_mode=alignment,
+        requested_bar_size=bar_size,
+        requested_what_to_show=what_to_show,
+        latest=latest,
+        strict=strict,
+        snapshot_timestamp=snapshot_timestamp,
+        base_data_path=base_path.as_posix(),
+        short_window=short_window,
+        long_window=long_window,
+    )
+    loader_request = HistoricalSnapshotLoadRequest(
+        symbols=request.symbols,
+        bar_size=request.requested_bar_size,
+        what_to_show=request.requested_what_to_show,
+        latest=request.latest,
+        strict=request.strict,
+        snapshot_timestamp=request.snapshot_timestamp,
+        base_data_path=request.base_data_path,
+    )
+    loader_report = load_historical_snapshots(loader_request)
+    datasets = [
+        result.dataset
+        for result in loader_report.results
+        if result.dataset is not None
+    ]
+    feed = build_backtest_feed(datasets, alignment_mode=request.alignment_mode)
+    feed = feed.model_copy(
+        update={
+            "warnings": list(dict.fromkeys([*feed.warnings, *loader_report.warnings])),
+            "errors": list(dict.fromkeys([*feed.errors, *loader_report.errors])),
+        }
+    )
+    report = build_analytical_signal_evaluation_report(feed, request)
+    json_path, md_path = Journal().write_cycle("signal_evaluation", _report_dict(report))
+
+    console.print("[bold]Broker-free analytical signal evaluation[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    console.print("Signal evaluation enabled: true.")
+    console.print("Observations are diagnostic-only and non-actionable.")
+    console.print(
+        "No trading signals, order intents, order simulation, fill simulation, "
+        "broker routing, portfolio accounting, or P&L calculation was performed."
+    )
+    _print_signal_evaluation_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("history-snapshot")
 def history_snapshot(
     symbols: Annotated[
@@ -1012,6 +1148,92 @@ def history_snapshot(
     console.print(f"Readiness JSON report: {readiness_json}")
     console.print(f"Readiness Markdown report: {readiness_md}")
     if not snapshot_report.ok or not readiness_report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("paper-readiness-run")
+def paper_readiness_run(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols for the first paper readiness run."),
+    ] = "SPY,AAPL,GLD,USO,DBA",
+    commodity_symbols: Annotated[
+        str,
+        typer.Option(
+            "--commodity-symbols",
+            help="Comma-separated commodity-linked security proxies.",
+        ),
+    ] = "GLD,USO,DBA",
+    duration: Annotated[
+        str,
+        typer.Option("--duration", help="IBKR historical duration string."),
+    ] = "1 D",
+    bar_size: Annotated[
+        str,
+        typer.Option("--bar-size", help="IBKR historical bar size."),
+    ] = "5 mins",
+    what_to_show: Annotated[
+        str,
+        typer.Option("--what-to-show", help="IBKR historical data type."),
+    ] = "TRADES",
+    use_rth: Annotated[
+        int,
+        typer.Option("--use-rth", help="Use regular trading hours: 1 or 0."),
+    ] = 1,
+    broker_timeout: Annotated[
+        float,
+        typer.Option("--broker-timeout", help="Broker/account probe timeout seconds."),
+    ] = 15,
+    history_timeout: Annotated[
+        float,
+        typer.Option("--history-timeout", help="Historical request timeout seconds."),
+    ] = 30,
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical snapshot root."),
+    ] = Path("data/historical"),
+    short_window: Annotated[
+        int,
+        typer.Option("--short-window", help="Fast moving-average lookback."),
+    ] = 5,
+    long_window: Annotated[
+        int,
+        typer.Option("--long-window", help="Slow moving-average lookback."),
+    ] = 20,
+) -> None:
+    """Run the sequential read-only paper-client readiness workflow."""
+
+    config = _load_config_or_exit()
+    broker_timeout = _validate_timeout_option(broker_timeout) or 15
+    history_timeout = _validate_timeout_option(history_timeout) or 30
+    use_rth = _validate_use_rth_option(use_rth)
+    request = PaperReadinessRunRequest(
+        symbols=parse_symbols(symbols),
+        commodity_symbols=parse_symbols(commodity_symbols),
+        duration=duration,
+        bar_size=bar_size,
+        what_to_show=what_to_show,
+        use_rth=use_rth,
+        broker_timeout_seconds=broker_timeout,
+        history_timeout_seconds=history_timeout,
+        base_data_path=base_path.as_posix(),
+        short_window=short_window,
+        long_window=long_window,
+    )
+    report = run_paper_readiness_run(config, request)
+    json_path, md_path = Journal().write_cycle("paper_readiness_run", _report_dict(report))
+
+    console.print("[bold]Read-only paper readiness run[/bold]")
+    console.print("Broker contact: read-only account and market-data requests only.")
+    console.print("Order routing: disabled.")
+    console.print("No order APIs invoked.")
+    console.print("Submitted orders: false.")
+    console.print("Paper orders enabled: false.")
+    console.print("Read-Only API expected: true.")
+    _print_paper_readiness_run_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
         raise typer.Exit(code=1)
 
 
@@ -1306,15 +1528,18 @@ def _validate_use_rth_option(use_rth: int) -> int:
 
 def _report_dict(
     report: (
-        BacktestDataAdapterReport
+        AnalyticalSignalEvaluationReport
+        | BacktestDataAdapterReport
         | BacktestRunReport
         | BrokerDiagnosticReport
+        | CommodityResearchUniverseReport
         | DisabledSignalRunnerReport
         | HistoricalLoaderReport
         | HistoricalReadinessReport
         | HistoricalSnapshotReport
         | InertStrategyRunnerReport
         | MarketDataDiagnosticReport
+        | PaperReadinessRunReport
         | SignalContractReport
         | StrategyContractReport
     ),
@@ -1651,6 +1876,130 @@ def _print_signal_runner_result(report: DisabledSignalRunnerReport) -> None:
             console.print(f"- {escape(error)}")
 
 
+def _print_signal_evaluation_result(report: AnalyticalSignalEvaluationReport) -> None:
+    diagnostics = report.diagnostics
+    table = Table(title="Analytical Signal Evaluation")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Evaluator", report.metadata.name)
+    table.add_row("Version", report.metadata.version)
+    table.add_row("Symbols", ", ".join(report.symbols_requested))
+    table.add_row("Alignment", _enum_value(report.request.alignment_mode))
+    table.add_row(
+        "Signal evaluation enabled",
+        str(report.signal_evaluation_enabled).lower(),
+    )
+    table.add_row("Generated signals", str(report.generated_signals).lower())
+    table.add_row("Signal count", str(report.signal_count))
+    table.add_row(
+        "Order intents generated",
+        str(report.order_intents_generated).lower(),
+    )
+    table.add_row("Orders simulated", str(report.orders_simulated).lower())
+    table.add_row("Fills simulated", str(report.fills_simulated).lower())
+    table.add_row("P&L calculated", str(report.pnl_calculated).lower())
+    table.add_row("Portfolio accounting", str(report.portfolio_accounting).lower())
+    table.add_row("Broker contacted", str(report.broker_contacted).lower())
+    table.add_row("Order routing", "disabled")
+    table.add_row("Final status", report.final_status)
+    table.add_row("Frame count", str(diagnostics.frame_count))
+    table.add_row("Contexts built", str(diagnostics.contexts_built))
+    table.add_row("Observations", str(diagnostics.observations_count))
+    table.add_row("Warmup observations", str(diagnostics.warmup_observations))
+    table.add_row("Invalid data observations", str(diagnostics.invalid_data_observations))
+    table.add_row(
+        "First timestamp",
+        diagnostics.first_timestamp.isoformat() if diagnostics.first_timestamp else "n/a",
+    )
+    table.add_row(
+        "Last timestamp",
+        diagnostics.last_timestamp.isoformat() if diagnostics.last_timestamp else "n/a",
+    )
+    if report.feed_summary is not None:
+        table.add_row("Feed status", _enum_value(report.feed_summary.feed_status))
+        table.add_row("Feed frames", str(report.feed_summary.frame_count))
+    console.print(table)
+
+    state_table = Table(title="Condition State Counts")
+    state_table.add_column("State")
+    state_table.add_column("Count")
+    if diagnostics.observations_by_state:
+        for state, count in sorted(diagnostics.observations_by_state.items()):
+            state_table.add_row(state, str(count))
+    else:
+        state_table.add_row("none", "0")
+    console.print(state_table)
+
+    if report.warnings:
+        console.print("[yellow]Signal evaluation warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Signal evaluation errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_paper_readiness_run_result(report: PaperReadinessRunReport) -> None:
+    table = Table(title="Paper Readiness Run")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Final status", _enum_value(report.final_status))
+    table.add_row("Selected universe", ", ".join(report.selected_universe))
+    table.add_row("Commodity proxies", ", ".join(report.commodity_symbols))
+    table.add_row("Broker connected", str(report.broker_connected).lower())
+    table.add_row(
+        "Account summary verified",
+        str(report.account_summary_verified).lower(),
+    )
+    table.add_row(
+        "History snapshot written",
+        str(report.history_snapshot_written).lower(),
+    )
+    table.add_row("History load completed", str(report.history_load_completed).lower())
+    table.add_row(
+        "Signal evaluation completed",
+        str(report.signal_evaluation_completed).lower(),
+    )
+    table.add_row("Submitted orders", str(report.submitted_orders).lower())
+    table.add_row("Paper orders enabled", str(report.paper_orders_enabled).lower())
+    table.add_row("Read-Only API expected", str(report.read_only_api_expected).lower())
+    table.add_row("Order routing", "disabled")
+    table.add_row(
+        "Partial symbols",
+        ", ".join(report.partial_symbols) if report.partial_symbols else "none",
+    )
+    console.print(table)
+
+    stages = Table(title="Sequential Stages")
+    stages.add_column("Stage")
+    stages.add_column("Status")
+    stages.add_column("OK")
+    stages.add_column("Reports")
+    for stage in report.stages:
+        stages.add_row(
+            stage.name,
+            _enum_value(stage.final_status),
+            str(stage.ok).lower(),
+            str(len(stage.report_paths)),
+        )
+    console.print(stages)
+
+    if report.account_ids_masked:
+        console.print(
+            "Masked accounts: "
+            + ", ".join(escape(account) for account in report.account_ids_masked)
+        )
+    if report.warnings:
+        console.print("[yellow]Paper readiness warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Paper readiness errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
 def _print_broker_result(report: BrokerDiagnosticReport) -> None:
     table = Table(title="Broker Connectivity")
     table.add_column("Check")
@@ -1794,6 +2143,57 @@ def _print_market_data_result(report: MarketDataDiagnosticReport) -> None:
         for error in report.errors:
             code = f"IBKR {error.code}: " if error.code is not None else ""
             console.print(f"- {escape(code + error.message)}")
+
+
+def _print_commodity_universe_result(report: CommodityResearchUniverseReport) -> None:
+    table = Table(title="Commodity Proxy Universe")
+    table.add_column("Symbol")
+    table.add_column("Category")
+    table.add_column("SecType")
+    table.add_column("Exchange")
+    table.add_column("Currency")
+    table.add_column("Exposure")
+    for instrument in report.instruments:
+        table.add_row(
+            instrument.symbol,
+            _enum_value(instrument.category),
+            instrument.ibkr_sec_type,
+            instrument.exchange,
+            instrument.currency,
+            instrument.underlying_exposure,
+        )
+    if not report.instruments:
+        table.add_row("none", "n/a", "n/a", "n/a", "n/a", "n/a")
+    console.print(table)
+
+    safety = Table(title="Commodity Universe Safety")
+    safety.add_column("Check")
+    safety.add_column("Value")
+    safety.add_row("Commodity proxy universe", str(report.commodity_proxy_universe).lower())
+    safety.add_row("Direct futures contracts", "disabled")
+    safety.add_row(
+        "Direct futures data",
+        str(report.direct_futures_data_enabled).lower(),
+    )
+    safety.add_row("Broker contacted", str(report.broker_contacted).lower())
+    safety.add_row(
+        "Signal evaluation enabled",
+        str(report.signal_evaluation_enabled).lower(),
+    )
+    safety.add_row("Generated signals", str(report.generated_signals).lower())
+    safety.add_row("Signal count", str(report.signal_count))
+    safety.add_row("Order routing", "disabled")
+    safety.add_row("Final status", report.final_status)
+    console.print(safety)
+
+    if report.warnings:
+        console.print("[yellow]Commodity universe warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Commodity universe errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
 
 
 def _print_history_index_result(report: HistoricalLoaderReport) -> None:

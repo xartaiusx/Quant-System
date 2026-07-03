@@ -27,6 +27,9 @@ The current project is infrastructure only. It must support research, signal gen
 - Offline stress tests may generate synthetic fixture data only and must remain broker-free.
 - Signal contract commands must remain disabled-by-default and diagnostics-only until a future milestone explicitly approves signal generation. They must not generate order intents, simulate fills, calculate P&L, or contact brokers.
 - Disabled signal runner commands must remain diagnostics-only until a future milestone explicitly approves real signal evaluation. They must not generate trading signals, order intents, simulated fills, P&L, portfolio accounting, or contact brokers.
+- Analytical signal evaluator commands must remain broker-free and non-actionable. They may emit approved diagnostic condition states only; they must not generate trading signals, order intents, simulated fills, P&L, portfolio accounting, or contact brokers.
+- Commodity universe commands must remain broker-free and security-proxy-only. They must not enable direct futures contracts, futures data requests, futures margin or roll modeling, signal evaluation, order intents, simulated fills, P&L, portfolio accounting, or contact brokers.
+- Paper readiness orchestration may contact IBKR through read-only broker, account-summary, and historical-data requests only. It must run stages sequentially, require a real broker account summary, reject mock fallback as readiness success, keep `ALLOW_PAPER_ORDERS=false`, report `submitted_orders=false`, and keep direct futures out of scope.
 - Do not commit `.env`, secrets, account numbers, API credentials, tokens, or sensitive logs.
 - Missing or invalid config must fail closed.
 
@@ -99,6 +102,20 @@ Run a dry plan:
 
 ```bash
 python -m trader.cli plan --strategy momentum --dry-run
+```
+
+Run offline analytical signal evaluation:
+
+```bash
+python -m trader.cli signal-evaluate --symbols SPY,AAPL
+scripts/run-signal-evaluate.sh
+```
+
+Run read-only paper readiness orchestration:
+
+```bash
+python -m trader.cli paper-readiness-run
+scripts/run-paper-readiness-run.sh
 ```
 
 ## Definition Of Done

@@ -125,6 +125,30 @@ evaluation, generates buy/sell/hold outputs, creates order intents, simulates
 orders, simulates fills, maintains portfolio accounting, computes P&L, submits
 to the paper executor, or routes execution.
 
+Milestone 15 adds a broker-free analytical signal evaluator.
+`signal-evaluate` reads offline feed frames only and emits non-actionable
+condition observations. It never contacts a broker, invokes order APIs, creates
+order intents, simulates orders, simulates fills, maintains portfolio
+accounting, computes P&L, submits to the paper executor, or routes execution.
+It reports `generated_signals=false` and `signal_count=0`.
+
+Milestone 16 adds a broker-free commodity research universe.
+`commodity-universe` lists commodity-linked security proxies only. It never
+contacts a broker, enables direct futures contracts, requests futures data,
+models futures roll or margin, invokes order APIs, evaluates signals, creates
+order intents, simulates fills, maintains portfolio accounting, computes P&L,
+submits to the paper executor, or routes execution.
+
+Milestone 17 adds read-only paper readiness orchestration.
+`paper-readiness-run` contacts IBKR only for broker probe, broker account
+summary, and bounded historical-data reads, then switches back to offline
+loading, commodity-proxy inspection, and analytical signal evaluation. It runs
+sequentially, requires a real broker account summary with masked account output,
+rejects mock account fallback as readiness success, keeps
+`ALLOW_PAPER_ORDERS=false`, reports `submitted_orders=false`, keeps
+`paper_orders_enabled=false`, does not activate the paper executor, and keeps
+direct futures contracts out of scope.
+
 ## Quantitative Research Gate
 
 No current milestone supports profitability, performance, or tradability claims.
