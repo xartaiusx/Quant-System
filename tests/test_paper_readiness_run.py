@@ -14,6 +14,8 @@ from trader.models import (
     HistoricalReadinessStatus,
     HistoricalReadinessSummary,
     HistoricalSnapshotLoadRequest,
+    HistoricalSnapshotReport,
+    HistoricalSnapshotRequest,
     ManagedAccountInfo,
     PaperReadinessRunReport,
     PaperReadinessRunRequest,
@@ -22,6 +24,7 @@ from trader.models import (
     PaperReadinessStageStatus,
 )
 from trader.paper_readiness import run_paper_readiness_run
+from trader.reporting.journal import Journal
 from trader.reporting.reports import markdown_summary
 
 
@@ -87,6 +90,57 @@ def account_report(*, verified: bool = True) -> BrokerDiagnosticReport:
         else None
     )
     return report.model_copy(update={"account_snapshot": snapshot})
+
+
+class CapturingBrokerClient:
+    def __init__(self, stage_config: TraderConfig) -> None:
+        self.stage_config = stage_config
+
+    def diagnostic_report(
+        self,
+        *,
+        timeout: float | None = None,
+        include_managed_accounts: bool = True,
+        include_account: bool = False,
+        include_positions: bool = False,
+    ) -> BrokerDiagnosticReport:
+        del timeout, include_managed_accounts, include_positions
+        report = account_report() if include_account else broker_report()
+        return report.model_copy(update={"client_id": self.stage_config.ibkr_client_id})
+
+    def request_historical_snapshots(
+        self,
+        symbols: list[str],
+        *,
+        duration: str,
+        bar_size: str,
+        what_to_show: str,
+        use_rth: int,
+        timeout: float | None = None,
+    ) -> HistoricalSnapshotReport:
+        request = HistoricalSnapshotRequest(
+            symbols=symbols,
+            duration=duration,
+            bar_size=bar_size,
+            what_to_show=what_to_show,
+            use_rth=use_rth,
+            timeout_seconds=timeout or 30,
+        )
+        return HistoricalSnapshotReport(
+            ok=False,
+            mode=self.stage_config.trading_mode.value,
+            host=self.stage_config.ibkr_host,
+            port=self.stage_config.ibkr_port,
+            client_id=self.stage_config.ibkr_client_id,
+            broker_kind=self.stage_config.inferred_broker_kind,
+            connected=True,
+            ibapi_available=True,
+            connection_attempted=True,
+            request=request,
+            symbols_requested=symbols,
+            results=[],
+            final_status="failed",
+        )
 
 
 def readiness_report(
@@ -270,6 +324,26 @@ def test_paper_readiness_run_completed_with_partial_symbol_warnings(monkeypatch)
     assert report.partial_symbols == ["DBA"]
     assert report.readiness_status_by_symbol["DBA"] == "partial"
     assert report.load_status_by_symbol["DBA"] == "partial"
+
+
+def test_paper_readiness_run_uses_distinct_client_ids_for_broker_stages(tmp_path) -> None:
+    client_ids: list[int] = []
+
+    def factory(stage_config: TraderConfig) -> CapturingBrokerClient:
+        client_ids.append(stage_config.ibkr_client_id)
+        return CapturingBrokerClient(stage_config)
+
+    report = run_paper_readiness_run(
+        config(ibkr_client_id=101),
+        request(),
+        journal=Journal(tmp_path / "reports"),
+        broker_client_factory=factory,
+    )
+
+    assert client_ids == [101, 102, 103]
+    assert report.account_summary_verified is True
+    assert report.final_status == PaperReadinessRunStatus.FAILED
+    assert "no usable historical snapshots were written" in report.errors
 
 
 def test_paper_readiness_run_fails_when_broker_probe_fails(monkeypatch) -> None:
