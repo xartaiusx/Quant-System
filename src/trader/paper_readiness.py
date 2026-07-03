@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -110,6 +111,11 @@ def _broker_stage_config(config: TraderConfig, *, stage_offset: int) -> TraderCo
     return config.model_copy(update={"ibkr_client_id": config.ibkr_client_id + stage_offset})
 
 
+def _pause_between_broker_stages(request: PaperReadinessRunRequest) -> None:
+    if request.broker_stage_pause_seconds > 0:
+        time.sleep(request.broker_stage_pause_seconds)
+
+
 def run_paper_readiness_run(
     config: TraderConfig,
     request: PaperReadinessRunRequest | None = None,
@@ -161,6 +167,7 @@ def run_paper_readiness_run(
             warnings=run_warnings,
             errors=["broker probe failed"],
         )
+    _pause_between_broker_stages(readiness_request)
 
     account_stage, account_report = _run_account_summary_stage(
         _broker_stage_config(config, stage_offset=1),
@@ -178,6 +185,7 @@ def run_paper_readiness_run(
             warnings=run_warnings,
             errors=["broker account summary is unavailable or lacks funding tags"],
         )
+    _pause_between_broker_stages(readiness_request)
 
     snapshot_stage, snapshot_report, readiness_report = _run_history_snapshot_stage(
         _broker_stage_config(config, stage_offset=2),
@@ -731,6 +739,11 @@ def _account_summary_payload(
         "report_type": "account_summary",
         "command": "account --connect",
         "ok": account_summary_verified,
+        "mode": report.mode,
+        "host": report.host,
+        "port": report.port,
+        "client_id": report.client_id,
+        "broker_kind": report.broker_kind,
         "final_status": "verified" if account_summary_verified else "failed",
         "account_summary_verified": account_summary_verified,
         "account_summary_source": (

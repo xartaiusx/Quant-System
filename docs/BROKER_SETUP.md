@@ -92,6 +92,7 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - `market-probe` defaults to delayed data and writes `market_probe` reports.
 - `history-snapshot` writes ignored JSONL snapshots and manifests under `data/historical/`.
 - `paper-readiness-run` runs broker probe, broker account summary, historical snapshot, offline load, commodity proxy universe, and analytical signal evaluation sequentially.
+- `paper-readiness-run` uses distinct IBKR client IDs for broker-contact stages and pauses between those stages by default; override with `--broker-stage-pause` if needed.
 - `paper-readiness-run` fails if broker account summary is unavailable or only mock fallback data is available.
 - Paper execution remains blocked by the refusing paper executor.
 - Live trading remains impossible.
@@ -129,6 +130,7 @@ python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
 python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
 python -m trader.cli paper-readiness-run
+python -m trader.cli paper-readiness-run --broker-stage-pause 2
 ```
 
 `account --connect` and `positions --connect` are read-only. If the broker is unavailable, they clearly fall back to mock data instead of pretending mock data came from TWS or Gateway.

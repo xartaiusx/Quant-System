@@ -1986,6 +1986,7 @@ class PaperReadinessRunRequest(SerializableModel):
     use_rth: int = 1
     broker_timeout_seconds: float = 15
     history_timeout_seconds: float = 30
+    broker_stage_pause_seconds: float = 1
     latest: bool = True
     strict: bool = False
     base_data_path: str = "data/historical"
@@ -2025,6 +2026,13 @@ class PaperReadinessRunRequest(SerializableModel):
     def validate_timeout_seconds(cls, value: float) -> float:
         if value <= 0 or value > 120:
             raise ValueError("paper readiness timeouts must be greater than 0 and no more than 120")
+        return value
+
+    @field_validator("broker_stage_pause_seconds")
+    @classmethod
+    def validate_broker_stage_pause_seconds(cls, value: float) -> float:
+        if value < 0 or value > 30:
+            raise ValueError("broker stage pause must be between 0 and 30 seconds")
         return value
 
     @field_validator("short_window", "long_window")

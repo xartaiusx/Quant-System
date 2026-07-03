@@ -1357,6 +1357,12 @@ def paper_readiness_run_markdown(payload: Mapping[str, Any]) -> str:
     report_paths = payload.get("report_paths", {})
     account_ids = payload.get("account_ids_masked", [])
     partial_symbols = payload.get("partial_symbols", [])
+    request = payload.get("request", {})
+    broker_stage_pause = (
+        request.get("broker_stage_pause_seconds", "unknown")
+        if isinstance(request, Mapping)
+        else "unknown"
+    )
 
     lines = [
         f"# {payload.get('title', 'Read-only IBKR Paper Readiness Run')}",
@@ -1366,6 +1372,7 @@ def paper_readiness_run_markdown(payload: Mapping[str, Any]) -> str:
         f"- Final status: `{payload.get('final_status', 'unknown')}`",
         f"- Selected universe: `{', '.join(payload.get('selected_universe', []))}`",
         f"- Commodity symbols: `{', '.join(payload.get('commodity_symbols', []))}`",
+        f"- Broker stage pause seconds: `{broker_stage_pause}`",
         f"- Broker connected: `{payload.get('broker_connected', False)}`",
         f"- Account summary verified: `{payload.get('account_summary_verified', False)}`",
         f"- History snapshot written: `{payload.get('history_snapshot_written', False)}`",

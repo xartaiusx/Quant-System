@@ -40,6 +40,7 @@ def request() -> PaperReadinessRunRequest:
     return PaperReadinessRunRequest(
         symbols=["SPY", "AAPL", "GLD", "USO", "DBA"],
         commodity_symbols=["GLD", "USO", "DBA"],
+        broker_stage_pause_seconds=0,
     )
 
 
@@ -344,6 +345,21 @@ def test_paper_readiness_run_uses_distinct_client_ids_for_broker_stages(tmp_path
     assert report.account_summary_verified is True
     assert report.final_status == PaperReadinessRunStatus.FAILED
     assert "no usable historical snapshots were written" in report.errors
+
+
+def test_paper_readiness_run_pauses_between_broker_stages(monkeypatch) -> None:
+    pauses: list[float] = []
+    readiness_request = request().model_copy(update={"broker_stage_pause_seconds": 1.5})
+    patch_success_stages(monkeypatch)
+    monkeypatch.setattr(
+        "trader.paper_readiness.time.sleep",
+        lambda seconds: pauses.append(seconds),
+    )
+
+    report = run_paper_readiness_run(config(), readiness_request)
+
+    assert report.final_status == PaperReadinessRunStatus.COMPLETED
+    assert pauses == [1.5, 1.5]
 
 
 def test_paper_readiness_run_fails_when_broker_probe_fails(monkeypatch) -> None:
