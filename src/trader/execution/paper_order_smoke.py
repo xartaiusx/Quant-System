@@ -531,6 +531,10 @@ class IBKRPaperOrderBroker:
         if not connected and not app.isConnected():
             raise PaperOrderSmokeError("IBKR API connect returned false")
         if not app.connection_ready_event.wait(timeout):
+            self.disconnect()
+            raise PaperOrderSmokeError("IBKR API connection timed out before nextValidId")
+        if not app.next_valid_id_event.wait(timeout):
+            self.disconnect()
             raise PaperOrderSmokeError("IBKR API connection timed out before nextValidId")
 
     def disconnect(self) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from decimal import Decimal
 from pathlib import Path
 
@@ -8,9 +9,11 @@ import pytest
 from trader.config import BrokerKind, TraderConfig, TradingMode
 from trader.execution.paper_order_smoke import (
     PAPER_SMOKE_CONFIRMATION,
+    IBKRPaperOrderBroker,
     PaperBrokerAccountSummary,
     PaperBrokerOpenOrder,
     PaperBrokerPlacementResult,
+    PaperOrderSmokeError,
     run_paper_order_smoke,
 )
 from trader.models import (
@@ -185,6 +188,141 @@ class FakePaperOrderBroker:
         del order_id, timeout
         self.cancel_calls += 1
         return self.cancel_result
+
+
+class DelayedNextValidIdApp:
+    def __init__(self) -> None:
+        self.connection_ready_event = threading.Event()
+        self.next_valid_id_event = threading.Event()
+        self.managed_accounts_event = threading.Event()
+        self.account_summary_event = threading.Event()
+        self.open_order_event = threading.Event()
+        self.open_order_end_event = threading.Event()
+        self.order_event = threading.Event()
+        self.run_started_event = threading.Event()
+        self.release_next_valid_id_event = threading.Event()
+        self.market_data_events = {}
+        self.contract_details_events = {}
+        self.next_valid_order_id = None
+        self.managed_accounts = []
+        self.account_summary = {}
+        self.open_orders = {}
+        self.order_statuses = {}
+        self.order_perm_ids = {}
+        self.filled_quantities = {}
+        self.remaining_quantities = {}
+        self.quote_values = {}
+        self.quote_timestamps = {}
+        self.callback_events = []
+        self.errors = []
+        self.warnings = []
+        self.connected = False
+        self.disconnected = False
+
+    def connect(self, host: str, port: int, clientId: int) -> bool:  # noqa: N803
+        del host, port, clientId
+        self.connected = True
+        self.connection_ready_event.set()
+        return True
+
+    def disconnect(self) -> None:
+        self.disconnected = True
+        self.connected = False
+        self.release_next_valid_id_event.set()
+
+    def isConnected(self) -> bool:  # noqa: N802
+        return self.connected
+
+    def run(self) -> None:
+        self.run_started_event.set()
+        if self.release_next_valid_id_event.wait(timeout=1):
+            self.next_valid_order_id = 1001
+            self.next_valid_id_event.set()
+
+    def reqManagedAccts(self) -> None:  # noqa: N802
+        raise AssertionError("connect must wait for nextValidId before requests")
+
+    def reqAccountSummary(self, reqId: int, groupName: str, tags: str) -> None:  # noqa: N802
+        del reqId, groupName, tags
+
+    def reqOpenOrders(self) -> None:  # noqa: N802
+        return None
+
+    def reqMarketDataType(self, marketDataType: int) -> None:  # noqa: N802
+        del marketDataType
+
+    def reqMktData(  # noqa: N802
+        self,
+        reqId: int,
+        contract: object,
+        genericTickList: str,
+        snapshot: bool,
+        regulatorySnapshot: bool,
+        mktDataOptions: list[object],
+    ) -> None:
+        del reqId, contract, genericTickList, snapshot, regulatorySnapshot, mktDataOptions
+
+    def cancelMktData(self, reqId: int) -> None:  # noqa: N802
+        del reqId
+
+    def placeOrder(self, orderId: int, contract: object, order: object) -> None:  # noqa: N802
+        del orderId, contract, order
+
+    def cancelOrder(self, orderId: int, manualCancelOrderTime: str = "") -> None:  # noqa: N802
+        del orderId, manualCancelOrderTime
+
+
+def test_ibkr_paper_order_broker_waits_for_next_valid_id_before_ready() -> None:
+    app = DelayedNextValidIdApp()
+    broker = IBKRPaperOrderBroker(
+        config(),
+        app_factory=lambda: app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+    errors: list[BaseException] = []
+    worker = threading.Thread(
+        target=lambda: _connect_for_test(broker, errors),
+        daemon=True,
+    )
+
+    worker.start()
+
+    assert app.run_started_event.wait(timeout=0.2)
+    assert worker.is_alive()
+
+    app.release_next_valid_id_event.set()
+    worker.join(timeout=1)
+
+    broker.disconnect()
+
+    assert errors == []
+    assert worker.is_alive() is False
+
+
+def test_ibkr_paper_order_broker_times_out_without_next_valid_id() -> None:
+    app = DelayedNextValidIdApp()
+    broker = IBKRPaperOrderBroker(
+        config(),
+        app_factory=lambda: app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    with pytest.raises(PaperOrderSmokeError, match="timed out before nextValidId"):
+        broker.connect(timeout=0.01)
+
+    assert app.disconnected is True
+
+
+def _connect_for_test(
+    broker: IBKRPaperOrderBroker,
+    errors: list[BaseException],
+) -> None:
+    try:
+        broker.connect(timeout=1)
+    except BaseException as exc:  # pragma: no cover - asserted by caller
+        errors.append(exc)
 
 
 def test_untransmitted_paper_order_smoke_rehearsal_records_order_without_submission() -> None:
