@@ -195,6 +195,58 @@ export ALLOW_PAPER_ORDERS=false
 Re-enable IBKR Read-Only API unless actively running a gated paper execution
 command.
 
+## First Strategy-Gated Alpha Paper Run
+
+Run this only after a same-commit read-only alpha shadow report and a
+same-commit transmitted paper-order smoke report have passed within 24 hours.
+Keep normal development defaults at `ALLOW_PAPER_ORDERS=false` and IBKR
+Read-Only API enabled until the exact alpha paper window.
+
+Required operator setup for the alpha paper window:
+
+- Paper TWS or paper IB Gateway is open and logged in.
+- API socket clients are enabled.
+- Socket port is `7497` for TWS paper or `4002` for IB Gateway paper.
+- IBKR Read-Only API is disabled only while running this command.
+- Environment is paper-only:
+
+```bash
+export TRADING_MODE=paper
+export ALLOW_PAPER_ORDERS=true
+export ALLOW_LIVE_ORDERS=false
+export IBKR_HOST=127.0.0.1
+export IBKR_PORT=4002
+export IBKR_CLIENT_ID=21
+export MAX_TRADE_NOTIONAL=1000
+```
+
+Then run:
+
+```bash
+python -m trader.cli alpha-paper-run --symbol SPY --quantity 1 --allow-fill false --cancel-after-seconds 30 --confirm ALPHA_PAPER_SPY_1
+```
+
+Expected behavior:
+
+- refuses unless prerequisite reports include `commit_sha` matching current
+  `HEAD` and are within the freshness window
+- refuses unless the transmitted `paper-order-smoke` report proves paper-only
+  order lifecycle handling
+- returns `no_trade` without an order when the shadow signal is HOLD/no-signal
+  or risk did not approve
+- submits at most one SPY BUY 1 `LMT DAY` paper order only when the shadow
+  signal is BUY and risk approved
+- writes masked JSON and Markdown reports under `reports/`
+
+After the alpha paper run:
+
+```bash
+export ALLOW_PAPER_ORDERS=false
+```
+
+Re-enable IBKR Read-Only API unless actively running a gated paper execution
+command.
+
 ## Read-Only Market-Data Diagnostics
 
 ```bash

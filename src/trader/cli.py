@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from trader.alpha_paper import ALPHA_PAPER_CONFIRMATION, run_alpha_paper_run
 from trader.alpha_shadow import run_alpha_shadow_run
 from trader.backtest.data_adapter import build_backtest_feed, build_backtest_feed_report
 from trader.backtest.engine import build_backtest_run_report
@@ -33,6 +34,8 @@ from trader.data.universe import parse_symbols
 from trader.execution.paper_order_smoke import run_paper_order_smoke
 from trader.execution.router import ExecutionRouter
 from trader.models import (
+    AlphaPaperRunReport,
+    AlphaPaperRunRequest,
     AlphaShadowRunReport,
     AlphaShadowRunRequest,
     AnalyticalSignalEvaluationReport,
@@ -86,7 +89,10 @@ from trader.strategy.signal_runner import build_disabled_signal_runner_report
 from trader.strategy.signals import build_signal_contract_report
 
 app = typer.Typer(
-    help="Safety-first IBKR quantitative trading foundation. No command places orders.",
+    help=(
+        "Safety-first IBKR quantitative trading foundation. Live orders are refused; "
+        "paper orders require explicit gated commands."
+    ),
     no_args_is_help=True,
 )
 console = Console()
@@ -1615,6 +1621,98 @@ def paper_order_smoke(
         raise typer.Exit(code=1)
 
 
+@app.command("alpha-paper-run")
+def alpha_paper_run(
+    symbol: Annotated[
+        str,
+        typer.Option("--symbol", help="Alpha paper symbol. Only SPY is allowed."),
+    ] = "SPY",
+    quantity: Annotated[
+        int,
+        typer.Option("--quantity", help="Alpha paper quantity. Only 1 is allowed."),
+    ] = 1,
+    allow_fill: Annotated[
+        str,
+        typer.Option("--allow-fill", help="Whether a transmitted paper fill is allowed."),
+    ] = "false",
+    cancel_after_seconds: Annotated[
+        float,
+        typer.Option(
+            "--cancel-after-seconds",
+            help="Seconds to wait before canceling an unfilled transmitted order.",
+        ),
+    ] = 30,
+    confirm: Annotated[
+        str,
+        typer.Option("--confirm", help="Required alpha paper confirmation string."),
+    ] = "",
+    max_trade_notional: Annotated[
+        str,
+        typer.Option("--max-trade-notional", help="Maximum alpha paper notional."),
+    ] = "1000",
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Broker request timeout seconds."),
+    ] = 30,
+    max_report_age_hours: Annotated[
+        int,
+        typer.Option(
+            "--max-report-age-hours",
+            help="Maximum age for prerequisite alpha-shadow and paper-smoke reports.",
+        ),
+    ] = 24,
+    alpha_shadow_report: Annotated[
+        Path,
+        typer.Option(
+            "--alpha-shadow-report",
+            help="Passing same-commit alpha-shadow report path.",
+        ),
+    ] = Path("reports/latest_alpha_shadow_run.json"),
+    paper_smoke_report: Annotated[
+        Path,
+        typer.Option(
+            "--paper-smoke-report",
+            help="Passing same-commit transmitted paper-order-smoke report path.",
+        ),
+    ] = Path("reports/latest_paper_order_smoke.json"),
+) -> None:
+    """Run the first strategy-gated SPY paper alpha order."""
+
+    config = _load_config_or_exit()
+    request = AlphaPaperRunRequest(
+        symbol=symbol,
+        quantity=quantity,
+        allow_fill=_parse_bool_option(allow_fill, "--allow-fill"),
+        cancel_after_seconds=_validate_non_negative_seconds_option(
+            cancel_after_seconds,
+            120,
+        ),
+        confirm=confirm,
+        max_trade_notional=_parse_decimal_option(
+            max_trade_notional,
+            "--max-trade-notional",
+        ),
+        timeout_seconds=_validate_timeout_option(timeout) or 30,
+        max_report_age_hours=max_report_age_hours,
+        alpha_shadow_report_path=alpha_shadow_report.as_posix(),
+        paper_smoke_report_path=paper_smoke_report.as_posix(),
+    )
+    report = run_alpha_paper_run(config, request)
+    json_path, md_path = Journal().write_cycle("alpha_paper_run", _report_dict(report))
+
+    console.print("[bold]IBKR alpha paper run[/bold]")
+    console.print("Scope: SPY BUY 1 LMT DAY only when shadow signal is BUY and risk approved.")
+    console.print("Live trading: disabled.")
+    console.print("Live ports: rejected.")
+    console.print("Read-Only API should be disabled only while this command is running.")
+    console.print(f"Required confirmation: {ALPHA_PAPER_CONFIRMATION}")
+    _print_alpha_paper_run_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def account(
     connect: Annotated[
@@ -1914,6 +2012,7 @@ def _validate_use_rth_option(use_rth: int) -> int:
 def _report_dict(
     report: (
         AnalyticalSignalEvaluationReport
+        | AlphaPaperRunReport
         | AlphaShadowRunReport
         | BacktestDataAdapterReport
         | BacktestRunReport
@@ -2579,6 +2678,61 @@ def _print_paper_order_smoke_result(report: PaperOrderSmokeReport) -> None:
             console.print(f"- {escape(warning)}")
     if report.errors:
         console.print("[red]Paper order smoke errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_alpha_paper_run_result(report: AlphaPaperRunReport) -> None:
+    table = Table(title="Alpha Paper Run")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Final status", _enum_value(report.final_status))
+    table.add_row("Mode", report.mode)
+    table.add_row("Host", report.host)
+    table.add_row("Port", str(report.port))
+    table.add_row("Client ID", str(report.client_id))
+    table.add_row(
+        "Shadow report verified",
+        str(report.alpha_shadow_report_verified).lower(),
+    )
+    table.add_row(
+        "Paper smoke report verified",
+        str(report.paper_smoke_report_verified).lower(),
+    )
+    table.add_row("Shadow signal", report.shadow_signal or "n/a")
+    table.add_row("Risk approved", str(report.risk_approved).lower())
+    table.add_row("No-trade reason", report.no_trade_reason or "n/a")
+    table.add_row("Submitted orders", str(report.submitted_orders).lower())
+    table.add_row("Paper orders enabled", str(report.paper_orders_enabled).lower())
+    table.add_row("Live orders enabled", str(report.live_orders_enabled).lower())
+    table.add_row("Live route possible", str(report.live_route_possible).lower())
+    table.add_row("Order API invoked", str(report.order_api_invoked).lower())
+    table.add_row("Order ID", str(report.order_id or "n/a"))
+    table.add_row("Perm ID", str(report.perm_id or "n/a"))
+    table.add_row("Order status", report.order_status or "n/a")
+    table.add_row("Fill quantity", str(report.fill_quantity))
+    table.add_row("Cancel requested", str(report.cancel_requested).lower())
+    table.add_row("Canceled", str(report.canceled).lower())
+    console.print(table)
+
+    if report.account_ids_masked:
+        console.print(
+            "Masked accounts: "
+            + ", ".join(escape(account) for account in report.account_ids_masked)
+        )
+    if report.source_report_paths:
+        source_table = Table(title="Source Reports")
+        source_table.add_column("Report")
+        source_table.add_column("Path")
+        for label, path in sorted(report.source_report_paths.items()):
+            source_table.add_row(label, path)
+        console.print(source_table)
+    if report.warnings:
+        console.print("[yellow]Alpha paper warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Alpha paper errors[/red]")
         for error in report.errors:
             console.print(f"- {escape(error)}")
 
