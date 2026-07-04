@@ -45,6 +45,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return commodity_universe_markdown(payload)
     if payload.get("report_type") == "paper_readiness_run":
         return paper_readiness_run_markdown(payload)
+    if payload.get("report_type") == "alpha_shadow_run":
+        return alpha_shadow_run_markdown(payload)
 
     lines = [
         f"# {payload.get('title', 'Trading Report')}",
@@ -1439,6 +1441,113 @@ def paper_readiness_run_markdown(payload: Mapping[str, Any]) -> str:
     lines.extend(["", "## Partial Symbols", ""])
     if partial_symbols:
         lines.extend(f"- `{symbol}`" for symbol in partial_symbols)
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Report Paths", ""])
+    if report_paths:
+        for label, path in sorted(report_paths.items()):
+            lines.append(f"- `{label}`: `{path}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def alpha_shadow_run_markdown(payload: Mapping[str, Any]) -> str:
+    """Render the read-only alpha shadow orchestration report."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    stages = payload.get("stages", [])
+    report_paths = payload.get("report_paths", {})
+    account_ids = payload.get("account_ids_masked", [])
+    data_quality = payload.get("data_quality_status_by_symbol", {})
+    source_bars = payload.get("source_bar_timestamp_by_symbol", {})
+    request = payload.get("request", {})
+    broker_stage_pause = (
+        request.get("broker_stage_pause_seconds", "unknown")
+        if isinstance(request, Mapping)
+        else "unknown"
+    )
+
+    lines = [
+        f"# {payload.get('title', 'Read-only IBKR Alpha Shadow Run')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'alpha-shadow-run')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Selected universe: `{', '.join(payload.get('selected_universe', []))}`",
+        f"- Broker stage pause seconds: `{broker_stage_pause}`",
+        f"- Broker connected: `{payload.get('broker_connected', False)}`",
+        f"- Account summary verified: `{payload.get('account_summary_verified', False)}`",
+        f"- History snapshot written: `{payload.get('history_snapshot_written', False)}`",
+        f"- History load completed: `{payload.get('history_load_completed', False)}`",
+        f"- Data quality completed: `{payload.get('data_quality_completed', False)}`",
+        f"- Signal evaluation completed: `{payload.get('signal_evaluation_completed', False)}`",
+        f"- Shadow risk mode: `{payload.get('shadow_risk_mode', 'unknown')}`",
+        f"- Shadow signals: `{payload.get('shadow_signal_count', 0)}`",
+        f"- Trade plans: `{payload.get('trade_plan_count', 0)}`",
+        f"- Risk decisions: `{payload.get('risk_decision_count', 0)}`",
+        f"- Risk approved: `{payload.get('risk_approved_count', 0)}`",
+        f"- Simulation results: `{payload.get('simulation_result_count', 0)}`",
+        f"- Simulated fills: `{payload.get('simulated_fill_count', 0)}`",
+        f"- Submitted orders: `{payload.get('submitted_orders', True)}`",
+        f"- Paper orders enabled: `{payload.get('paper_orders_enabled', True)}`",
+        f"- Read-Only API expected: `{payload.get('read_only_api_expected', False)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- Broker contact read-only: `{payload.get('broker_contact_read_only', False)}`",
+        f"- Paper execution enabled: `{payload.get('paper_execution_enabled', True)}`",
+        f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
+        "",
+        "## Scope",
+        "",
+        str(
+            payload.get(
+                "no_order_guarantee_statement",
+                "This alpha shadow run is read-only and no orders were routed.",
+            )
+        ),
+        "",
+        str(
+            payload.get(
+                "no_paper_execution_statement",
+                "No paper orders are submitted by this command.",
+            )
+        ),
+        "",
+        "## Stages",
+        "",
+    ]
+    if stages:
+        for stage in stages:
+            lines.append(
+                "- "
+                f"`{stage.get('name', 'unknown')}` "
+                f"status=`{stage.get('final_status', 'unknown')}` "
+                f"ok=`{stage.get('ok', False)}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Data Quality", ""])
+    if isinstance(data_quality, Mapping) and data_quality:
+        for symbol, status in sorted(data_quality.items()):
+            lines.append(f"- `{symbol}`: `{status}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Shadow Quote Source Bars", ""])
+    if isinstance(source_bars, Mapping) and source_bars:
+        for symbol, timestamp in sorted(source_bars.items()):
+            lines.append(f"- `{symbol}`: `{timestamp}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Masked Accounts", ""])
+    if account_ids:
+        lines.extend(f"- `{account_id}`" for account_id in account_ids)
     else:
         lines.append("- None")
 

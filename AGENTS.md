@@ -129,6 +129,13 @@ python -m trader.cli paper-readiness-run
 scripts/run-paper-readiness-run.sh
 ```
 
+Run read-only alpha shadow orchestration:
+
+```bash
+python -m trader.cli alpha-shadow-run
+scripts/run-alpha-shadow-run.sh
+```
+
 ## Definition Of Done
 
 - Repo state and existing files are inspected before edits.
