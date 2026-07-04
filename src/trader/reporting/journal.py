@@ -27,7 +27,8 @@ class Journal:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         safe_payload = mask_sensitive_mapping(_to_plain(dict(payload)))
         safe_payload.setdefault("timestamp", timestamp)
-        safe_payload.setdefault("commit_sha", _current_commit_sha())
+        if not safe_payload.get("commit_sha"):
+            safe_payload["commit_sha"] = _current_commit_sha()
 
         json_path = self.reports_dir / f"{name}_{timestamp}.json"
         md_path = self.reports_dir / f"{name}_{timestamp}.md"
