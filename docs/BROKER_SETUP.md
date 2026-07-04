@@ -77,6 +77,10 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - Keep live ports `7496` and `4001` blocked.
 - Confirm localhost access from this machine.
 - Use a unique `IBKR_CLIENT_ID`.
+- Run broker-contact commands sequentially when collecting acceptance evidence.
+  IB Gateway can accept separate clients, but overlapping managed-account,
+  account-summary, or historical-data probes make timeout diagnosis ambiguous.
+  Prefer a fresh base client ID and a short pause between broker stages.
 
 ## Current Repo Behavior
 
@@ -104,6 +108,9 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - Configured port does not match the running application.
 - Live ports `7496` or `4001` were configured; the repo rejects them.
 - Another API client is already using the same client ID.
+- Multiple broker-contact commands are running at the same time against one
+  Gateway session; rerun sequentially with fresh client IDs before treating this
+  as a broker outage.
 - Firewall or localhost binding blocks the socket.
 - `ibapi` is missing; install with `python -m pip install -e ".[dev,broker]"`.
 - Market data subscriptions are not required for the current-time probe.
