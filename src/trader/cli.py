@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from trader.alpha_shadow import run_alpha_shadow_run
 from trader.backtest.data_adapter import build_backtest_feed, build_backtest_feed_report
 from trader.backtest.engine import build_backtest_run_report
 from trader.config import ConfigError, TraderConfig, load_config
@@ -31,6 +32,8 @@ from trader.data.snapshots import deterministic_history, deterministic_quotes, m
 from trader.data.universe import parse_symbols
 from trader.execution.router import ExecutionRouter
 from trader.models import (
+    AlphaShadowRunReport,
+    AlphaShadowRunRequest,
     AnalyticalSignalEvaluationReport,
     AnalyticalSignalEvaluationRequest,
     BacktestAlignmentMode,
@@ -1402,6 +1405,135 @@ def paper_readiness_run(
         raise typer.Exit(code=1)
 
 
+@app.command("alpha-shadow-run")
+def alpha_shadow_run(
+    symbols: Annotated[
+        str,
+        typer.Option(help="Comma-separated symbols for the first alpha shadow run."),
+    ] = "SPY",
+    duration: Annotated[
+        str,
+        typer.Option("--duration", help="IBKR historical duration string."),
+    ] = "1 D",
+    bar_size: Annotated[
+        str,
+        typer.Option("--bar-size", help="IBKR historical bar size."),
+    ] = "5 mins",
+    what_to_show: Annotated[
+        str,
+        typer.Option("--what-to-show", help="IBKR historical data type."),
+    ] = "TRADES",
+    use_rth: Annotated[
+        int,
+        typer.Option("--use-rth", help="Use regular trading hours: 1 or 0."),
+    ] = 1,
+    broker_timeout: Annotated[
+        float,
+        typer.Option("--broker-timeout", help="Broker/account probe timeout seconds."),
+    ] = 15,
+    history_timeout: Annotated[
+        float,
+        typer.Option("--history-timeout", help="Historical request timeout seconds."),
+    ] = 30,
+    broker_stage_pause: Annotated[
+        float,
+        typer.Option(
+            "--broker-stage-pause",
+            help="Pause seconds between broker-contact stages.",
+        ),
+    ] = 1,
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical snapshot root."),
+    ] = Path("data/historical"),
+    short_window: Annotated[
+        int,
+        typer.Option("--short-window", help="Fast moving-average lookback."),
+    ] = 5,
+    long_window: Annotated[
+        int,
+        typer.Option("--long-window", help="Slow moving-average lookback."),
+    ] = 20,
+    min_bars: Annotated[
+        int,
+        typer.Option("--min-bars", help="Minimum SPY bars required."),
+    ] = 50,
+    max_zero_volume_bars: Annotated[
+        int,
+        typer.Option("--max-zero-volume-bars", help="Maximum SPY zero-volume bars."),
+    ] = 0,
+    min_average_volume: Annotated[
+        str,
+        typer.Option("--min-average-volume", help="Minimum SPY average bar volume."),
+    ] = "100",
+    min_average_dollar_volume: Annotated[
+        str,
+        typer.Option(
+            "--min-average-dollar-volume",
+            help="Minimum SPY average dollar volume.",
+        ),
+    ] = "5000",
+    max_trade_notional: Annotated[
+        str,
+        typer.Option("--max-trade-notional", help="Maximum shadow trade notional."),
+    ] = "1000",
+    max_open_positions: Annotated[
+        int,
+        typer.Option("--max-open-positions", help="Maximum shadow open positions."),
+    ] = 1,
+) -> None:
+    """Run the first broker-connected read-only alpha shadow workflow."""
+
+    config = _load_config_or_exit()
+    broker_timeout = _validate_timeout_option(broker_timeout) or 15
+    history_timeout = _validate_timeout_option(history_timeout) or 30
+    broker_stage_pause = _validate_non_negative_seconds_option(broker_stage_pause, 30)
+    use_rth = _validate_use_rth_option(use_rth)
+    request = AlphaShadowRunRequest(
+        symbols=parse_symbols(symbols),
+        duration=duration,
+        bar_size=bar_size,
+        what_to_show=what_to_show,
+        use_rth=use_rth,
+        broker_timeout_seconds=broker_timeout,
+        history_timeout_seconds=history_timeout,
+        broker_stage_pause_seconds=broker_stage_pause,
+        base_data_path=base_path.as_posix(),
+        short_window=short_window,
+        long_window=long_window,
+        min_bars=min_bars,
+        max_zero_volume_bars=max_zero_volume_bars,
+        min_average_volume=_parse_decimal_option(
+            min_average_volume,
+            "--min-average-volume",
+        ),
+        min_average_dollar_volume=_parse_decimal_option(
+            min_average_dollar_volume,
+            "--min-average-dollar-volume",
+        ),
+        max_trade_notional=_parse_decimal_option(
+            max_trade_notional,
+            "--max-trade-notional",
+        ),
+        max_open_positions=max_open_positions,
+    )
+    report = run_alpha_shadow_run(config, request)
+    json_path, md_path = Journal().write_cycle("alpha_shadow_run", _report_dict(report))
+
+    console.print("[bold]Read-only alpha shadow run[/bold]")
+    console.print("Broker contact: read-only account and historical-data requests only.")
+    console.print("Order routing: disabled.")
+    console.print("Paper execution: disabled.")
+    console.print("Submitted orders: false.")
+    console.print("Read-Only API expected: true.")
+    console.print("Simulator destination only.")
+    _print_alpha_shadow_run_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def account(
     connect: Annotated[
@@ -1701,6 +1833,7 @@ def _validate_use_rth_option(use_rth: int) -> int:
 def _report_dict(
     report: (
         AnalyticalSignalEvaluationReport
+        | AlphaShadowRunReport
         | BacktestDataAdapterReport
         | BacktestRunReport
         | BrokerDiagnosticReport
@@ -2207,6 +2340,85 @@ def _print_paper_readiness_run_result(report: PaperReadinessRunReport) -> None:
             console.print(f"- {escape(warning)}")
     if report.errors:
         console.print("[red]Paper readiness errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_alpha_shadow_run_result(report: AlphaShadowRunReport) -> None:
+    table = Table(title="Alpha Shadow Run")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Final status", _enum_value(report.final_status))
+    table.add_row("Selected universe", ", ".join(report.selected_universe))
+    table.add_row(
+        "Broker stage pause",
+        f"{report.request.broker_stage_pause_seconds:g}s",
+    )
+    table.add_row("Broker connected", str(report.broker_connected).lower())
+    table.add_row(
+        "Account summary verified",
+        str(report.account_summary_verified).lower(),
+    )
+    table.add_row(
+        "History snapshot written",
+        str(report.history_snapshot_written).lower(),
+    )
+    table.add_row("History load completed", str(report.history_load_completed).lower())
+    table.add_row("Data quality completed", str(report.data_quality_completed).lower())
+    table.add_row(
+        "Signal evaluation completed",
+        str(report.signal_evaluation_completed).lower(),
+    )
+    table.add_row("Shadow risk mode", report.shadow_risk_mode)
+    table.add_row("Shadow signals", str(report.shadow_signal_count))
+    table.add_row("Trade plans", str(report.trade_plan_count))
+    table.add_row("Risk decisions", str(report.risk_decision_count))
+    table.add_row("Risk approved", str(report.risk_approved_count))
+    table.add_row("Simulation results", str(report.simulation_result_count))
+    table.add_row("Simulated fills", str(report.simulated_fill_count))
+    table.add_row("Submitted orders", str(report.submitted_orders).lower())
+    table.add_row("Paper orders enabled", str(report.paper_orders_enabled).lower())
+    table.add_row("Read-Only API expected", str(report.read_only_api_expected).lower())
+    table.add_row("Order routing", "disabled")
+    console.print(table)
+
+    stages = Table(title="Sequential Alpha Stages")
+    stages.add_column("Stage")
+    stages.add_column("Status")
+    stages.add_column("OK")
+    stages.add_column("Reports")
+    for stage in report.stages:
+        stages.add_row(
+            stage.name,
+            _enum_value(stage.final_status),
+            str(stage.ok).lower(),
+            str(len(stage.report_paths)),
+        )
+    console.print(stages)
+
+    if report.account_ids_masked:
+        console.print(
+            "Masked accounts: "
+            + ", ".join(escape(account) for account in report.account_ids_masked)
+        )
+    if report.data_quality_status_by_symbol:
+        statuses = ", ".join(
+            f"{symbol}:{status}"
+            for symbol, status in sorted(report.data_quality_status_by_symbol.items())
+        )
+        console.print(f"Data-quality status: {escape(statuses)}")
+    if report.source_bar_timestamp_by_symbol:
+        sources = ", ".join(
+            f"{symbol}:{timestamp}"
+            for symbol, timestamp in sorted(report.source_bar_timestamp_by_symbol.items())
+        )
+        console.print(f"Shadow quote source bars: {escape(sources)}")
+    if report.warnings:
+        console.print("[yellow]Alpha shadow warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Alpha shadow errors[/red]")
         for error in report.errors:
             console.print(f"- {escape(error)}")
 

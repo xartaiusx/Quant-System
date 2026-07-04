@@ -152,6 +152,14 @@ class PaperReadinessRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class AlphaShadowRunStatus(StrEnum):
+    """Read-only broker-connected alpha shadow run states."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    FAILED = "failed"
+
+
 class PaperReadinessStageStatus(StrEnum):
     """Stage-level status for the paper readiness orchestration."""
 
@@ -2178,6 +2186,209 @@ class PaperReadinessRunReport(SerializableModel):
             raise ValueError("pnl_calculated must remain false")
         if self.portfolio_accounting:
             raise ValueError("portfolio_accounting must remain false")
+        if self.futures_contracts_enabled:
+            raise ValueError("futures_contracts_enabled must remain false")
+        if self.direct_futures_data_enabled:
+            raise ValueError("direct_futures_data_enabled must remain false")
+        if not self.no_order_guarantee:
+            raise ValueError("no_order_guarantee must remain true")
+        return self
+
+
+class AlphaShadowRunRequest(SerializableModel):
+    """Read-only alpha shadow run request for the first SPY-only paper test."""
+
+    symbols: list[str] = Field(default_factory=lambda: ["SPY"])
+    duration: str = "1 D"
+    bar_size: str = "5 mins"
+    what_to_show: str = "TRADES"
+    use_rth: int = 1
+    broker_timeout_seconds: float = 15
+    history_timeout_seconds: float = 30
+    broker_stage_pause_seconds: float = 1
+    latest: bool = True
+    strict: bool = False
+    base_data_path: str = "data/historical"
+    short_window: int = 5
+    long_window: int = 20
+    min_bars: int = 50
+    max_zero_volume_bars: int = 0
+    min_average_volume: Decimal = Decimal("100")
+    min_average_dollar_volume: Decimal = Decimal("5000")
+    max_trade_notional: Decimal = Decimal("1000")
+    max_open_positions: int = 1
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_spy_only(cls, value: list[str]) -> list[str]:
+        symbols = [symbol.strip().upper() for symbol in value if symbol.strip()]
+        if symbols != ["SPY"]:
+            raise ValueError("alpha-shadow-run is SPY-only in this milestone")
+        return symbols
+
+    @field_validator("duration", "bar_size", "what_to_show", "base_data_path")
+    @classmethod
+    def validate_non_empty_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("alpha shadow request text fields must not be empty")
+        return normalized
+
+    @field_validator("what_to_show")
+    @classmethod
+    def normalize_what_to_show(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("use_rth")
+    @classmethod
+    def validate_use_rth(cls, value: int) -> int:
+        if value not in {0, 1}:
+            raise ValueError("use_rth must be 0 or 1")
+        return value
+
+    @field_validator(
+        "broker_timeout_seconds",
+        "history_timeout_seconds",
+        "broker_stage_pause_seconds",
+    )
+    @classmethod
+    def validate_seconds(cls, value: float) -> float:
+        if value < 0 or value > 120:
+            raise ValueError("alpha shadow timing settings must be 0 through 120 seconds")
+        return value
+
+    @field_validator("short_window", "long_window", "min_bars", "max_open_positions")
+    @classmethod
+    def validate_positive_ints(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("alpha shadow integer settings must be positive")
+        return value
+
+    @field_validator("max_zero_volume_bars")
+    @classmethod
+    def validate_non_negative_int(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("max_zero_volume_bars must be non-negative")
+        return value
+
+    @field_validator(
+        "min_average_volume",
+        "min_average_dollar_volume",
+        "max_trade_notional",
+    )
+    @classmethod
+    def validate_positive_decimals(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("alpha shadow decimal settings must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_windows(self) -> AlphaShadowRunRequest:
+        if self.short_window > self.long_window:
+            raise ValueError("short_window must be less than or equal to long_window")
+        return self
+
+
+class AlphaShadowRunReport(SerializableModel):
+    """Read-only broker-connected shadow alpha report."""
+
+    title: str = "Read-only IBKR Alpha Shadow Run"
+    report_type: str = "alpha_shadow_run"
+    command: str = "alpha-shadow-run"
+    ok: bool
+    request: AlphaShadowRunRequest
+    selected_universe: list[str] = Field(default_factory=list)
+    stages: list[PaperReadinessRunStage] = Field(default_factory=list)
+    stage_statuses: dict[str, str] = Field(default_factory=dict)
+    report_paths: dict[str, str] = Field(default_factory=dict)
+    broker_connected: bool = False
+    account_summary_verified: bool = False
+    account_summary_source: str = "unavailable"
+    account_ids_masked: list[str] = Field(default_factory=list)
+    history_snapshot_written: bool = False
+    history_load_completed: bool = False
+    data_quality_completed: bool = False
+    signal_evaluation_completed: bool = False
+    trade_plan_completed: bool = False
+    risk_completed: bool = False
+    simulation_completed: bool = False
+    shadow_risk_mode: str = "dry_run"
+    shadow_quote_source: str = "historical_snapshot_shadow_quote"
+    source_bar_timestamp_by_symbol: dict[str, str] = Field(default_factory=dict)
+    data_quality_status_by_symbol: dict[str, str] = Field(default_factory=dict)
+    shadow_signals: list[Signal] = Field(default_factory=list)
+    trade_plans: list[TradePlan] = Field(default_factory=list)
+    risk_decisions: list[RiskDecision] = Field(default_factory=list)
+    execution_results: list[ExecutionResult] = Field(default_factory=list)
+    shadow_signal_count: int = 0
+    trade_plan_count: int = 0
+    risk_decision_count: int = 0
+    risk_approved_count: int = 0
+    simulation_result_count: int = 0
+    simulated_fill_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    configured_allow_paper_orders: bool = False
+    live_orders_enabled: bool = False
+    read_only_api_expected: bool = True
+    order_routing_enabled: bool = False
+    broker_contacted: bool = False
+    broker_contact_read_only: bool = True
+    paper_execution_enabled: bool = False
+    simulator_routed: bool = False
+    generated_signals: bool = False
+    generated_trade_plans: bool = False
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    orders_simulated: bool = False
+    fills_simulated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    futures_contracts_enabled: bool = False
+    direct_futures_data_enabled: bool = False
+    no_order_guarantee: bool = True
+    no_order_guarantee_statement: str = (
+        "This alpha shadow run may contact IBKR through read-only account and "
+        "historical-data requests, then routes shadow decisions to the simulator only."
+    )
+    no_paper_execution_statement: str = (
+        "No paper orders are submitted. TWS Read-Only API is expected to remain enabled, "
+        "ALLOW_PAPER_ORDERS must remain false, and broker order routing is disabled."
+    )
+    final_status: AlphaShadowRunStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @field_validator("selected_universe")
+    @classmethod
+    def normalize_selected_universe(cls, value: list[str]) -> list[str]:
+        return [symbol.strip().upper() for symbol in value if symbol.strip()]
+
+    @model_validator(mode="after")
+    def validate_alpha_shadow_safety(self) -> AlphaShadowRunReport:
+        if self.submitted_orders:
+            raise ValueError("alpha-shadow-run must not submit orders")
+        if self.paper_orders_enabled:
+            raise ValueError("paper_orders_enabled must remain false for alpha-shadow-run")
+        if self.live_orders_enabled:
+            raise ValueError("live_orders_enabled must remain false")
+        if not self.read_only_api_expected:
+            raise ValueError("read_only_api_expected must remain true")
+        if self.order_routing_enabled:
+            raise ValueError("broker order routing must remain false")
+        if not self.broker_contact_read_only:
+            raise ValueError("broker contact must remain read-only")
+        if self.paper_execution_enabled:
+            raise ValueError("paper execution must remain disabled")
+        if self.generated_orders:
+            raise ValueError("alpha-shadow-run must not generate broker orders")
+        if self.order_intents_generated:
+            raise ValueError("alpha-shadow-run must not generate order intents")
+        if self.pnl_calculated:
+            raise ValueError("alpha-shadow-run must not calculate P&L")
+        if self.portfolio_accounting:
+            raise ValueError("alpha-shadow-run must not perform portfolio accounting")
         if self.futures_contracts_enabled:
             raise ValueError("futures_contracts_enabled must remain false")
         if self.direct_futures_data_enabled:

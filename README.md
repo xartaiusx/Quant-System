@@ -144,6 +144,7 @@ python -m trader.cli evaluator-compare --symbols SPY,AAPL,GLD,USO,DBA --window-p
 python -m trader.cli commodity-universe
 python -m trader.cli commodity-universe --symbols GLD,USO,DBA
 python -m trader.cli paper-readiness-run
+python -m trader.cli alpha-shadow-run
 scripts/check-ibapi.sh
 scripts/run-broker-preflight.sh
 python -m trader.cli account --mock
@@ -178,6 +179,7 @@ scripts/run-signal-evaluate.sh
 scripts/run-evaluator-compare.sh
 scripts/run-commodity-universe.sh
 scripts/run-paper-readiness-run.sh
+scripts/run-alpha-shadow-run.sh
 ```
 
 ## TWS Paper Notes
@@ -282,6 +284,18 @@ fallback is a failed readiness run. It writes
 `reports/paper_readiness_run_<timestamp>.json` plus `.md`, keeps
 `paper_orders_enabled=false`, reports `submitted_orders=false`, and keeps direct
 futures out of scope.
+
+`alpha-shadow-run` is the first broker-connected alpha testing command. It is
+still read-only with respect to IBKR: TWS paper must listen on `127.0.0.1:7497`,
+TWS Read-Only API is expected to remain enabled, `ALLOW_PAPER_ORDERS=false` is
+required, and no broker order APIs are invoked. The command is SPY-only in this
+milestone. It runs broker/account checks, an SPY historical snapshot, offline
+load, SPY data-quality gates, analytical signal evaluation, shadow trade-plan
+construction, dry-run risk checks, and simulator routing. Reports are written to
+`reports/alpha_shadow_run_<timestamp>.json` plus `.md` and include masked
+account IDs, stage paths, data-quality metrics, shadow signal/trade-plan/risk
+counts, simulator fill counts, `submitted_orders=false`, and
+`paper_orders_enabled=false`.
 
 The offline fixture stress suite uses temporary synthetic historical snapshots
 to validate loader, feed, engine, strategy-contract, strategy-runner, and
