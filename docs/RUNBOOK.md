@@ -122,6 +122,9 @@ Expected paper broker success prerequisites:
 - Socket port is `7497` for TWS paper or `4002` for IB Gateway paper.
 - `Read-Only API` remains enabled.
 - `IBKR_CLIENT_ID` is not already in use.
+- Broker-contact commands are run sequentially, not in parallel, when gathering
+  acceptance evidence. Use fresh client IDs for retries and leave a short pause
+  between broker stages.
 
 Combined readiness command:
 
@@ -143,6 +146,26 @@ reports/latest_broker_probe.md
 Run this only after `alpha-shadow-run` has completed against paper TWS or paper IB Gateway with no
 orders submitted. Keep normal development defaults at `ALLOW_PAPER_ORDERS=false`
 and IBKR Read-Only API enabled until the exact smoke window.
+
+For IB Gateway paper, first refresh same-commit read-only evidence sequentially
+on port `4002`:
+
+```bash
+export TRADING_MODE=paper
+export ALLOW_PAPER_ORDERS=false
+export ALLOW_LIVE_ORDERS=false
+export IBKR_HOST=127.0.0.1
+export IBKR_PORT=4002
+export BROKER_KIND=ib_gateway
+export MAX_TRADE_NOTIONAL=1000
+export MAX_OPEN_POSITIONS=1
+
+export IBKR_CLIENT_ID=53
+python -m trader.cli broker-probe --timeout 30
+
+export IBKR_CLIENT_ID=61
+python -m trader.cli alpha-shadow-run --broker-timeout 30 --history-timeout 45 --broker-stage-pause 2
+```
 
 Required operator setup for the smoke window:
 
