@@ -49,6 +49,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return alpha_shadow_run_markdown(payload)
     if payload.get("report_type") == "paper_order_smoke":
         return paper_order_smoke_markdown(payload)
+    if payload.get("report_type") == "alpha_paper_run":
+        return alpha_paper_run_markdown(payload)
 
     lines = [
         f"# {payload.get('title', 'Trading Report')}",
@@ -1659,6 +1661,86 @@ def paper_order_smoke_markdown(payload: Mapping[str, Any]) -> str:
                 f"status=`{event.get('status', 'n/a')}` "
                 f"message=`{event.get('message', '')}`"
             )
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def alpha_paper_run_markdown(payload: Mapping[str, Any]) -> str:
+    """Render the strategy-gated alpha paper run report."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    request = payload.get("request", {})
+    paper_order = payload.get("paper_order_report", {})
+    source_paths = payload.get("source_report_paths", {})
+    account_ids = payload.get("account_ids_masked", [])
+    request_symbol = request.get("symbol", "unknown") if isinstance(request, Mapping) else "unknown"
+
+    lines = [
+        f"# {payload.get('title', 'IBKR Alpha Paper Run')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'alpha-paper-run')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Commit SHA: `{payload.get('commit_sha', 'unknown')}`",
+        f"- Mode: `{payload.get('mode', 'unknown')}`",
+        f"- Host: `{payload.get('host', 'unknown')}`",
+        f"- Port: `{payload.get('port', 'unknown')}`",
+        f"- Client ID: `{payload.get('client_id', 'unknown')}`",
+        f"- Symbol: `{request_symbol}`",
+        f"- Shadow report verified: `{payload.get('alpha_shadow_report_verified', False)}`",
+        f"- Paper smoke report verified: `{payload.get('paper_smoke_report_verified', False)}`",
+        f"- Shadow signal: `{payload.get('shadow_signal', 'n/a')}`",
+        f"- Risk approved: `{payload.get('risk_approved', False)}`",
+        f"- No-trade reason: `{payload.get('no_trade_reason', 'n/a')}`",
+        f"- Submitted orders: `{payload.get('submitted_orders', False)}`",
+        f"- Paper orders enabled: `{payload.get('paper_orders_enabled', False)}`",
+        f"- Live orders enabled: `{payload.get('live_orders_enabled', True)}`",
+        f"- Live route possible: `{payload.get('live_route_possible', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', False)}`",
+        f"- Order ID: `{payload.get('order_id', 'n/a')}`",
+        f"- Perm ID: `{payload.get('perm_id', 'n/a')}`",
+        f"- Order status: `{payload.get('order_status', 'n/a')}`",
+        f"- Fill quantity: `{payload.get('fill_quantity', '0')}`",
+        f"- Cancel requested: `{payload.get('cancel_requested', False)}`",
+        f"- Canceled: `{payload.get('canceled', False)}`",
+        "",
+        "## Safety",
+        "",
+        str(payload.get("safety_statement", "Alpha paper run safety scope unavailable.")),
+        "",
+        "## Source Reports",
+        "",
+    ]
+    if isinstance(source_paths, Mapping) and source_paths:
+        for label, path in sorted(source_paths.items()):
+            lines.append(f"- `{label}`: `{path}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Masked Accounts", ""])
+    if account_ids:
+        lines.extend(f"- `{account_id}`" for account_id in account_ids)
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Paper Order Evidence", ""])
+    if isinstance(paper_order, Mapping) and paper_order:
+        lines.extend(
+            [
+                f"- Final status: `{paper_order.get('final_status', 'unknown')}`",
+                f"- Submitted orders: `{paper_order.get('submitted_orders', False)}`",
+                f"- Transmitted: `{paper_order.get('transmitted', False)}`",
+                f"- Order ID: `{paper_order.get('order_id', 'n/a')}`",
+                f"- Perm ID: `{paper_order.get('perm_id', 'n/a')}`",
+                f"- Order status: `{paper_order.get('order_status', 'n/a')}`",
+                f"- Fill quantity: `{paper_order.get('fill_quantity', '0')}`",
+                f"- Canceled: `{paper_order.get('canceled', False)}`",
+            ]
+        )
     else:
         lines.append("- None")
 

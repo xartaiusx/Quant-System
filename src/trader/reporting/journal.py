@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +27,7 @@ class Journal:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         safe_payload = mask_sensitive_mapping(_to_plain(dict(payload)))
         safe_payload.setdefault("timestamp", timestamp)
+        safe_payload.setdefault("commit_sha", _current_commit_sha())
 
         json_path = self.reports_dir / f"{name}_{timestamp}.json"
         md_path = self.reports_dir / f"{name}_{timestamp}.md"
@@ -47,3 +49,20 @@ def _to_plain(value: Any) -> Any:
     if isinstance(value, list):
         return [_to_plain(item) for item in value]
     return value
+
+
+def _current_commit_sha() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    commit_sha = result.stdout.strip()
+    return commit_sha or None

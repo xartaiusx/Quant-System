@@ -186,6 +186,18 @@ fractional or cash-quantity stock orders, duplicate open smoke orders, stale or
 missing quotes, and multi-order batches. IBKR Read-Only API should be disabled
 only during this smoke window and re-enabled immediately afterward.
 
+Milestone 22 adds `alpha-paper-run`, the first strategy-gated paper alpha
+execution command. It requires same-commit, fresh `alpha-shadow-run` and
+transmitted `paper-order-smoke` reports, requires `TRADING_MODE=paper`,
+`ALLOW_PAPER_ORDERS=true`, `ALLOW_LIVE_ORDERS=false`, localhost, paper port
+`7497` or `4002`, `IBKR_CLIENT_ID=21`, and explicit confirmation
+`ALPHA_PAPER_SPY_1`. It submits no order for HOLD/no-signal or failed risk
+approval. When all gates pass, it may submit at most one SPY BUY 1
+STK/SMART/USD `LMT DAY` paper order through the existing paper-smoke execution
+boundary. Live trading, live ports, market orders, futures, options, algos,
+brackets, shorts, fractional or cash-quantity stock orders, and batches remain
+disabled.
+
 ## Quantitative Research Gate
 
 No current milestone supports profitability, performance, or tradability claims.

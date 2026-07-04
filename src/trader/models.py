@@ -168,6 +168,14 @@ class PaperOrderSmokeRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class AlphaPaperRunStatus(StrEnum):
+    """First strategy-gated paper alpha execution states."""
+
+    COMPLETED = "completed"
+    NO_TRADE = "no_trade"
+    FAILED = "failed"
+
+
 class PaperReadinessStageStatus(StrEnum):
     """Stage-level status for the paper readiness orchestration."""
 
@@ -2303,6 +2311,7 @@ class AlphaShadowRunReport(SerializableModel):
     title: str = "Read-only IBKR Alpha Shadow Run"
     report_type: str = "alpha_shadow_run"
     command: str = "alpha-shadow-run"
+    commit_sha: str | None = None
     ok: bool
     request: AlphaShadowRunRequest
     selected_universe: list[str] = Field(default_factory=list)
@@ -2529,6 +2538,7 @@ class PaperOrderSmokeReport(SerializableModel):
     title: str = "IBKR Paper Order Smoke Run"
     report_type: str = "paper_order_smoke"
     command: str = "paper-order-smoke"
+    commit_sha: str | None = None
     ok: bool
     request: PaperOrderSmokeRequest
     mode: str
@@ -2614,6 +2624,160 @@ class PaperOrderSmokeReport(SerializableModel):
             raise ValueError("no_live_order_guarantee must remain true")
         if self.request.transmit is False and self.submitted_orders:
             raise ValueError("untransmitted smoke rehearsals must not be marked submitted")
+        return self
+
+
+class AlphaPaperRunRequest(SerializableModel):
+    """Strict request for the first strategy-gated SPY paper alpha run."""
+
+    symbol: str = "SPY"
+    quantity: int = 1
+    allow_fill: bool = False
+    cancel_after_seconds: float = 30
+    confirm: str = ""
+    max_trade_notional: Decimal = Decimal("1000")
+    timeout_seconds: float = 30
+    max_report_age_hours: int = 24
+    alpha_shadow_report_path: str = "reports/latest_alpha_shadow_run.json"
+    paper_smoke_report_path: str = "reports/latest_paper_order_smoke.json"
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_spy_only(cls, value: str) -> str:
+        symbol = value.strip().upper()
+        if symbol != "SPY":
+            raise ValueError("alpha-paper-run is SPY-only in this milestone")
+        return symbol
+
+    @field_validator("quantity")
+    @classmethod
+    def validate_single_share(cls, value: int) -> int:
+        if value != 1:
+            raise ValueError("alpha-paper-run requires quantity 1")
+        return value
+
+    @field_validator("cancel_after_seconds", "timeout_seconds")
+    @classmethod
+    def validate_seconds(cls, value: float) -> float:
+        if value < 0 or value > 120:
+            raise ValueError("alpha-paper-run timing settings must be 0 through 120 seconds")
+        return value
+
+    @field_validator("max_trade_notional")
+    @classmethod
+    def validate_max_notional(cls, value: Decimal) -> Decimal:
+        if value <= 0 or value > Decimal("1000"):
+            raise ValueError(
+                "alpha-paper-run max notional must be greater than 0 and no more than 1000"
+            )
+        return value
+
+    @field_validator("max_report_age_hours")
+    @classmethod
+    def validate_report_age(cls, value: int) -> int:
+        if value <= 0 or value > 168:
+            raise ValueError("max_report_age_hours must be greater than 0 and no more than 168")
+        return value
+
+    @field_validator("alpha_shadow_report_path", "paper_smoke_report_path")
+    @classmethod
+    def validate_report_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("report paths must not be empty")
+        return normalized
+
+
+class AlphaPaperRunReport(SerializableModel):
+    """No-secret report for the first strategy-gated paper alpha run."""
+
+    title: str = "IBKR Alpha Paper Run"
+    report_type: str = "alpha_paper_run"
+    command: str = "alpha-paper-run"
+    ok: bool
+    request: AlphaPaperRunRequest
+    mode: str
+    host: str
+    port: int
+    client_id: int
+    broker_kind: str
+    commit_sha: str | None = None
+    source_report_paths: dict[str, str] = Field(default_factory=dict)
+    alpha_shadow_report_verified: bool = False
+    paper_smoke_report_verified: bool = False
+    alpha_shadow_commit_sha: str | None = None
+    paper_smoke_commit_sha: str | None = None
+    alpha_shadow_timestamp: datetime | None = None
+    paper_smoke_timestamp: datetime | None = None
+    shadow_signal: str | None = None
+    risk_approved: bool = False
+    no_trade_reason: str | None = None
+    paper_order_report: PaperOrderSmokeReport | None = None
+    account_ids_masked: list[str] = Field(default_factory=list)
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    configured_allow_paper_orders: bool = False
+    live_orders_enabled: bool = False
+    read_only_api_expected: bool = False
+    order_routing_enabled: bool = False
+    paper_execution_enabled: bool = False
+    live_route_possible: bool = False
+    order_api_invoked: bool = False
+    place_order_invoked: bool = False
+    cancel_order_invoked: bool = False
+    order_id: int | None = None
+    perm_id: int | None = None
+    order_status: str | None = None
+    fill_quantity: Decimal = Decimal("0")
+    cancel_requested: bool = False
+    canceled: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    market_order_requested: bool = False
+    fractional_quantity_requested: bool = False
+    cash_quantity_requested: bool = False
+    short_sale_attempted: bool = False
+    multi_order_batch: bool = False
+    futures_contracts_enabled: bool = False
+    options_contracts_enabled: bool = False
+    algo_orders_enabled: bool = False
+    bracket_orders_enabled: bool = False
+    safety_statement: str = (
+        "This command may submit at most one SPY BUY 1 STK/SMART/USD LMT DAY "
+        "paper order after a same-commit read-only alpha shadow report and a "
+        "same-commit paper-order smoke report pass within the configured freshness window."
+    )
+    final_status: AlphaPaperRunStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_alpha_paper_safety(self) -> AlphaPaperRunReport:
+        if self.live_orders_enabled:
+            raise ValueError("live_orders_enabled must remain false")
+        if self.live_route_possible:
+            raise ValueError("live_route_possible must remain false")
+        if self.market_order_requested:
+            raise ValueError("market orders are not allowed")
+        if self.fractional_quantity_requested:
+            raise ValueError("fractional stock quantities are not allowed")
+        if self.cash_quantity_requested:
+            raise ValueError("cash quantity stock orders are not allowed")
+        if self.short_sale_attempted:
+            raise ValueError("short sale attempts are not allowed")
+        if self.multi_order_batch:
+            raise ValueError("multi-order batches are not allowed")
+        if self.futures_contracts_enabled:
+            raise ValueError("direct futures contracts must remain disabled")
+        if self.options_contracts_enabled:
+            raise ValueError("options contracts must remain disabled")
+        if self.algo_orders_enabled:
+            raise ValueError("algo orders must remain disabled")
+        if self.bracket_orders_enabled:
+            raise ValueError("bracket orders must remain disabled")
+        if self.submitted_orders and self.final_status == AlphaPaperRunStatus.NO_TRADE:
+            raise ValueError("no_trade reports must not submit orders")
+        if self.submitted_orders and not self.paper_orders_enabled:
+            raise ValueError("submitted paper orders require paper_orders_enabled")
         return self
 
 
