@@ -129,7 +129,7 @@ def run_paper_readiness_run(
     selected_journal = journal or Journal()
     stages: list[PaperReadinessRunStage] = []
     run_warnings = [
-        "TWS Read-Only API is expected to remain enabled; the API setting is operator-verified.",
+        "IBKR Read-Only API is expected to remain enabled; the API setting is operator-verified.",
         "No order APIs invoked; order routing remains disabled.",
     ]
     run_errors: list[str] = []

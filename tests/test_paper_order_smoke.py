@@ -373,11 +373,32 @@ def test_transmitted_paper_order_smoke_cancels_unfilled_order() -> None:
     assert fake.cancel_calls == 1
 
 
+def test_paper_order_smoke_allows_ib_gateway_paper_port() -> None:
+    fake = FakePaperOrderBroker(
+        placement_result=placement(status="PreSubmitted", submitted=False)
+    )
+
+    report = run_paper_order_smoke(
+        config(ibkr_port=4002, broker_kind=BrokerKind.IB_GATEWAY),
+        request(),
+        broker_factory=lambda _config: fake,
+    )
+
+    assert report.ok is True
+    assert report.port == 4002
+    assert report.broker_kind == "ib_gateway"
+    assert fake.place_calls == 1
+
+
 @pytest.mark.parametrize(
     ("bad_config", "expected_error"),
     [
         (unsafe_config(trading_mode="live"), "TRADING_MODE must be paper"),
-        (unsafe_config(ibkr_port=7496), "IBKR_PORT must be 7497"),
+        (unsafe_config(ibkr_port=7496), "live IBKR ports are rejected"),
+        (
+            unsafe_config(ibkr_port=1234),
+            "IBKR_PORT must be 7497 (TWS paper) or 4002 (IB Gateway paper)",
+        ),
         (config(allow_paper_orders=False), "ALLOW_PAPER_ORDERS=true is required"),
         (unsafe_config(allow_live_orders=True), "ALLOW_LIVE_ORDERS=true is rejected"),
         (unsafe_config(ibkr_host="localhost"), "IBKR_HOST must be 127.0.0.1"),

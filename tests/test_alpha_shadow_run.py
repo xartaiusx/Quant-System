@@ -313,11 +313,23 @@ def test_alpha_shadow_run_rejects_enabled_paper_orders_before_broker(monkeypatch
     assert calls == []
 
 
-def test_alpha_shadow_run_rejects_non_tws_paper_port() -> None:
+def test_alpha_shadow_run_allows_ib_gateway_paper_port(monkeypatch) -> None:
+    patch_success_stages(monkeypatch, rising=True)
+
     report = run_alpha_shadow_run(config(ibkr_port=4002), request())
 
+    assert report.ok is True
+    assert report.final_status == AlphaShadowRunStatus.COMPLETED
+
+
+def test_alpha_shadow_run_rejects_unknown_paper_port() -> None:
+    report = run_alpha_shadow_run(config(ibkr_port=1234), request())
+
     assert report.final_status == AlphaShadowRunStatus.FAILED
-    assert "IBKR_PORT must be 7497 for TWS paper alpha-shadow-run" in report.errors
+    assert any(
+        "IBKR_PORT must be 7497 (TWS paper) or 4002 (IB Gateway paper)" in error
+        for error in report.errors
+    )
 
 
 def test_alpha_shadow_run_fails_when_broker_probe_fails(monkeypatch) -> None:

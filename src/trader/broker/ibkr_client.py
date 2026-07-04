@@ -997,7 +997,7 @@ class IBKRClient:
                 [
                     *self._client_warnings,
                     *[warning for item in results for warning in item.warnings],
-                    "TWS Read-Only API setting is not directly detectable by this probe",
+                    "IBKR Read-Only API setting is not directly detectable by this probe",
                     _NO_ORDER_WARNING,
                 ]
             )
@@ -1097,7 +1097,7 @@ class IBKRClient:
                     *[warning for item in quote_snapshots for warning in item.warnings],
                     *[warning for item in spread_diagnostics for warning in item.warnings],
                     *[warning for item in historical_data for warning in item.warnings],
-                    "TWS Read-Only API setting is not directly detectable by this probe",
+                    "IBKR Read-Only API setting is not directly detectable by this probe",
                     _NO_ORDER_WARNING,
                 ]
             )
@@ -1165,7 +1165,7 @@ class IBKRClient:
 
         warnings = [
             "preflight did not open a socket; use --connect or broker-probe for a live API probe",
-            "TWS Read-Only API setting is not directly detectable by this probe",
+            "IBKR Read-Only API setting is not directly detectable by this probe",
             _NO_ORDER_WARNING,
         ]
         errors: list[BrokerErrorEvent] = []
@@ -1233,7 +1233,7 @@ class IBKRClient:
             dict.fromkeys(
                 [
                     *self._client_warnings,
-                    "TWS Read-Only API setting is not directly detectable by this probe",
+                    "IBKR Read-Only API setting is not directly detectable by this probe",
                     _NO_ORDER_WARNING,
                 ]
             )
@@ -1731,7 +1731,7 @@ class IBKRClient:
                 dict.fromkeys(
                     [
                         *warnings,
-                        "TWS Read-Only API setting is not directly detectable by this probe",
+                        "IBKR Read-Only API setting is not directly detectable by this probe",
                         _NO_ORDER_WARNING,
                     ]
                 )
@@ -1760,7 +1760,7 @@ class IBKRClient:
             dict.fromkeys(
                 [
                     *warnings,
-                    "TWS Read-Only API setting is not directly detectable by this probe",
+                    "IBKR Read-Only API setting is not directly detectable by this probe",
                     _NO_ORDER_WARNING,
                 ]
             )

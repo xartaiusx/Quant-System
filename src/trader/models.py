@@ -2362,7 +2362,7 @@ class AlphaShadowRunReport(SerializableModel):
         "historical-data requests, then routes shadow decisions to the simulator only."
     )
     no_paper_execution_statement: str = (
-        "No paper orders are submitted. TWS Read-Only API is expected to remain enabled, "
+        "No paper orders are submitted. IBKR Read-Only API is expected to remain enabled, "
         "ALLOW_PAPER_ORDERS must remain false, and broker order routing is disabled."
     )
     final_status: AlphaShadowRunStatus
@@ -2579,7 +2579,7 @@ class PaperOrderSmokeReport(SerializableModel):
     no_live_order_guarantee: bool = True
     safety_statement: str = (
         "This command is limited to one SPY STK/SMART/USD LMT DAY paper-order "
-        "smoke test on localhost TWS paper port 7497. Live ports, live mode, "
+        "smoke test on localhost paper TWS/Gateway ports 7497/4002. Live ports, live mode, "
         "market orders, direct futures, options, algos, brackets, shorts, "
         "fractional or cash-quantity stock orders, and batches are refused."
     )

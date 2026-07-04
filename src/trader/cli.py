@@ -1607,7 +1607,7 @@ def paper_order_smoke(
     console.print(
         "Market orders, futures, options, algos, brackets, shorts, and batches: rejected."
     )
-    console.print("TWS Read-Only API should be disabled only while this command is running.")
+    console.print("IBKR Read-Only API should be disabled only while this command is running.")
     _print_paper_order_smoke_result(report)
     console.print(f"JSON report: {json_path}")
     console.print(f"Markdown report: {md_path}")
