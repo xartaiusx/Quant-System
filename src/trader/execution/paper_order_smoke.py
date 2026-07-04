@@ -75,7 +75,7 @@ PAPER_SMOKE_SYMBOL = "SPY"
 PAPER_SMOKE_PORTS = PAPER_PORTS
 PAPER_SMOKE_CLIENT_ID = 21
 _ACCOUNT_SUMMARY_TAGS = "NetLiquidation,TotalCashValue,BuyingPower"
-_INFORMATIONAL_ERROR_CODES = {2103, 2104, 2105, 2106, 2107, 2108, 2158, 10167}
+_INFORMATIONAL_ERROR_CODES = {2103, 2104, 2105, 2106, 2107, 2108, 2158, 2176, 10167}
 _TERMINAL_STATUSES = {"Cancelled", "ApiCancelled", "Filled", "Inactive"}
 _CANCELED_STATUSES = {"Cancelled", "ApiCancelled"}
 _PRICE_TICK_FIELDS = {
@@ -427,13 +427,24 @@ class _PaperOrderIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
             status=str(errorCode),
             message=message,
         )
+        informational_error = errorCode in _INFORMATIONAL_ERROR_CODES or (
+            errorCode == 300
+            and reqId in self.market_data_events
+            and "tickerId" in message
+        ) or (
+            errorCode == 399
+            and message.startswith("Order Message:")
+        ) or (
+            errorCode == 202
+            and message.startswith("Order Canceled")
+        )
         with self._lock:
             self.callback_events.append(event)
-            if errorCode in _INFORMATIONAL_ERROR_CODES:
+            if informational_error:
                 self.warnings.append(f"IBKR {errorCode}: {message}")
             else:
                 self.errors.append(f"IBKR {errorCode}: {message}")
-        if errorCode not in _INFORMATIONAL_ERROR_CODES:
+        if not informational_error:
             self._release_events(reqId)
 
     def _release_events(self, req_id: int | None = None) -> None:
@@ -1219,6 +1230,10 @@ def _make_limit_order(
     order.lmtPrice = float(limit_price)
     order.tif = time_in_force
     order.transmit = transmit
+    if hasattr(order, "eTradeOnly"):
+        order.eTradeOnly = False
+    if hasattr(order, "firmQuoteOnly"):
+        order.firmQuoteOnly = False
     return order
 
 

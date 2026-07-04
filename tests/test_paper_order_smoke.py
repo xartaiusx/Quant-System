@@ -14,6 +14,8 @@ from trader.execution.paper_order_smoke import (
     PaperBrokerOpenOrder,
     PaperBrokerPlacementResult,
     PaperOrderSmokeError,
+    _make_limit_order,
+    _PaperOrderIBKRApp,
     run_paper_order_smoke,
 )
 from trader.models import (
@@ -313,6 +315,81 @@ def test_ibkr_paper_order_broker_times_out_without_next_valid_id() -> None:
         broker.connect(timeout=0.01)
 
     assert app.disconnected is True
+
+
+def test_ibkr_fractional_size_rules_notice_is_informational() -> None:
+    app = _PaperOrderIBKRApp()
+
+    app.error(
+        20002,
+        2176,
+        "Warning: Your API version does not support fractional share size rules.",
+    )
+
+    assert app.errors == []
+    assert app.warnings == [
+        "IBKR 2176: Warning: Your API version does not support fractional share size rules."
+    ]
+
+
+def test_ibkr_market_data_cancel_notice_is_informational_for_quote_request() -> None:
+    app = _PaperOrderIBKRApp()
+    app.market_data_events[20002] = threading.Event()
+
+    app.error(20002, 300, "Can't find EId with tickerId:20002")
+
+    assert app.errors == []
+    assert app.warnings == ["IBKR 300: Can't find EId with tickerId:20002"]
+
+
+def test_ibkr_ticker_id_notice_fails_when_not_market_data_request() -> None:
+    app = _PaperOrderIBKRApp()
+
+    app.error(1, 300, "Can't find EId with tickerId:1")
+
+    assert app.errors == ["IBKR 300: Can't find EId with tickerId:1"]
+    assert app.warnings == []
+
+
+def test_ibkr_order_timing_notice_is_informational() -> None:
+    app = _PaperOrderIBKRApp()
+
+    app.error(
+        2,
+        399,
+        "Order Message: BUY 1 SPY ARCA Warning: Your order will not be placed "
+        "at the exchange until 2026-07-06 09:30:00 US/Eastern.",
+    )
+
+    assert app.errors == []
+    assert app.warnings == [
+        "IBKR 399: Order Message: BUY 1 SPY ARCA Warning: Your order will not be "
+        "placed at the exchange until 2026-07-06 09:30:00 US/Eastern."
+    ]
+
+
+def test_ibkr_cancel_notification_is_informational() -> None:
+    app = _PaperOrderIBKRApp()
+
+    app.error(2, 202, "Order Canceled - reason:")
+
+    assert app.errors == []
+    assert app.warnings == ["IBKR 202: Order Canceled - reason:"]
+
+
+def test_limit_order_disables_deprecated_old_api_routing_flags() -> None:
+    order = _make_limit_order(
+        action=TradeAction.BUY,
+        quantity=1,
+        limit_price=Decimal("500"),
+        time_in_force="DAY",
+        transmit=False,
+    )
+
+    if hasattr(order, "eTradeOnly"):
+        assert order.eTradeOnly is False
+    if hasattr(order, "firmQuoteOnly"):
+        assert order.firmQuoteOnly is False
 
 
 def _connect_for_test(
