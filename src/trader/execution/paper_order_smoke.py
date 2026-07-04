@@ -2,7 +2,7 @@
 
 This module is the only production path allowed to call the IBKR order API in
 the paper-order smoke milestone. It is intentionally narrow: one SPY BUY 1 LMT
-DAY paper order on localhost TWS paper port 7497.
+DAY paper order on localhost paper TWS or IB Gateway.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
 from typing import Any, Protocol, cast
 
-from trader.config import LIVE_PORTS, TraderConfig, TradingMode, mask_account_id
+from trader.config import LIVE_PORTS, PAPER_PORTS, TraderConfig, TradingMode, mask_account_id
 from trader.models import (
     OrderType,
     PaperOrderCallbackEvent,
@@ -72,10 +72,10 @@ except Exception as exc:  # pragma: no cover - exercised through availability in
 
 PAPER_SMOKE_CONFIRMATION = "PAPER_SMOKE_SPY_1"
 PAPER_SMOKE_SYMBOL = "SPY"
-PAPER_SMOKE_PORT = 7497
+PAPER_SMOKE_PORTS = PAPER_PORTS
 PAPER_SMOKE_CLIENT_ID = 21
 _ACCOUNT_SUMMARY_TAGS = "NetLiquidation,TotalCashValue,BuyingPower"
-_INFORMATIONAL_ERROR_CODES = {2103, 2104, 2105, 2106, 2107, 2108, 2158, 10167}
+_INFORMATIONAL_ERROR_CODES = {2103, 2104, 2105, 2106, 2107, 2108, 2158, 2176, 10167}
 _TERMINAL_STATUSES = {"Cancelled", "ApiCancelled", "Filled", "Inactive"}
 _CANCELED_STATUSES = {"Cancelled", "ApiCancelled"}
 _PRICE_TICK_FIELDS = {
@@ -427,13 +427,24 @@ class _PaperOrderIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
             status=str(errorCode),
             message=message,
         )
+        informational_error = errorCode in _INFORMATIONAL_ERROR_CODES or (
+            errorCode == 300
+            and reqId in self.market_data_events
+            and "tickerId" in message
+        ) or (
+            errorCode == 399
+            and message.startswith("Order Message:")
+        ) or (
+            errorCode == 202
+            and message.startswith("Order Canceled")
+        )
         with self._lock:
             self.callback_events.append(event)
-            if errorCode in _INFORMATIONAL_ERROR_CODES:
+            if informational_error:
                 self.warnings.append(f"IBKR {errorCode}: {message}")
             else:
                 self.errors.append(f"IBKR {errorCode}: {message}")
-        if errorCode not in _INFORMATIONAL_ERROR_CODES:
+        if not informational_error:
             self._release_events(reqId)
 
     def _release_events(self, req_id: int | None = None) -> None:
@@ -500,7 +511,7 @@ class IBKRPaperOrderBroker:
         return self.ibapi_available()
 
     def connect(self, *, timeout: float) -> None:
-        """Connect to paper TWS with the dedicated execution client ID."""
+        """Connect to the paper broker with the dedicated execution client ID."""
 
         if not self.ibapi_is_available:
             import_error = self.ibapi_import_error() or "ibapi unavailable"
@@ -512,7 +523,7 @@ class IBKRPaperOrderBroker:
             self._socket_probe(self.config.ibkr_host, self.config.ibkr_port, timeout)
         except OSError as exc:
             raise PaperOrderSmokeError(
-                f"paper TWS socket is unavailable at "
+                f"paper broker socket is unavailable at "
                 f"{self.config.ibkr_host}:{self.config.ibkr_port}: {exc}"
             ) from exc
 
@@ -531,6 +542,10 @@ class IBKRPaperOrderBroker:
         if not connected and not app.isConnected():
             raise PaperOrderSmokeError("IBKR API connect returned false")
         if not app.connection_ready_event.wait(timeout):
+            self.disconnect()
+            raise PaperOrderSmokeError("IBKR API connection timed out before nextValidId")
+        if not app.next_valid_id_event.wait(timeout):
+            self.disconnect()
             raise PaperOrderSmokeError("IBKR API connection timed out before nextValidId")
 
     def disconnect(self) -> None:
@@ -739,8 +754,8 @@ def run_paper_order_smoke(
     """Run the gated paper-only order smoke workflow."""
 
     warnings = [
-        "TWS Read-Only API must be disabled only while running paper-order-smoke.",
-        "Re-enable TWS Read-Only API immediately after the smoke run.",
+        "IBKR Read-Only API must be disabled only while running paper-order-smoke.",
+        "Re-enable IBKR Read-Only API immediately after the smoke run.",
         "This command refuses live ports, live mode, market orders, shorts, and batches.",
     ]
     errors = _validate_smoke_gates(config, request)
@@ -878,7 +893,7 @@ def run_paper_order_smoke(
         remaining_quantity = placement.remaining_quantity
 
         if _read_only_rejection(errors):
-            errors.append("order rejected; confirm TWS Read-Only API is disabled only for smoke")
+            errors.append("order rejected; confirm IBKR Read-Only API is disabled only for smoke")
         if request.transmit and not request.allow_fill and fill_quantity > 0:
             errors.append("paper smoke order filled even though --allow-fill was false")
         if errors:
@@ -1003,10 +1018,13 @@ def _validate_smoke_gates(config: TraderConfig, request: PaperOrderSmokeRequest)
         errors.append("ALLOW_LIVE_ORDERS=true is rejected")
     if config.ibkr_host != "127.0.0.1":
         errors.append("IBKR_HOST must be 127.0.0.1 for paper-order-smoke")
-    if config.ibkr_port != PAPER_SMOKE_PORT:
-        errors.append("IBKR_PORT must be 7497 for paper-order-smoke")
     if config.ibkr_port in LIVE_PORTS:
         errors.append("live IBKR ports are rejected")
+    elif config.ibkr_port not in PAPER_SMOKE_PORTS:
+        errors.append(
+            "IBKR_PORT must be 7497 (TWS paper) or 4002 (IB Gateway paper) "
+            "for paper-order-smoke"
+        )
     if config.ibkr_client_id != PAPER_SMOKE_CLIENT_ID:
         errors.append("IBKR_CLIENT_ID must be 21 for paper-order-smoke")
     if request.confirm != PAPER_SMOKE_CONFIRMATION:
@@ -1212,6 +1230,10 @@ def _make_limit_order(
     order.lmtPrice = float(limit_price)
     order.tif = time_in_force
     order.transmit = transmit
+    if hasattr(order, "eTradeOnly"):
+        order.eTradeOnly = False
+    if hasattr(order, "firmQuoteOnly"):
+        order.firmQuoteOnly = False
     return order
 
 

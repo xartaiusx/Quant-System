@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol, cast
 
-from trader.config import TraderConfig, TradingMode
+from trader.config import PAPER_PORTS, TraderConfig, TradingMode
 from trader.data.quality_gate import build_data_quality_gate_report
 from trader.execution.router import ExecutionRouter
 from trader.models import (
@@ -103,7 +103,7 @@ def run_alpha_shadow_run(
     selected_journal = journal or Journal()
     stages: list[PaperReadinessRunStage] = []
     run_warnings = [
-        "TWS Read-Only API is expected to remain enabled for alpha-shadow-run.",
+        "IBKR Read-Only API is expected to remain enabled for alpha-shadow-run.",
         "ALLOW_PAPER_ORDERS=false is required; paper order routing remains disabled.",
         "Shadow trade plans are routed to the simulator only.",
     ]
@@ -286,8 +286,11 @@ def _config_errors(config: TraderConfig) -> list[str]:
     errors: list[str] = []
     if config.ibkr_host != "127.0.0.1":
         errors.append("IBKR_HOST must be 127.0.0.1 for alpha-shadow-run")
-    if config.ibkr_port != 7497:
-        errors.append("IBKR_PORT must be 7497 for TWS paper alpha-shadow-run")
+    if config.ibkr_port not in PAPER_PORTS:
+        errors.append(
+            "IBKR_PORT must be 7497 (TWS paper) or 4002 (IB Gateway paper) "
+            "for alpha-shadow-run"
+        )
     if config.allow_paper_orders:
         errors.append("ALLOW_PAPER_ORDERS=true is not accepted for alpha-shadow-run")
     if config.allow_live_orders:

@@ -115,11 +115,11 @@ Errors
 - socket unavailable; confirm TWS/Gateway is running...
 ```
 
-Expected paper TWS success prerequisites:
+Expected paper broker success prerequisites:
 
-- Paper TWS is open and logged in.
-- `Global Configuration -> API -> Settings -> Enable ActiveX and Socket Clients` is enabled.
-- Socket port is `7497`.
+- Paper TWS or paper IB Gateway is open and logged in.
+- API socket clients are enabled.
+- Socket port is `7497` for TWS paper or `4002` for IB Gateway paper.
 - `Read-Only API` remains enabled.
 - `IBKR_CLIENT_ID` is not already in use.
 
@@ -140,16 +140,16 @@ reports/latest_broker_probe.md
 
 ## First Alpha Paper-Order Smoke
 
-Run this only after `alpha-shadow-run` has completed against paper TWS with no
+Run this only after `alpha-shadow-run` has completed against paper TWS or paper IB Gateway with no
 orders submitted. Keep normal development defaults at `ALLOW_PAPER_ORDERS=false`
-and TWS Read-Only API enabled until the exact smoke window.
+and IBKR Read-Only API enabled until the exact smoke window.
 
 Required operator setup for the smoke window:
 
-- Paper TWS is open and logged in.
+- Paper TWS or paper IB Gateway is open and logged in.
 - API socket clients are enabled.
-- Socket port is `7497`.
-- TWS Read-Only API is disabled only while running this command.
+- Socket port is `7497` for TWS paper or `4002` for IB Gateway paper.
+- IBKR Read-Only API is disabled only while running this command.
 - Environment is paper-only:
 
 ```bash
@@ -157,7 +157,7 @@ export TRADING_MODE=paper
 export ALLOW_PAPER_ORDERS=true
 export ALLOW_LIVE_ORDERS=false
 export IBKR_HOST=127.0.0.1
-export IBKR_PORT=7497
+export IBKR_PORT=4002
 export IBKR_CLIENT_ID=21
 export MAX_TRADE_NOTIONAL=1000
 ```
@@ -177,8 +177,8 @@ python -m trader.cli paper-order-smoke --symbol SPY --quantity 1 --transmit true
 
 Expected behavior:
 
-- refuses unless `TRADING_MODE=paper`, paper port `7497`, and client ID `21`
-  are configured
+- refuses unless `TRADING_MODE=paper`, paper port `7497` or `4002`, and client
+  ID `21` are configured
 - refuses unless `ALLOW_PAPER_ORDERS=true` and `ALLOW_LIVE_ORDERS=false`
 - refuses symbols other than SPY, quantities other than `1`, market orders,
   futures, options, shorts, fractional/cash quantity stock orders, and batches
@@ -192,7 +192,7 @@ After the smoke run:
 export ALLOW_PAPER_ORDERS=false
 ```
 
-Re-enable TWS Read-Only API unless actively running a gated paper execution
+Re-enable IBKR Read-Only API unless actively running a gated paper execution
 command.
 
 ## Read-Only Market-Data Diagnostics
@@ -712,8 +712,9 @@ approved.
 
 Prerequisites:
 
-- TWS paper is open and logged in.
-- API socket clients are enabled on paper port `7497`.
+- Paper TWS or paper IB Gateway is open and logged in.
+- API socket clients are enabled on paper port `7497` for TWS or `4002` for
+  IB Gateway.
 - Read-Only API remains enabled.
 - `TRADING_MODE=paper`.
 - `ALLOW_PAPER_ORDERS=false`.
@@ -761,7 +762,7 @@ Final statuses:
 
 Common failures:
 
-- Account stage falls back to mock data: keep TWS paper logged in, confirm API socket settings, and rerun.
+- Account stage falls back to mock data: keep the paper broker logged in, confirm API socket settings, and rerun.
 - No historical snapshots: check market-data permissions, symbol availability, market hours, and pacing.
 - Partial symbol readiness: inspect `reports/latest_history_readiness.json` and
   `reports/latest_history_load.json` before expanding the universe.

@@ -168,20 +168,22 @@ fills, maintains portfolio accounting, submits to the paper executor, routes
 execution, or enables direct futures contracts.
 
 Milestone 20 adds `alpha-shadow-run`, the first broker-connected read-only
-alpha test. It requires paper TWS on `127.0.0.1:7497`, expects TWS Read-Only API
-to remain enabled, requires `ALLOW_PAPER_ORDERS=false`, runs SPY-only
-broker/account/history reads plus offline quality/evaluator/risk/simulator
-stages, and reports `submitted_orders=false`.
+alpha test. It requires paper TWS on `127.0.0.1:7497` or paper IB Gateway on
+`127.0.0.1:4002`, expects IBKR Read-Only API to remain enabled, requires
+`ALLOW_PAPER_ORDERS=false`, runs SPY-only broker/account/history reads plus
+offline quality/evaluator/risk/simulator stages, and reports
+`submitted_orders=false`.
 
 Milestone 21 adds `paper-order-smoke`, the only production path allowed to call
 IBKR paper order APIs. It requires a passing read-only alpha shadow run before
 manual use, then requires `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`,
-`ALLOW_LIVE_ORDERS=false`, `IBKR_HOST=127.0.0.1`, `IBKR_PORT=7497`,
-`IBKR_CLIENT_ID=21`, `MAX_TRADE_NOTIONAL=1000`, and explicit confirmation. It
+`ALLOW_LIVE_ORDERS=false`, `IBKR_HOST=127.0.0.1`, `IBKR_PORT=7497` for TWS
+paper or `IBKR_PORT=4002` for IB Gateway paper, `IBKR_CLIENT_ID=21`,
+`MAX_TRADE_NOTIONAL=1000`, and explicit confirmation. It
 is limited to one SPY BUY 1 STK/SMART/USD `LMT DAY` order. It refuses live
 mode, live ports, market orders, futures, options, algos, brackets, shorts,
 fractional or cash-quantity stock orders, duplicate open smoke orders, stale or
-missing quotes, and multi-order batches. TWS Read-Only API should be disabled
+missing quotes, and multi-order batches. IBKR Read-Only API should be disabled
 only during this smoke window and re-enabled immediately afterward.
 
 ## Quantitative Research Gate

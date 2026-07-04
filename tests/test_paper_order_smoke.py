@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from decimal import Decimal
 from pathlib import Path
 
@@ -8,9 +9,13 @@ import pytest
 from trader.config import BrokerKind, TraderConfig, TradingMode
 from trader.execution.paper_order_smoke import (
     PAPER_SMOKE_CONFIRMATION,
+    IBKRPaperOrderBroker,
     PaperBrokerAccountSummary,
     PaperBrokerOpenOrder,
     PaperBrokerPlacementResult,
+    PaperOrderSmokeError,
+    _make_limit_order,
+    _PaperOrderIBKRApp,
     run_paper_order_smoke,
 )
 from trader.models import (
@@ -187,6 +192,216 @@ class FakePaperOrderBroker:
         return self.cancel_result
 
 
+class DelayedNextValidIdApp:
+    def __init__(self) -> None:
+        self.connection_ready_event = threading.Event()
+        self.next_valid_id_event = threading.Event()
+        self.managed_accounts_event = threading.Event()
+        self.account_summary_event = threading.Event()
+        self.open_order_event = threading.Event()
+        self.open_order_end_event = threading.Event()
+        self.order_event = threading.Event()
+        self.run_started_event = threading.Event()
+        self.release_next_valid_id_event = threading.Event()
+        self.market_data_events = {}
+        self.contract_details_events = {}
+        self.next_valid_order_id = None
+        self.managed_accounts = []
+        self.account_summary = {}
+        self.open_orders = {}
+        self.order_statuses = {}
+        self.order_perm_ids = {}
+        self.filled_quantities = {}
+        self.remaining_quantities = {}
+        self.quote_values = {}
+        self.quote_timestamps = {}
+        self.callback_events = []
+        self.errors = []
+        self.warnings = []
+        self.connected = False
+        self.disconnected = False
+
+    def connect(self, host: str, port: int, clientId: int) -> bool:  # noqa: N803
+        del host, port, clientId
+        self.connected = True
+        self.connection_ready_event.set()
+        return True
+
+    def disconnect(self) -> None:
+        self.disconnected = True
+        self.connected = False
+        self.release_next_valid_id_event.set()
+
+    def isConnected(self) -> bool:  # noqa: N802
+        return self.connected
+
+    def run(self) -> None:
+        self.run_started_event.set()
+        if self.release_next_valid_id_event.wait(timeout=1):
+            self.next_valid_order_id = 1001
+            self.next_valid_id_event.set()
+
+    def reqManagedAccts(self) -> None:  # noqa: N802
+        raise AssertionError("connect must wait for nextValidId before requests")
+
+    def reqAccountSummary(self, reqId: int, groupName: str, tags: str) -> None:  # noqa: N802
+        del reqId, groupName, tags
+
+    def reqOpenOrders(self) -> None:  # noqa: N802
+        return None
+
+    def reqMarketDataType(self, marketDataType: int) -> None:  # noqa: N802
+        del marketDataType
+
+    def reqMktData(  # noqa: N802
+        self,
+        reqId: int,
+        contract: object,
+        genericTickList: str,
+        snapshot: bool,
+        regulatorySnapshot: bool,
+        mktDataOptions: list[object],
+    ) -> None:
+        del reqId, contract, genericTickList, snapshot, regulatorySnapshot, mktDataOptions
+
+    def cancelMktData(self, reqId: int) -> None:  # noqa: N802
+        del reqId
+
+    def placeOrder(self, orderId: int, contract: object, order: object) -> None:  # noqa: N802
+        del orderId, contract, order
+
+    def cancelOrder(self, orderId: int, manualCancelOrderTime: str = "") -> None:  # noqa: N802
+        del orderId, manualCancelOrderTime
+
+
+def test_ibkr_paper_order_broker_waits_for_next_valid_id_before_ready() -> None:
+    app = DelayedNextValidIdApp()
+    broker = IBKRPaperOrderBroker(
+        config(),
+        app_factory=lambda: app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+    errors: list[BaseException] = []
+    worker = threading.Thread(
+        target=lambda: _connect_for_test(broker, errors),
+        daemon=True,
+    )
+
+    worker.start()
+
+    assert app.run_started_event.wait(timeout=0.2)
+    assert worker.is_alive()
+
+    app.release_next_valid_id_event.set()
+    worker.join(timeout=1)
+
+    broker.disconnect()
+
+    assert errors == []
+    assert worker.is_alive() is False
+
+
+def test_ibkr_paper_order_broker_times_out_without_next_valid_id() -> None:
+    app = DelayedNextValidIdApp()
+    broker = IBKRPaperOrderBroker(
+        config(),
+        app_factory=lambda: app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+
+    with pytest.raises(PaperOrderSmokeError, match="timed out before nextValidId"):
+        broker.connect(timeout=0.01)
+
+    assert app.disconnected is True
+
+
+def test_ibkr_fractional_size_rules_notice_is_informational() -> None:
+    app = _PaperOrderIBKRApp()
+
+    app.error(
+        20002,
+        2176,
+        "Warning: Your API version does not support fractional share size rules.",
+    )
+
+    assert app.errors == []
+    assert app.warnings == [
+        "IBKR 2176: Warning: Your API version does not support fractional share size rules."
+    ]
+
+
+def test_ibkr_market_data_cancel_notice_is_informational_for_quote_request() -> None:
+    app = _PaperOrderIBKRApp()
+    app.market_data_events[20002] = threading.Event()
+
+    app.error(20002, 300, "Can't find EId with tickerId:20002")
+
+    assert app.errors == []
+    assert app.warnings == ["IBKR 300: Can't find EId with tickerId:20002"]
+
+
+def test_ibkr_ticker_id_notice_fails_when_not_market_data_request() -> None:
+    app = _PaperOrderIBKRApp()
+
+    app.error(1, 300, "Can't find EId with tickerId:1")
+
+    assert app.errors == ["IBKR 300: Can't find EId with tickerId:1"]
+    assert app.warnings == []
+
+
+def test_ibkr_order_timing_notice_is_informational() -> None:
+    app = _PaperOrderIBKRApp()
+
+    app.error(
+        2,
+        399,
+        "Order Message: BUY 1 SPY ARCA Warning: Your order will not be placed "
+        "at the exchange until 2026-07-06 09:30:00 US/Eastern.",
+    )
+
+    assert app.errors == []
+    assert app.warnings == [
+        "IBKR 399: Order Message: BUY 1 SPY ARCA Warning: Your order will not be "
+        "placed at the exchange until 2026-07-06 09:30:00 US/Eastern."
+    ]
+
+
+def test_ibkr_cancel_notification_is_informational() -> None:
+    app = _PaperOrderIBKRApp()
+
+    app.error(2, 202, "Order Canceled - reason:")
+
+    assert app.errors == []
+    assert app.warnings == ["IBKR 202: Order Canceled - reason:"]
+
+
+def test_limit_order_disables_deprecated_old_api_routing_flags() -> None:
+    order = _make_limit_order(
+        action=TradeAction.BUY,
+        quantity=1,
+        limit_price=Decimal("500"),
+        time_in_force="DAY",
+        transmit=False,
+    )
+
+    if hasattr(order, "eTradeOnly"):
+        assert order.eTradeOnly is False
+    if hasattr(order, "firmQuoteOnly"):
+        assert order.firmQuoteOnly is False
+
+
+def _connect_for_test(
+    broker: IBKRPaperOrderBroker,
+    errors: list[BaseException],
+) -> None:
+    try:
+        broker.connect(timeout=1)
+    except BaseException as exc:  # pragma: no cover - asserted by caller
+        errors.append(exc)
+
+
 def test_untransmitted_paper_order_smoke_rehearsal_records_order_without_submission() -> None:
     fake = FakePaperOrderBroker(
         placement_result=placement(status="PreSubmitted", submitted=False)
@@ -235,11 +450,32 @@ def test_transmitted_paper_order_smoke_cancels_unfilled_order() -> None:
     assert fake.cancel_calls == 1
 
 
+def test_paper_order_smoke_allows_ib_gateway_paper_port() -> None:
+    fake = FakePaperOrderBroker(
+        placement_result=placement(status="PreSubmitted", submitted=False)
+    )
+
+    report = run_paper_order_smoke(
+        config(ibkr_port=4002, broker_kind=BrokerKind.IB_GATEWAY),
+        request(),
+        broker_factory=lambda _config: fake,
+    )
+
+    assert report.ok is True
+    assert report.port == 4002
+    assert report.broker_kind == "ib_gateway"
+    assert fake.place_calls == 1
+
+
 @pytest.mark.parametrize(
     ("bad_config", "expected_error"),
     [
         (unsafe_config(trading_mode="live"), "TRADING_MODE must be paper"),
-        (unsafe_config(ibkr_port=7496), "IBKR_PORT must be 7497"),
+        (unsafe_config(ibkr_port=7496), "live IBKR ports are rejected"),
+        (
+            unsafe_config(ibkr_port=1234),
+            "IBKR_PORT must be 7497 (TWS paper) or 4002 (IB Gateway paper)",
+        ),
         (config(allow_paper_orders=False), "ALLOW_PAPER_ORDERS=true is required"),
         (unsafe_config(allow_live_orders=True), "ALLOW_LIVE_ORDERS=true is rejected"),
         (unsafe_config(ibkr_host="localhost"), "IBKR_HOST must be 127.0.0.1"),
