@@ -32,6 +32,7 @@ The current project is infrastructure only. It must support research, signal gen
 - Paper readiness orchestration may contact IBKR through read-only broker, account-summary, and historical-data requests only. It must run stages sequentially, require a real broker account summary, reject mock fallback as readiness success, keep `ALLOW_PAPER_ORDERS=false`, report `submitted_orders=false`, and keep direct futures out of scope.
 - Data-quality gate commands must remain broker-free and local-file-only. They may fail or warn on snapshot quality, but they must not contact IBKR, evaluate signals, generate order intents, simulate fills, compute P&L, or enable direct futures.
 - Evaluator comparison commands must remain broker-free and diagnostic-only. They may compare approved analytical condition counts across parameter candidates, but they must not rank trade recommendations, optimize P&L, generate trading signals, create order intents, simulate fills, route orders, or contact brokers.
+- `paper-order-smoke` is the only current production command allowed to call IBKR paper order APIs. It must require `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`, `ALLOW_LIVE_ORDERS=false`, `IBKR_HOST=127.0.0.1`, `IBKR_PORT=7497`, `IBKR_CLIENT_ID=21`, explicit confirmation, SPY only, quantity `1`, STK/SMART/USD, `LMT`, `DAY`, max notional `$1,000`, and no live route. Keep the existing `PaperExecutor` refusing submissions for all normal router paths.
 - Do not commit `.env`, secrets, account numbers, API credentials, tokens, or sensitive logs.
 - Missing or invalid config must fail closed.
 
@@ -56,7 +57,7 @@ All execution attempts must pass through risk and `trader.execution.router`. The
 - `src/trader/strategy/`: pure signal generation.
 - `src/trader/portfolio/`: signal-to-trade-plan conversion.
 - `src/trader/risk/`: explicit risk decisions and guards.
-- `src/trader/execution/`: router, simulator, and refusing paper executor.
+- `src/trader/execution/`: router, simulator, refusing paper executor, and the gated paper-order smoke executor.
 - `src/trader/reporting/`: JSON and Markdown journals.
 - `tests/`: unit tests that do not require TWS or IB Gateway.
 - `scripts/`: safe helper commands.
@@ -134,6 +135,13 @@ Run read-only alpha shadow orchestration:
 ```bash
 python -m trader.cli alpha-shadow-run
 scripts/run-alpha-shadow-run.sh
+```
+
+Run the gated paper-order smoke rehearsal only after a passing alpha shadow run:
+
+```bash
+python -m trader.cli paper-order-smoke --symbol SPY --quantity 1 --transmit false --confirm PAPER_SMOKE_SPY_1
+ALLOW_PAPER_ORDERS=true scripts/run-paper-order-smoke.sh
 ```
 
 ## Definition Of Done

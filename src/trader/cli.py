@@ -30,6 +30,7 @@ from trader.data.historical_loader import (
 from trader.data.quality_gate import build_data_quality_gate_report
 from trader.data.snapshots import deterministic_history, deterministic_quotes, mock_positions
 from trader.data.universe import parse_symbols
+from trader.execution.paper_order_smoke import run_paper_order_smoke
 from trader.execution.router import ExecutionRouter
 from trader.models import (
     AlphaShadowRunReport,
@@ -59,6 +60,8 @@ from trader.models import (
     MarketDataDiagnosticReport,
     MarketDataRequestType,
     MarketQuote,
+    PaperOrderSmokeReport,
+    PaperOrderSmokeRequest,
     PaperReadinessRunReport,
     PaperReadinessRunRequest,
     RiskDecision,
@@ -1534,6 +1537,84 @@ def alpha_shadow_run(
         raise typer.Exit(code=1)
 
 
+@app.command("paper-order-smoke")
+def paper_order_smoke(
+    symbol: Annotated[
+        str,
+        typer.Option("--symbol", help="Paper smoke symbol. Only SPY is allowed."),
+    ] = "SPY",
+    quantity: Annotated[
+        int,
+        typer.Option("--quantity", help="Paper smoke quantity. Only 1 is allowed."),
+    ] = 1,
+    transmit: Annotated[
+        str,
+        typer.Option(
+            "--transmit",
+            help="Use 'false' for rehearsal or 'true' for a transmitted paper order.",
+        ),
+    ] = "false",
+    allow_fill: Annotated[
+        str,
+        typer.Option("--allow-fill", help="Whether a transmitted paper fill is allowed."),
+    ] = "false",
+    cancel_after_seconds: Annotated[
+        float,
+        typer.Option(
+            "--cancel-after-seconds",
+            help="Seconds to wait before canceling an unfilled transmitted order.",
+        ),
+    ] = 30,
+    confirm: Annotated[
+        str,
+        typer.Option("--confirm", help="Required confirmation string."),
+    ] = "",
+    max_trade_notional: Annotated[
+        str,
+        typer.Option("--max-trade-notional", help="Maximum paper smoke notional."),
+    ] = "1000",
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Broker request timeout seconds."),
+    ] = 30,
+) -> None:
+    """Run the gated IBKR paper-order lifecycle smoke test."""
+
+    config = _load_config_or_exit()
+    request = PaperOrderSmokeRequest(
+        symbol=symbol,
+        quantity=quantity,
+        transmit=_parse_bool_option(transmit, "--transmit"),
+        allow_fill=_parse_bool_option(allow_fill, "--allow-fill"),
+        cancel_after_seconds=_validate_non_negative_seconds_option(
+            cancel_after_seconds,
+            120,
+        ),
+        confirm=confirm,
+        max_trade_notional=_parse_decimal_option(
+            max_trade_notional,
+            "--max-trade-notional",
+        ),
+        timeout_seconds=_validate_timeout_option(timeout) or 30,
+    )
+    report = run_paper_order_smoke(config, request)
+    json_path, md_path = Journal().write_cycle("paper_order_smoke", _report_dict(report))
+
+    console.print("[bold]IBKR paper order smoke[/bold]")
+    console.print("Scope: SPY BUY 1 LMT DAY only.")
+    console.print("Live trading: disabled.")
+    console.print("Live ports: rejected.")
+    console.print(
+        "Market orders, futures, options, algos, brackets, shorts, and batches: rejected."
+    )
+    console.print("TWS Read-Only API should be disabled only while this command is running.")
+    _print_paper_order_smoke_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def account(
     connect: Annotated[
@@ -1846,6 +1927,7 @@ def _report_dict(
         | HistoricalSnapshotReport
         | InertStrategyRunnerReport
         | MarketDataDiagnosticReport
+        | PaperOrderSmokeReport
         | PaperReadinessRunReport
         | SignalContractReport
         | StrategyContractReport
@@ -2423,6 +2505,84 @@ def _print_alpha_shadow_run_result(report: AlphaShadowRunReport) -> None:
             console.print(f"- {escape(error)}")
 
 
+def _print_paper_order_smoke_result(report: PaperOrderSmokeReport) -> None:
+    table = Table(title="Paper Order Smoke")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Final status", _enum_value(report.final_status))
+    table.add_row("Mode", report.mode)
+    table.add_row("Host", report.host)
+    table.add_row("Port", str(report.port))
+    table.add_row("Client ID", str(report.client_id))
+    table.add_row("Broker connected", str(report.broker_connected).lower())
+    table.add_row(
+        "Account summary verified",
+        str(report.account_summary_verified).lower(),
+    )
+    table.add_row("Symbol", report.request.symbol)
+    table.add_row("Quantity", str(report.request.quantity))
+    table.add_row("Order type", _enum_value(report.request.order_type))
+    table.add_row("Time in force", report.request.time_in_force)
+    table.add_row("Transmit", str(report.transmitted).lower())
+    table.add_row("Submitted orders", str(report.submitted_orders).lower())
+    table.add_row("Paper orders enabled", str(report.paper_orders_enabled).lower())
+    table.add_row("Live orders enabled", str(report.live_orders_enabled).lower())
+    table.add_row("Live route possible", str(report.live_route_possible).lower())
+    table.add_row("Order API invoked", str(report.order_api_invoked).lower())
+    table.add_row("Existing open orders", str(report.existing_open_order_count))
+    table.add_row(
+        "Duplicate open order",
+        str(report.duplicate_open_order_detected).lower(),
+    )
+    table.add_row("Limit price", str(report.limit_price or "n/a"))
+    table.add_row("Notional", str(report.notional or "n/a"))
+    table.add_row("Order ID", str(report.order_id or "n/a"))
+    table.add_row("Perm ID", str(report.perm_id or "n/a"))
+    table.add_row("Order status", report.order_status or "n/a")
+    table.add_row("Fill quantity", str(report.fill_quantity))
+    table.add_row("Cancel requested", str(report.cancel_requested).lower())
+    table.add_row("Canceled", str(report.canceled).lower())
+    console.print(table)
+
+    if report.account_ids_masked:
+        console.print(
+            "Masked accounts: "
+            + ", ".join(escape(account) for account in report.account_ids_masked)
+        )
+    if report.quote is not None:
+        console.print(
+            "Quote: "
+            f"bid={report.quote.bid or 'n/a'} "
+            f"ask={report.quote.ask or 'n/a'} "
+            f"last={report.quote.last or 'n/a'} "
+            f"stale={str(report.quote.stale).lower()}"
+        )
+    if report.callback_timeline:
+        callback_table = Table(title="Order Callback Timeline")
+        callback_table.add_column("Event")
+        callback_table.add_column("Order ID")
+        callback_table.add_column("Perm ID")
+        callback_table.add_column("Status")
+        callback_table.add_column("Message")
+        for event in report.callback_timeline:
+            callback_table.add_row(
+                event.event_type,
+                str(event.order_id or "n/a"),
+                str(event.perm_id or "n/a"),
+                event.status or "n/a",
+                event.message or "",
+            )
+        console.print(callback_table)
+    if report.warnings:
+        console.print("[yellow]Paper order smoke warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Paper order smoke errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
 def _print_broker_result(report: BrokerDiagnosticReport) -> None:
     table = Table(title="Broker Connectivity")
     table.add_column("Check")
@@ -2887,6 +3047,16 @@ def _parse_decimal_option(value: str, option_name: str) -> Decimal:
         console.print(f"[red]{option_name} must be non-negative.[/red]")
         raise typer.Exit(code=2)
     return parsed
+
+
+def _parse_bool_option(value: str, option_name: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes"}:
+        return True
+    if normalized in {"false", "0", "no"}:
+        return False
+    console.print(f"[red]{option_name} must be true or false.[/red]")
+    raise typer.Exit(code=2)
 
 
 def _print_zero_volume_samples(items: list[Any]) -> None:

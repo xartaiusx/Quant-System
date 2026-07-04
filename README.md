@@ -297,6 +297,32 @@ account IDs, stage paths, data-quality metrics, shadow signal/trade-plan/risk
 counts, simulator fill counts, `submitted_orders=false`, and
 `paper_orders_enabled=false`.
 
+`paper-order-smoke` is the first gated paper-only order lifecycle command. Run it
+only after a passing `alpha-shadow-run`, with TWS paper on `127.0.0.1:7497` and
+Read-Only API disabled only for the smoke window. It requires
+`TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`, `ALLOW_LIVE_ORDERS=false`,
+`IBKR_CLIENT_ID=21`, `MAX_TRADE_NOTIONAL=1000`, and
+`--confirm PAPER_SMOKE_SPY_1`. It is SPY-only, quantity `1`, STK/SMART/USD,
+`LMT`, `DAY`, BUY-only, and refuses live ports, live mode, market orders,
+direct futures, options, algos, brackets, shorts, fractional/cash quantity stock
+orders, and batches. The rehearsal form records an untransmitted order:
+
+```bash
+python -m trader.cli paper-order-smoke --symbol SPY --quantity 1 --transmit false --confirm PAPER_SMOKE_SPY_1
+```
+
+The transmitted smoke form sends one non-marketable paper limit order, then
+cancels it if unfilled:
+
+```bash
+python -m trader.cli paper-order-smoke --symbol SPY --quantity 1 --transmit true --allow-fill false --cancel-after-seconds 30 --confirm PAPER_SMOKE_SPY_1
+```
+
+After the smoke run, set `ALLOW_PAPER_ORDERS=false` again and re-enable TWS
+Read-Only API unless actively running the gated paper execution command.
+Reports are written to `reports/paper_order_smoke_<timestamp>.json` plus `.md`
+with masked account IDs, order/cancel callback evidence, and no secrets.
+
 The offline fixture stress suite uses temporary synthetic historical snapshots
 to validate loader, feed, engine, strategy-contract, strategy-runner, and
 signal-contract/signal-runner/signal-evaluate behavior against partial, gapped,
@@ -307,6 +333,9 @@ signals, simulate orders or fills, perform portfolio accounting, or compute P&L.
 ## References
 
 - IBKR TWS API setup and paper/live ports: https://www.interactivebrokers.com/campus/trading-lessons/installing-configuring-tws-for-the-api/
+- IBKR order submission and transmit behavior: https://interactivebrokers.github.io/tws-api/order_submission.html
+- IBKR placing-order callbacks: https://www.interactivebrokers.com/campus/trading-lessons/python-placing-orders/
+- IBKR order types and paper-trading notes: https://www.interactivebrokers.com/campus/ibkr-api-page/order-types/
 - IBKR contracts API reference: https://www.interactivebrokers.com/campus/ibkr-api-page/contracts/
 - CFTC futures market basics: https://www.cftc.gov/LearnAndProtect/AdvisoriesAndArticles/FuturesMarketBasics/index.htm
 - CFTC commodity ETP advisory: https://www.cftc.gov/LearnAndProtect/AdvisoriesAndArticles/CustomerAdvisory_CommodityETPs.htm

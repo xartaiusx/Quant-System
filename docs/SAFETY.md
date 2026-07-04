@@ -59,7 +59,9 @@ The initial risk engine blocks:
 
 ## Paper Trading Limitations
 
-`ALLOW_PAPER_ORDERS=false` by default. The paper executor exists only as a refusing stub. Future paper execution must be added deliberately with tests and docs.
+`ALLOW_PAPER_ORDERS=false` by default. The normal paper executor remains a
+refusing stub for strategy and router paths. Paper execution must be enabled
+only through the explicit paper-order smoke command described below.
 
 Read-Only API in TWS is still recommended as a belt-and-suspenders control because it prevents API orders at the TWS setting level.
 
@@ -164,6 +166,23 @@ never contacts a broker, invokes order APIs, ranks trade recommendations,
 optimizes P&L, generates trading signals, creates order intents, simulates
 fills, maintains portfolio accounting, submits to the paper executor, routes
 execution, or enables direct futures contracts.
+
+Milestone 20 adds `alpha-shadow-run`, the first broker-connected read-only
+alpha test. It requires paper TWS on `127.0.0.1:7497`, expects TWS Read-Only API
+to remain enabled, requires `ALLOW_PAPER_ORDERS=false`, runs SPY-only
+broker/account/history reads plus offline quality/evaluator/risk/simulator
+stages, and reports `submitted_orders=false`.
+
+Milestone 21 adds `paper-order-smoke`, the only production path allowed to call
+IBKR paper order APIs. It requires a passing read-only alpha shadow run before
+manual use, then requires `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`,
+`ALLOW_LIVE_ORDERS=false`, `IBKR_HOST=127.0.0.1`, `IBKR_PORT=7497`,
+`IBKR_CLIENT_ID=21`, `MAX_TRADE_NOTIONAL=1000`, and explicit confirmation. It
+is limited to one SPY BUY 1 STK/SMART/USD `LMT DAY` order. It refuses live
+mode, live ports, market orders, futures, options, algos, brackets, shorts,
+fractional or cash-quantity stock orders, duplicate open smoke orders, stale or
+missing quotes, and multi-order batches. TWS Read-Only API should be disabled
+only during this smoke window and re-enabled immediately afterward.
 
 ## Quantitative Research Gate
 
