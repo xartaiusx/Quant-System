@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -445,6 +446,17 @@ def data_quality_gate(
         int,
         typer.Option("--max-zero-volume-bars", help="Maximum zero-volume bars allowed."),
     ] = 0,
+    min_average_volume: Annotated[
+        str,
+        typer.Option("--min-average-volume", help="Minimum average volume per bar."),
+    ] = "0",
+    min_average_dollar_volume: Annotated[
+        str,
+        typer.Option(
+            "--min-average-dollar-volume",
+            help="Minimum average dollar volume per bar.",
+        ),
+    ] = "0",
     max_missing_gap_count: Annotated[
         int,
         typer.Option("--max-missing-gap-count", help="Maximum timestamp gaps allowed."),
@@ -464,6 +476,12 @@ def data_quality_gate(
         base_data_path=base_path.as_posix(),
         min_bars=min_bars,
         max_zero_volume_bars=max_zero_volume_bars,
+        min_average_volume=_parse_decimal_option(
+            min_average_volume, "--min-average-volume"
+        ),
+        min_average_dollar_volume=_parse_decimal_option(
+            min_average_dollar_volume, "--min-average-dollar-volume"
+        ),
         max_missing_gap_count=max_missing_gap_count,
         allow_stale_snapshot=allow_stale_snapshot,
     )
@@ -2423,6 +2441,8 @@ def _print_history_load_result(report: HistoricalLoaderReport) -> None:
     table.add_column("Gaps")
     table.add_column("Zero Vol")
     table.add_column("Zero Samples")
+    table.add_column("Avg Vol")
+    table.add_column("Avg $ Vol")
     table.add_column("Malformed")
     table.add_column("Invalid OHLC")
     table.add_column("Negative Vol")
@@ -2437,6 +2457,8 @@ def _print_history_load_result(report: HistoricalLoaderReport) -> None:
             str(summary.missing_gap_count),
             str(summary.zero_volume_count),
             _format_sample_values(summary.zero_volume_sample_timestamps),
+            _format_decimal(summary.average_volume),
+            _format_decimal(summary.average_dollar_volume),
             str(summary.malformed_line_count),
             str(summary.invalid_ohlc_count),
             str(summary.negative_volume_count),
@@ -2458,6 +2480,8 @@ def _print_data_quality_gate_result(report: DataQualityGateReport) -> None:
     table.add_column("Bars")
     table.add_column("Zero Vol")
     table.add_column("Zero Samples")
+    table.add_column("Avg Vol")
+    table.add_column("Avg $ Vol")
     table.add_column("Duplicates")
     table.add_column("Gaps")
     table.add_column("Invalid OHLC")
@@ -2469,6 +2493,8 @@ def _print_data_quality_gate_result(report: DataQualityGateReport) -> None:
             str(result.bars_count),
             str(result.zero_volume_bars),
             _format_sample_values(result.zero_volume_sample_timestamps),
+            _format_decimal(result.average_volume),
+            _format_decimal(result.average_dollar_volume),
             str(result.duplicate_timestamps_count),
             str(result.missing_gap_count),
             str(result.invalid_ohlc_count),
@@ -2633,6 +2659,22 @@ def _enum_value(value: object) -> str:
 
 def _format_sample_values(values: list[str]) -> str:
     return ", ".join(values) if values else "none"
+
+
+def _format_decimal(value: Decimal | None) -> str:
+    return "n/a" if value is None else str(value)
+
+
+def _parse_decimal_option(value: str, option_name: str) -> Decimal:
+    try:
+        parsed = Decimal(value)
+    except (InvalidOperation, ValueError):
+        console.print(f"[red]{option_name} must be a decimal number.[/red]")
+        raise typer.Exit(code=2) from None
+    if parsed < 0:
+        console.print(f"[red]{option_name} must be non-negative.[/red]")
+        raise typer.Exit(code=2)
+    return parsed
 
 
 def _print_zero_volume_samples(items: list[Any]) -> None:

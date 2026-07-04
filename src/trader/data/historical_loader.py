@@ -432,6 +432,12 @@ def _dataset_summary(
         for bar in bars
         if bar.volume is not None and bar.volume == 0
     ]
+    volumes = [bar.volume for bar in bars if bar.volume is not None]
+    dollar_volumes = [
+        bar.dollar_volume for bar in bars if bar.dollar_volume is not None
+    ]
+    total_volume = sum(volumes, Decimal("0"))
+    total_dollar_volume = sum(dollar_volumes, Decimal("0"))
     manifest_matches_bars = manifest.bar_count == len(bars)
     stale_snapshot = (
         now - manifest.generated_at
@@ -480,6 +486,14 @@ def _dataset_summary(
         largest_gap_seconds=largest_gap,
         zero_volume_count=len(zero_volume_timestamps),
         zero_volume_sample_timestamps=zero_volume_timestamps[:_QUALITY_SAMPLE_LIMIT],
+        volume_count=len(volumes),
+        total_volume=total_volume,
+        average_volume=total_volume / len(volumes) if volumes else None,
+        dollar_volume_count=len(dollar_volumes),
+        total_dollar_volume=total_dollar_volume,
+        average_dollar_volume=(
+            total_dollar_volume / len(dollar_volumes) if dollar_volumes else None
+        ),
         malformed_line_count=malformed_count,
         invalid_ohlc_count=invalid_ohlc_count,
         negative_volume_count=negative_volume_count,

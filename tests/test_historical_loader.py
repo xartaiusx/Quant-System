@@ -165,6 +165,8 @@ def test_loads_valid_jsonl_bars_and_manifest(tmp_path: Path) -> None:
     assert report.ok is True
     assert report.results[0].load_status == HistoricalLoadStatus.LOADED
     assert report.summaries[0].bars_count == 2
+    assert report.summaries[0].average_volume == Decimal("1000")
+    assert report.summaries[0].average_dollar_volume == Decimal("100500.00")
     assert report.results[0].dataset is not None
     assert report.results[0].dataset.bars[0].typical_price == Decimal(
         "100.1666666666666666666666667"
