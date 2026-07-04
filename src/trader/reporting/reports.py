@@ -47,6 +47,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return paper_readiness_run_markdown(payload)
     if payload.get("report_type") == "alpha_shadow_run":
         return alpha_shadow_run_markdown(payload)
+    if payload.get("report_type") == "paper_order_smoke":
+        return paper_order_smoke_markdown(payload)
 
     lines = [
         f"# {payload.get('title', 'Trading Report')}",
@@ -1555,6 +1557,108 @@ def alpha_shadow_run_markdown(payload: Mapping[str, Any]) -> str:
     if report_paths:
         for label, path in sorted(report_paths.items()):
             lines.append(f"- `{label}`: `{path}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def paper_order_smoke_markdown(payload: Mapping[str, Any]) -> str:
+    """Render the gated paper-order smoke report."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    request = payload.get("request", {})
+    quote = payload.get("quote", {})
+    callback_timeline = payload.get("callback_timeline", [])
+    account_ids = payload.get("account_ids_masked", [])
+    request_symbol = request.get("symbol", "unknown") if isinstance(request, Mapping) else "unknown"
+    request_quantity = (
+        request.get("quantity", "unknown") if isinstance(request, Mapping) else "unknown"
+    )
+    request_order_type = (
+        request.get("order_type", "unknown") if isinstance(request, Mapping) else "unknown"
+    )
+    request_tif = (
+        request.get("time_in_force", "unknown")
+        if isinstance(request, Mapping)
+        else "unknown"
+    )
+
+    lines = [
+        f"# {payload.get('title', 'IBKR Paper Order Smoke Run')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'paper-order-smoke')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Mode: `{payload.get('mode', 'unknown')}`",
+        f"- Host: `{payload.get('host', 'unknown')}`",
+        f"- Port: `{payload.get('port', 'unknown')}`",
+        f"- Client ID: `{payload.get('client_id', 'unknown')}`",
+        f"- Symbol: `{request_symbol}`",
+        f"- Quantity: `{request_quantity}`",
+        f"- Order type: `{request_order_type}`",
+        f"- Time in force: `{request_tif}`",
+        f"- Transmit: `{payload.get('transmitted', False)}`",
+        f"- Submitted orders: `{payload.get('submitted_orders', False)}`",
+        f"- Paper orders enabled: `{payload.get('paper_orders_enabled', False)}`",
+        f"- Live orders enabled: `{payload.get('live_orders_enabled', True)}`",
+        f"- Read-Only API expected: `{payload.get('read_only_api_expected', True)}`",
+        f"- Live route possible: `{payload.get('live_route_possible', True)}`",
+        f"- Broker connected: `{payload.get('broker_connected', False)}`",
+        f"- Account summary verified: `{payload.get('account_summary_verified', False)}`",
+        f"- Existing open orders: `{payload.get('existing_open_order_count', 0)}`",
+        f"- Duplicate open order detected: `{payload.get('duplicate_open_order_detected', False)}`",
+        f"- Limit price: `{payload.get('limit_price', 'n/a')}`",
+        f"- Notional: `{payload.get('notional', 'n/a')}`",
+        f"- Order ID: `{payload.get('order_id', 'n/a')}`",
+        f"- Perm ID: `{payload.get('perm_id', 'n/a')}`",
+        f"- Order status: `{payload.get('order_status', 'n/a')}`",
+        f"- Fill quantity: `{payload.get('fill_quantity', '0')}`",
+        f"- Cancel requested: `{payload.get('cancel_requested', False)}`",
+        f"- Canceled: `{payload.get('canceled', False)}`",
+        "",
+        "## Safety",
+        "",
+        str(payload.get("safety_statement", "Paper-order smoke safety scope unavailable.")),
+        "",
+        "## Masked Accounts",
+        "",
+    ]
+    if account_ids:
+        lines.extend(f"- `{account_id}`" for account_id in account_ids)
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Quote", ""])
+    if isinstance(quote, Mapping) and quote:
+        lines.extend(
+            [
+                f"- Bid: `{quote.get('bid', 'n/a')}`",
+                f"- Ask: `{quote.get('ask', 'n/a')}`",
+                f"- Last: `{quote.get('last', 'n/a')}`",
+                f"- Close: `{quote.get('close', 'n/a')}`",
+                f"- Timestamp: `{quote.get('quote_timestamp', 'n/a')}`",
+                f"- Stale: `{quote.get('stale', True)}`",
+            ]
+        )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Callback Timeline", ""])
+    if isinstance(callback_timeline, list) and callback_timeline:
+        for event in callback_timeline:
+            if not isinstance(event, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"`{event.get('event_type', 'unknown')}` "
+                f"order_id=`{event.get('order_id', 'n/a')}` "
+                f"perm_id=`{event.get('perm_id', 'n/a')}` "
+                f"status=`{event.get('status', 'n/a')}` "
+                f"message=`{event.get('message', '')}`"
+            )
     else:
         lines.append("- None")
 

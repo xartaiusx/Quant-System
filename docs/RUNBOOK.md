@@ -138,6 +138,63 @@ reports/latest_broker_probe.json
 reports/latest_broker_probe.md
 ```
 
+## First Alpha Paper-Order Smoke
+
+Run this only after `alpha-shadow-run` has completed against paper TWS with no
+orders submitted. Keep normal development defaults at `ALLOW_PAPER_ORDERS=false`
+and TWS Read-Only API enabled until the exact smoke window.
+
+Required operator setup for the smoke window:
+
+- Paper TWS is open and logged in.
+- API socket clients are enabled.
+- Socket port is `7497`.
+- TWS Read-Only API is disabled only while running this command.
+- Environment is paper-only:
+
+```bash
+export TRADING_MODE=paper
+export ALLOW_PAPER_ORDERS=true
+export ALLOW_LIVE_ORDERS=false
+export IBKR_HOST=127.0.0.1
+export IBKR_PORT=7497
+export IBKR_CLIENT_ID=21
+export MAX_TRADE_NOTIONAL=1000
+```
+
+First run the untransmitted rehearsal:
+
+```bash
+python -m trader.cli paper-order-smoke --symbol SPY --quantity 1 --transmit false --confirm PAPER_SMOKE_SPY_1
+```
+
+Then run one transmitted non-marketable paper limit order and cancel it if
+unfilled:
+
+```bash
+python -m trader.cli paper-order-smoke --symbol SPY --quantity 1 --transmit true --allow-fill false --cancel-after-seconds 30 --confirm PAPER_SMOKE_SPY_1
+```
+
+Expected behavior:
+
+- refuses unless `TRADING_MODE=paper`, paper port `7497`, and client ID `21`
+  are configured
+- refuses unless `ALLOW_PAPER_ORDERS=true` and `ALLOW_LIVE_ORDERS=false`
+- refuses symbols other than SPY, quantities other than `1`, market orders,
+  futures, options, shorts, fractional/cash quantity stock orders, and batches
+- writes masked JSON and Markdown reports under `reports/`
+- records `openOrder`, `orderStatus`, `execDetails`, API errors, and cancel
+  status when callbacks are available
+
+After the smoke run:
+
+```bash
+export ALLOW_PAPER_ORDERS=false
+```
+
+Re-enable TWS Read-Only API unless actively running a gated paper execution
+command.
+
 ## Read-Only Market-Data Diagnostics
 
 ```bash

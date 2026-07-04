@@ -160,6 +160,14 @@ class AlphaShadowRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class PaperOrderSmokeRunStatus(StrEnum):
+    """Gated IBKR paper-order smoke run states."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    FAILED = "failed"
+
+
 class PaperReadinessStageStatus(StrEnum):
     """Stage-level status for the paper readiness orchestration."""
 
@@ -2395,6 +2403,217 @@ class AlphaShadowRunReport(SerializableModel):
             raise ValueError("direct_futures_data_enabled must remain false")
         if not self.no_order_guarantee:
             raise ValueError("no_order_guarantee must remain true")
+        return self
+
+
+class PaperOrderCallbackEvent(SerializableModel):
+    """Masked callback evidence from the IBKR paper-order smoke path."""
+
+    event_type: str
+    order_id: int | None = None
+    perm_id: int | None = None
+    status: str | None = None
+    filled_quantity: Decimal | None = None
+    remaining_quantity: Decimal | None = None
+    message: str | None = None
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class PaperOrderQuote(SerializableModel):
+    """Quote snapshot used to derive a non-marketable smoke-test limit price."""
+
+    symbol: str
+    bid: Decimal | None = None
+    ask: Decimal | None = None
+    last: Decimal | None = None
+    close: Decimal | None = None
+    quote_timestamp: datetime | None = None
+    quote_age_seconds: float | None = None
+    stale: bool = True
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @model_validator(mode="after")
+    def validate_quote_prices(self) -> PaperOrderQuote:
+        for field_name in ("bid", "ask", "last", "close"):
+            value = getattr(self, field_name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{field_name} must be positive when provided")
+        if self.bid is not None and self.ask is not None and self.ask < self.bid:
+            raise ValueError("ask must be greater than or equal to bid")
+        return self
+
+
+class PaperOrderSmokeRequest(SerializableModel):
+    """Strict request for the first paper-only order lifecycle smoke test."""
+
+    symbol: str = "SPY"
+    action: TradeAction = TradeAction.BUY
+    quantity: int = 1
+    order_type: OrderType = OrderType.LIMIT
+    time_in_force: str = "DAY"
+    transmit: bool = False
+    allow_fill: bool = False
+    cancel_after_seconds: float = 30
+    confirm: str = ""
+    max_trade_notional: Decimal = Decimal("1000")
+    quote_max_age_seconds: int = 900
+    timeout_seconds: float = 30
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_spy_only(cls, value: str) -> str:
+        symbol = value.strip().upper()
+        if symbol != "SPY":
+            raise ValueError("paper-order-smoke is SPY-only in this milestone")
+        return symbol
+
+    @field_validator("quantity")
+    @classmethod
+    def validate_single_share(cls, value: int) -> int:
+        if value != 1:
+            raise ValueError("paper-order-smoke requires quantity 1")
+        return value
+
+    @field_validator("time_in_force")
+    @classmethod
+    def validate_day_tif(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized != "DAY":
+            raise ValueError("paper-order-smoke supports DAY time-in-force only")
+        return normalized
+
+    @field_validator("cancel_after_seconds", "timeout_seconds")
+    @classmethod
+    def validate_seconds(cls, value: float) -> float:
+        if value < 0 or value > 120:
+            raise ValueError("paper-order-smoke timing settings must be 0 through 120 seconds")
+        return value
+
+    @field_validator("max_trade_notional")
+    @classmethod
+    def validate_max_notional(cls, value: Decimal) -> Decimal:
+        if value <= 0 or value > Decimal("1000"):
+            raise ValueError(
+                "paper-order-smoke max notional must be greater than 0 "
+                "and no more than 1000"
+            )
+        return value
+
+    @field_validator("quote_max_age_seconds")
+    @classmethod
+    def validate_quote_age(cls, value: int) -> int:
+        if value <= 0 or value > 3600:
+            raise ValueError("quote_max_age_seconds must be greater than 0 and no more than 3600")
+        return value
+
+    @model_validator(mode="after")
+    def validate_order_shape(self) -> PaperOrderSmokeRequest:
+        if self.action != TradeAction.BUY:
+            raise ValueError(
+                "paper-order-smoke supports BUY only; SELL is reserved for reduce-only"
+            )
+        if self.order_type != OrderType.LIMIT:
+            raise ValueError("paper-order-smoke supports limit orders only")
+        return self
+
+
+class PaperOrderSmokeReport(SerializableModel):
+    """No-secret report for the gated IBKR paper-order smoke command."""
+
+    title: str = "IBKR Paper Order Smoke Run"
+    report_type: str = "paper_order_smoke"
+    command: str = "paper-order-smoke"
+    ok: bool
+    request: PaperOrderSmokeRequest
+    mode: str
+    host: str
+    port: int
+    client_id: int
+    broker_kind: str
+    broker_connected: bool = False
+    account_summary_verified: bool = False
+    account_ids_masked: list[str] = Field(default_factory=list)
+    existing_open_order_count: int = 0
+    duplicate_open_order_detected: bool = False
+    quote: PaperOrderQuote | None = None
+    limit_price: Decimal | None = None
+    notional: Decimal | None = None
+    order_id: int | None = None
+    perm_id: int | None = None
+    order_status: str | None = None
+    fill_quantity: Decimal = Decimal("0")
+    remaining_quantity: Decimal | None = None
+    cancel_requested: bool = False
+    canceled: bool = False
+    cancel_status: str | None = None
+    callback_timeline: list[PaperOrderCallbackEvent] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    configured_allow_paper_orders: bool = False
+    live_orders_enabled: bool = False
+    read_only_api_expected: bool = False
+    order_routing_enabled: bool = False
+    paper_execution_enabled: bool = False
+    live_route_possible: bool = False
+    order_api_invoked: bool = False
+    place_order_invoked: bool = False
+    cancel_order_invoked: bool = False
+    transmitted: bool = False
+    market_order_requested: bool = False
+    fractional_quantity_requested: bool = False
+    cash_quantity_requested: bool = False
+    short_sale_attempted: bool = False
+    multi_order_batch: bool = False
+    futures_contracts_enabled: bool = False
+    options_contracts_enabled: bool = False
+    algo_orders_enabled: bool = False
+    bracket_orders_enabled: bool = False
+    no_live_order_guarantee: bool = True
+    safety_statement: str = (
+        "This command is limited to one SPY STK/SMART/USD LMT DAY paper-order "
+        "smoke test on localhost TWS paper port 7497. Live ports, live mode, "
+        "market orders, direct futures, options, algos, brackets, shorts, "
+        "fractional or cash-quantity stock orders, and batches are refused."
+    )
+    final_status: PaperOrderSmokeRunStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_paper_order_smoke_safety(self) -> PaperOrderSmokeReport:
+        if self.live_orders_enabled:
+            raise ValueError("live_orders_enabled must remain false")
+        if self.live_route_possible:
+            raise ValueError("live_route_possible must remain false")
+        if self.market_order_requested:
+            raise ValueError("market orders are not allowed")
+        if self.fractional_quantity_requested:
+            raise ValueError("fractional stock quantities are not allowed")
+        if self.cash_quantity_requested:
+            raise ValueError("cash quantity stock orders are not allowed")
+        if self.short_sale_attempted:
+            raise ValueError("short sale attempts are not allowed")
+        if self.multi_order_batch:
+            raise ValueError("multi-order batches are not allowed")
+        if self.futures_contracts_enabled:
+            raise ValueError("direct futures contracts must remain disabled")
+        if self.options_contracts_enabled:
+            raise ValueError("options contracts must remain disabled")
+        if self.algo_orders_enabled:
+            raise ValueError("algo orders must remain disabled")
+        if self.bracket_orders_enabled:
+            raise ValueError("bracket orders must remain disabled")
+        if not self.no_live_order_guarantee:
+            raise ValueError("no_live_order_guarantee must remain true")
+        if self.request.transmit is False and self.submitted_orders:
+            raise ValueError("untransmitted smoke rehearsals must not be marked submitted")
         return self
 
 
