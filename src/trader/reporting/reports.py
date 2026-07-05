@@ -47,6 +47,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return paper_readiness_run_markdown(payload)
     if payload.get("report_type") == "alpha_shadow_run":
         return alpha_shadow_run_markdown(payload)
+    if payload.get("report_type") == "alpha_shadow_daemon":
+        return alpha_shadow_daemon_markdown(payload)
     if payload.get("report_type") == "paper_order_smoke":
         return paper_order_smoke_markdown(payload)
     if payload.get("report_type") == "alpha_paper_run":
@@ -1569,6 +1571,86 @@ def alpha_shadow_run_markdown(payload: Mapping[str, Any]) -> str:
         for label, path in sorted(report_paths.items()):
             lines.append(f"- `{label}`: `{path}`")
     else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def alpha_shadow_daemon_markdown(payload: Mapping[str, Any]) -> str:
+    """Render the controlled read-only alpha shadow daemon report."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    cycles = payload.get("cycles", [])
+
+    lines = [
+        f"# {payload.get('title', 'Read-only IBKR Alpha Shadow Daemon')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'alpha-shadow-daemon')}`",
+        f"- Campaign ID: `{payload.get('campaign_id', 'n/a')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Commit SHA: `{payload.get('commit_sha', 'unknown')}`",
+        f"- Cycles: `{payload.get('cycle_count', 0)}`",
+        f"- Clean cycles: `{payload.get('clean_cycle_count', 0)}`",
+        f"- Graduation ready: `{payload.get('graduation_ready', False)}`",
+        f"- Broker-connected cycles: `{payload.get('broker_connected_cycles', 0)}`",
+        "- Account-summary verified cycles: "
+        f"`{payload.get('account_summary_verified_cycles', 0)}`",
+        f"- Stale data detected: `{payload.get('stale_data_detected', False)}`",
+        f"- Halted by kill switch: `{payload.get('halted_by_kill_switch', False)}`",
+        f"- Heartbeat path: `{payload.get('heartbeat_path', 'unknown')}`",
+        f"- Kill switch path: `{payload.get('kill_switch_path', 'unknown')}`",
+        f"- Submitted orders: `{payload.get('submitted_orders', True)}`",
+        f"- Paper orders enabled: `{payload.get('paper_orders_enabled', True)}`",
+        f"- Live orders enabled: `{payload.get('live_orders_enabled', True)}`",
+        f"- Read-Only API expected: `{payload.get('read_only_api_expected', False)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        "",
+        "## Safety",
+        "",
+        str(payload.get("safety_statement", "Alpha shadow daemon safety scope unavailable.")),
+        "",
+        str(payload.get("commodity_scope", "Commodity scope unavailable.")),
+        "",
+        "## Cycles",
+        "",
+    ]
+    if isinstance(cycles, list) and cycles:
+        for cycle in cycles:
+            if not isinstance(cycle, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"`{cycle.get('cycle_index', 'n/a')}` "
+                f"status=`{cycle.get('final_status', 'unknown')}` "
+                f"ok=`{cycle.get('ok', False)}` "
+                f"campaign_id=`{cycle.get('cycle_campaign_id', 'n/a')}` "
+                f"broker=`{cycle.get('broker_connected', False)}` "
+                f"account=`{cycle.get('account_summary_verified', False)}` "
+                f"stale=`{cycle.get('stale_data_detected', False)}` "
+                f"reports=`{len(cycle.get('shadow_report_paths', {}))}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Source Bars", ""])
+    source_bar_lines = 0
+    if isinstance(cycles, list) and cycles:
+        for cycle in cycles:
+            if not isinstance(cycle, Mapping):
+                continue
+            source_bars = cycle.get("source_bar_timestamp_by_symbol", {})
+            if not isinstance(source_bars, Mapping) or not source_bars:
+                continue
+            for symbol, timestamp in sorted(source_bars.items()):
+                lines.append(
+                    f"- cycle `{cycle.get('cycle_index', 'n/a')}` `{symbol}`: `{timestamp}`"
+                )
+                source_bar_lines += 1
+    if source_bar_lines == 0:
         lines.append("- None")
 
     lines.extend(_warnings_and_errors(warnings, errors))
