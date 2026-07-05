@@ -1760,6 +1760,8 @@ def paper_reconcile_markdown(payload: Mapping[str, Any]) -> str:
     source_paths = payload.get("source_report_paths", {})
     account_ids = payload.get("account_ids_masked", [])
     open_orders = payload.get("open_orders", [])
+    executions = payload.get("executions_snapshot", [])
+    commissions = payload.get("commission_reports", [])
     evidence = payload.get("latest_order_evidence", [])
 
     lines = [
@@ -1778,13 +1780,18 @@ def paper_reconcile_markdown(payload: Mapping[str, Any]) -> str:
         f"- Account summary verified: `{payload.get('account_summary_verified', False)}`",
         f"- Account summary source: `{payload.get('account_summary_source', 'unknown')}`",
         f"- Broker positions available: `{payload.get('broker_positions_available', False)}`",
+        f"- Positions query completed: `{payload.get('positions_query_completed', False)}`",
+        f"- Zero positions confirmed: `{payload.get('zero_positions_confirmed', False)}`",
         f"- Positions source: `{payload.get('positions_source', 'unknown')}`",
+        f"- Positions unavailable reason: `{payload.get('positions_unavailable_reason', 'n/a')}`",
         f"- Open-order count: `{payload.get('open_order_count', 0)}`",
         f"- Open-order source: `{payload.get('open_order_source', 'unknown')}`",
         f"- Executions available: `{payload.get('executions_available', False)}`",
         f"- Executions source: `{payload.get('executions_source', 'unknown')}`",
+        f"- Execution order IDs: `{_sample_values(payload.get('execution_order_ids', []))}`",
         f"- Latest order IDs: `{_sample_values(payload.get('latest_order_ids', []))}`",
         f"- Latest perm IDs: `{_sample_values(payload.get('latest_perm_ids', []))}`",
+        f"- Broker state fingerprint: `{payload.get('broker_state_fingerprint', 'n/a')}`",
         f"- Submitted orders: `{payload.get('submitted_orders', True)}`",
         f"- Paper orders enabled: `{payload.get('paper_orders_enabled', True)}`",
         f"- Configured allow paper orders: `{payload.get('configured_allow_paper_orders', True)}`",
@@ -1825,6 +1832,39 @@ def paper_reconcile_markdown(payload: Mapping[str, Any]) -> str:
                 f"symbol=`{item.get('symbol', 'unknown')}` "
                 f"action=`{item.get('action', 'n/a')}` "
                 f"status=`{item.get('status', 'n/a')}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Executions", ""])
+    if isinstance(executions, list) and executions:
+        for item in executions:
+            if not isinstance(item, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"order_id=`{item.get('order_id', 'n/a')}` "
+                f"perm_id=`{item.get('perm_id', 'n/a')}` "
+                f"exec_id=`{item.get('exec_id', 'n/a')}` "
+                f"symbol=`{item.get('symbol', 'unknown')}` "
+                f"side=`{item.get('side', 'n/a')}` "
+                f"shares=`{item.get('shares', 'n/a')}` "
+                f"price=`{item.get('price', 'n/a')}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Commissions", ""])
+    if isinstance(commissions, list) and commissions:
+        for item in commissions:
+            if not isinstance(item, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"exec_id=`{item.get('exec_id', 'n/a')}` "
+                f"commission=`{item.get('commission', 'n/a')}` "
+                f"currency=`{item.get('currency', 'n/a')}` "
+                f"realized_pnl=`{item.get('realized_pnl', 'n/a')}`"
             )
     else:
         lines.append("- None")

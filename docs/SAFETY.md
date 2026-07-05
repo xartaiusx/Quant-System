@@ -201,8 +201,11 @@ disabled.
 Milestone 23 adds post-paper-run hardening. `paper-reconcile` requires
 `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=false`,
 `ALLOW_LIVE_ORDERS=false`, localhost, and paper port `7497` or `4002`. It is
-read-only: it may request account summary, positions, and open orders, but it
-must not submit, modify, or cancel orders. It reports
+read-only: it may request account summary, positions, open orders, and
+current-day executions, but it must not submit, modify, or cancel orders. It
+distinguishes completed zero-position responses from unavailable position data,
+records execution and commission evidence when available, and fails if filled
+paper-order evidence lacks a matching broker execution row. It reports
 `submitted_orders=false`, `paper_orders_enabled=false`,
 `order_routing_enabled=false`, and `order_api_invoked=false`, and it fails if a
 real broker account summary is unavailable. `alpha-test-summary` is offline

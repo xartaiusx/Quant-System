@@ -490,6 +490,7 @@ class BrokerDiagnosticReport(SerializableModel):
     managed_accounts_masked: list[ManagedAccountInfo] = Field(default_factory=list)
     account_snapshot: dict[str, Any] | None = None
     positions_snapshot: list[dict[str, Any]] = Field(default_factory=list)
+    positions_query_completed: bool = False
     errors: list[BrokerErrorEvent] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     read_only_assumed_or_detected: bool | None = True
@@ -2878,12 +2879,18 @@ class PaperReconcileReport(SerializableModel):
     positions_snapshot: list[dict[str, Any]] = Field(default_factory=list)
     positions_source: str = "unavailable_or_mock_fallback_rejected"
     broker_positions_available: bool = False
+    positions_query_completed: bool = False
+    zero_positions_confirmed: bool = False
+    positions_unavailable_reason: str | None = None
     open_orders: list[BrokerOpenOrderSnapshot] = Field(default_factory=list)
     open_order_count: int = 0
     open_order_source: str = "broker_read_only_open_orders"
     executions_snapshot: list[dict[str, Any]] = Field(default_factory=list)
     executions_available: bool = False
     executions_source: str = "not_implemented_in_current_ibkr_adapter"
+    execution_order_ids: list[int] = Field(default_factory=list)
+    commission_reports: list[dict[str, Any]] = Field(default_factory=list)
+    broker_state_fingerprint: str | None = None
     source_report_paths: dict[str, str] = Field(default_factory=dict)
     latest_order_evidence: list[PaperOrderEvidence] = Field(default_factory=list)
     latest_order_ids: list[int] = Field(default_factory=list)

@@ -1212,6 +1212,7 @@ class IBKRClient:
         managed_accounts: list[ManagedAccountInfo] = []
         account_snapshot: dict[str, Any] | None = None
         positions_snapshot: list[dict[str, Any]] = []
+        positions_query_completed = False
 
         try:
             time_probe = self.request_current_time(timeout=timeout)
@@ -1221,6 +1222,8 @@ class IBKRClient:
                 account_snapshot = self.request_account_snapshot(timeout=timeout)
             if time_probe.ok and include_positions:
                 positions_snapshot = self.request_positions_snapshot(timeout=timeout)
+                app = self._app
+                positions_query_completed = bool(app and app.positions_event.is_set())
         except KeyboardInterrupt:
             self._record_error("broker probe interrupted by keyboard", failure_stage="unknown")
         finally:
@@ -1256,6 +1259,7 @@ class IBKRClient:
             managed_accounts_masked=managed_accounts,
             account_snapshot=account_snapshot,
             positions_snapshot=positions_snapshot,
+            positions_query_completed=positions_query_completed,
             errors=errors,
             warnings=warnings,
             final_status="connected" if ok else "failed",

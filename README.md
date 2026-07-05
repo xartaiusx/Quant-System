@@ -333,8 +333,10 @@ python -m trader.cli alpha-test-summary
 
 `paper-reconcile` expects Read-Only API to be re-enabled and
 `ALLOW_PAPER_ORDERS=false`. It captures masked account evidence, broker
-positions, broker open orders, and latest local order IDs/perm IDs without
-placing, modifying, or canceling orders. `alpha-test-summary` is offline-only
+positions, broker open orders, current-day execution/commission evidence,
+latest local order IDs/perm IDs, and a broker-state fingerprint without
+placing, modifying, or canceling orders. It distinguishes a completed
+zero-position response from unavailable positions. `alpha-test-summary` is offline-only
 and aggregates the latest alpha shadow, paper smoke, alpha paper, and
 reconciliation reports into a no-secret campaign summary.
 

@@ -304,13 +304,16 @@ python -m trader.cli paper-reconcile --timeout 30
 
 Expected behavior:
 
-- contacts IBKR through read-only account, positions, and open-order requests
+- contacts IBKR through read-only account, positions, open-order, and
+  current-day execution requests
 - reads latest ignored `paper-order-smoke` and `alpha-paper-run` reports for
   order ID and perm ID evidence
 - reports masked account IDs, open-order count, latest order IDs, latest perm
-  IDs, positions availability, warnings, and errors
+  IDs, position-query completion, zero-position confirmation, execution order
+  IDs, commission rows, broker-state fingerprint, warnings, and errors
 - reports `submitted_orders=false`, `paper_orders_enabled=false`,
   `order_routing_enabled=false`, and `order_api_invoked=false`
+- fails if filled order evidence lacks a matching broker execution row
 - fails if a real broker account summary is unavailable; mock fallback data is
   not accepted as success
 
