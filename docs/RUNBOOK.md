@@ -159,12 +159,13 @@ export IBKR_PORT=4002
 export BROKER_KIND=ib_gateway
 export MAX_TRADE_NOTIONAL=1000
 export MAX_OPEN_POSITIONS=1
+export CAMPAIGN_ID=campaign-YYYYMMDD-spy-001
 
 export IBKR_CLIENT_ID=53
 python -m trader.cli broker-probe --timeout 30
 
 export IBKR_CLIENT_ID=61
-python -m trader.cli alpha-shadow-run --broker-timeout 30 --history-timeout 45 --broker-stage-pause 2
+python -m trader.cli alpha-shadow-run --campaign-id "$CAMPAIGN_ID" --broker-timeout 30 --history-timeout 45 --broker-stage-pause 2
 ```
 
 Required operator setup for the smoke window:
@@ -188,14 +189,14 @@ export MAX_TRADE_NOTIONAL=1000
 First run the untransmitted rehearsal:
 
 ```bash
-python -m trader.cli paper-order-smoke --symbol SPY --quantity 1 --transmit false --confirm PAPER_SMOKE_SPY_1
+python -m trader.cli paper-order-smoke --campaign-id "$CAMPAIGN_ID" --symbol SPY --quantity 1 --transmit false --confirm PAPER_SMOKE_SPY_1
 ```
 
 Then run one transmitted non-marketable paper limit order and cancel it if
 unfilled:
 
 ```bash
-python -m trader.cli paper-order-smoke --symbol SPY --quantity 1 --transmit true --allow-fill false --cancel-after-seconds 30 --confirm PAPER_SMOKE_SPY_1
+python -m trader.cli paper-order-smoke --campaign-id "$CAMPAIGN_ID" --symbol SPY --quantity 1 --transmit true --allow-fill false --cancel-after-seconds 30 --confirm PAPER_SMOKE_SPY_1
 ```
 
 Expected behavior:
@@ -206,6 +207,8 @@ Expected behavior:
 - refuses symbols other than SPY, quantities other than `1`, market orders,
   futures, options, shorts, fractional/cash quantity stock orders, and batches
 - writes masked JSON and Markdown reports under `reports/`
+- records the no-secret `campaign_id`; later reconcile and summary fail closed
+  if source report campaign IDs differ
 - records `openOrder`, `orderStatus`, `execDetails`, API errors, and cancel
   status when callbacks are available
 
@@ -246,13 +249,14 @@ export MAX_TRADE_NOTIONAL=1000
 Then run:
 
 ```bash
-python -m trader.cli alpha-paper-run --symbol SPY --quantity 1 --allow-fill false --cancel-after-seconds 30 --confirm ALPHA_PAPER_SPY_1
+python -m trader.cli alpha-paper-run --campaign-id "$CAMPAIGN_ID" --symbol SPY --quantity 1 --allow-fill false --cancel-after-seconds 30 --confirm ALPHA_PAPER_SPY_1
 ```
 
 Expected behavior:
 
 - refuses unless prerequisite reports include `commit_sha` matching current
   `HEAD` and are within the freshness window
+- refuses when prerequisite reports carry different `campaign_id` values
 - refuses unless the transmitted `paper-order-smoke` report proves paper-only
   order lifecycle handling
 - returns `no_trade` without an order when the shadow signal is HOLD/no-signal
@@ -299,7 +303,7 @@ export IBKR_CLIENT_ID=11
 Then reconcile current broker state:
 
 ```bash
-python -m trader.cli paper-reconcile --timeout 30
+python -m trader.cli paper-reconcile --campaign-id "$CAMPAIGN_ID" --timeout 30
 ```
 
 Expected behavior:
@@ -308,6 +312,8 @@ Expected behavior:
   current-day execution requests
 - reads latest ignored `paper-order-smoke` and `alpha-paper-run` reports for
   order ID and perm ID evidence
+- derives or verifies the same no-secret `campaign_id` across source reports
+  and fails closed on mismatches
 - reports masked account IDs, open-order count, latest order IDs, latest perm
   IDs, position-query completion, zero-position confirmation, execution order
   IDs, commission rows, broker-state fingerprint, warnings, and errors
@@ -320,7 +326,7 @@ Expected behavior:
 Finally summarize the local campaign evidence:
 
 ```bash
-python -m trader.cli alpha-test-summary
+python -m trader.cli alpha-test-summary --campaign-id "$CAMPAIGN_ID"
 ```
 
 Expected behavior:
@@ -328,6 +334,7 @@ Expected behavior:
 - runs offline only and does not contact IBKR
 - verifies same-commit, fresh `alpha-shadow-run`, transmitted
   `paper-order-smoke`, `alpha-paper-run`, and `paper-reconcile` reports
+- verifies source reports share the same `campaign_id`
 - fails closed if `paper-reconcile` is older than the latest submitted paper
   smoke or alpha paper report
 - records fill/cancel outcome, order IDs, perm IDs, open-order count, masked

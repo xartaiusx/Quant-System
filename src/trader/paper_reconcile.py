@@ -93,6 +93,7 @@ def run_paper_reconcile(
         "No order APIs are invoked by paper-reconcile.",
     ]
     errors = _config_errors(config)
+    selected_campaign_id = reconcile_request.campaign_id
     source_report_paths = {
         "paper_smoke_report": reconcile_request.paper_smoke_report_path,
         "alpha_paper_report": reconcile_request.alpha_paper_report_path,
@@ -103,6 +104,7 @@ def run_paper_reconcile(
             config,
             reconcile_request,
             current_commit=current_commit,
+            campaign_id=selected_campaign_id,
             source_report_paths=source_report_paths,
             warnings=warnings,
             errors=errors,
@@ -164,6 +166,11 @@ def run_paper_reconcile(
 
     order_evidence, evidence_warnings = _load_order_evidence(source_report_paths)
     warnings.extend(evidence_warnings)
+    selected_campaign_id, campaign_errors = _order_evidence_campaign_context(
+        reconcile_request.campaign_id,
+        order_evidence,
+    )
+    errors.extend(campaign_errors)
     if open_orders:
         warnings.append("broker reported open orders after the paper execution window")
 
@@ -186,6 +193,7 @@ def run_paper_reconcile(
         config,
         reconcile_request,
         current_commit=current_commit,
+        campaign_id=selected_campaign_id,
         source_report_paths=source_report_paths,
         broker_report=broker_report,
         open_orders=open_orders,
@@ -258,6 +266,7 @@ def _smoke_evidence(
         source=source,
         report_path=path,
         report_type=report.report_type,
+        campaign_id=report.campaign_id,
         ok=report.ok,
         final_status=_enum_value(report.final_status),
         commit_sha=report.commit_sha,
@@ -283,6 +292,7 @@ def _alpha_evidence(
         source=source,
         report_path=path,
         report_type=report.report_type,
+        campaign_id=report.campaign_id,
         ok=report.ok,
         final_status=_enum_value(report.final_status),
         commit_sha=report.commit_sha,
@@ -311,6 +321,31 @@ def _load_mapping(path: Path, *, label: str) -> tuple[Mapping[str, Any] | None, 
     return payload, []
 
 
+def _order_evidence_campaign_context(
+    request_campaign_id: str | None,
+    evidence: list[PaperOrderEvidence],
+) -> tuple[str | None, list[str]]:
+    campaign_ids = {
+        evidence_row.source: evidence_row.campaign_id for evidence_row in evidence
+    }
+    present_ids = {campaign_id for campaign_id in campaign_ids.values() if campaign_id}
+    selected_campaign_id = request_campaign_id
+    if selected_campaign_id is None and len(present_ids) == 1:
+        selected_campaign_id = next(iter(present_ids))
+
+    errors: list[str] = []
+    if len(present_ids) > 1:
+        errors.append("source order reports have mismatched campaign_id values")
+    if selected_campaign_id is None:
+        return None, errors
+    for label, campaign_id in campaign_ids.items():
+        if campaign_id is None:
+            errors.append(f"{label} lacks campaign_id")
+        elif campaign_id != selected_campaign_id:
+            errors.append(f"{label} campaign_id does not match {selected_campaign_id}")
+    return selected_campaign_id, errors
+
+
 def _final_status(
     *,
     errors: list[str],
@@ -329,6 +364,7 @@ def _build_report(
     request: PaperReconcileRequest,
     *,
     current_commit: str | None,
+    campaign_id: str | None,
     source_report_paths: dict[str, str],
     warnings: list[str],
     errors: list[str],
@@ -372,6 +408,11 @@ def _build_report(
             if execution.order_id is not None
         }
     )
+    report_request = (
+        request
+        if request.campaign_id == campaign_id
+        else request.model_copy(update={"campaign_id": campaign_id})
+    )
     fingerprint = _broker_state_fingerprint(
         account_ids=account_ids,
         positions=positions,
@@ -382,13 +423,14 @@ def _build_report(
     )
     return PaperReconcileReport(
         ok=final_status != PaperReconcileStatus.FAILED,
-        request=request,
+        request=report_request,
         mode=_enum_value(config.trading_mode),
         host=config.ibkr_host,
         port=config.ibkr_port,
         client_id=config.ibkr_client_id,
         broker_kind=config.inferred_broker_kind,
         commit_sha=current_commit,
+        campaign_id=campaign_id,
         broker_connected=bool(broker_report and broker_report.connected),
         account_summary_verified=bool(account_snapshot),
         account_summary_source=(
@@ -417,6 +459,10 @@ def _build_report(
         commission_reports=commission_rows,
         broker_state_fingerprint=fingerprint,
         source_report_paths=source_report_paths,
+        source_report_campaign_ids={
+            evidence_row.source: evidence_row.campaign_id
+            for evidence_row in selected_evidence
+        },
         latest_order_evidence=selected_evidence,
         latest_order_ids=sorted(set(evidence_order_ids)),
         latest_perm_ids=sorted(set(evidence_perm_ids)),

@@ -1422,6 +1422,13 @@ def paper_readiness_run(
 
 @app.command("alpha-shadow-run")
 def alpha_shadow_run(
+    campaign_id: Annotated[
+        str | None,
+        typer.Option(
+            "--campaign-id",
+            help="Optional no-secret campaign correlation ID for local reports.",
+        ),
+    ] = None,
     symbols: Annotated[
         str,
         typer.Option(help="Comma-separated symbols for the first alpha shadow run."),
@@ -1505,6 +1512,7 @@ def alpha_shadow_run(
     broker_stage_pause = _validate_non_negative_seconds_option(broker_stage_pause, 30)
     use_rth = _validate_use_rth_option(use_rth)
     request = AlphaShadowRunRequest(
+        campaign_id=campaign_id,
         symbols=parse_symbols(symbols),
         duration=duration,
         bar_size=bar_size,
@@ -1551,6 +1559,13 @@ def alpha_shadow_run(
 
 @app.command("paper-order-smoke")
 def paper_order_smoke(
+    campaign_id: Annotated[
+        str | None,
+        typer.Option(
+            "--campaign-id",
+            help="Optional no-secret campaign correlation ID for local reports.",
+        ),
+    ] = None,
     symbol: Annotated[
         str,
         typer.Option("--symbol", help="Paper smoke symbol. Only SPY is allowed."),
@@ -1594,6 +1609,7 @@ def paper_order_smoke(
 
     config = _load_config_or_exit()
     request = PaperOrderSmokeRequest(
+        campaign_id=campaign_id,
         symbol=symbol,
         quantity=quantity,
         transmit=_parse_bool_option(transmit, "--transmit"),
@@ -1629,6 +1645,13 @@ def paper_order_smoke(
 
 @app.command("alpha-paper-run")
 def alpha_paper_run(
+    campaign_id: Annotated[
+        str | None,
+        typer.Option(
+            "--campaign-id",
+            help="Optional no-secret campaign correlation ID matching prerequisites.",
+        ),
+    ] = None,
     symbol: Annotated[
         str,
         typer.Option("--symbol", help="Alpha paper symbol. Only SPY is allowed."),
@@ -1686,6 +1709,7 @@ def alpha_paper_run(
 
     config = _load_config_or_exit()
     request = AlphaPaperRunRequest(
+        campaign_id=campaign_id,
         symbol=symbol,
         quantity=quantity,
         allow_fill=_parse_bool_option(allow_fill, "--allow-fill"),
@@ -1721,6 +1745,13 @@ def alpha_paper_run(
 
 @app.command("paper-reconcile")
 def paper_reconcile(
+    campaign_id: Annotated[
+        str | None,
+        typer.Option(
+            "--campaign-id",
+            help="Optional no-secret campaign correlation ID matching source reports.",
+        ),
+    ] = None,
     timeout: Annotated[
         float,
         typer.Option("--timeout", help="Broker request timeout seconds."),
@@ -1744,6 +1775,7 @@ def paper_reconcile(
 
     config = _load_config_or_exit()
     request = PaperReconcileRequest(
+        campaign_id=campaign_id,
         timeout_seconds=_validate_timeout_option(timeout) or 30,
         paper_smoke_report_path=paper_smoke_report.as_posix(),
         alpha_paper_report_path=alpha_paper_report.as_posix(),
@@ -1764,6 +1796,13 @@ def paper_reconcile(
 
 @app.command("alpha-test-summary")
 def alpha_test_summary(
+    campaign_id: Annotated[
+        str | None,
+        typer.Option(
+            "--campaign-id",
+            help="Optional no-secret campaign correlation ID matching source reports.",
+        ),
+    ] = None,
     alpha_shadow_report: Annotated[
         Path,
         typer.Option("--alpha-shadow-report", help="Alpha-shadow report path."),
@@ -1788,6 +1827,7 @@ def alpha_test_summary(
     """Summarize one paper alpha test campaign from ignored local reports."""
 
     request = AlphaTestSummaryRequest(
+        campaign_id=campaign_id,
         alpha_shadow_report_path=alpha_shadow_report.as_posix(),
         paper_smoke_report_path=paper_smoke_report.as_posix(),
         alpha_paper_report_path=alpha_paper_report.as_posix(),

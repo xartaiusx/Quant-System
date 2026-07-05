@@ -71,6 +71,16 @@ def run_alpha_test_summary(
     errors.extend(smoke_errors)
     errors.extend(alpha_errors)
     errors.extend(reconcile_errors)
+    selected_campaign_id, campaign_errors = _source_campaign_context(
+        summary_request.campaign_id,
+        {
+            "alpha-shadow report": shadow_report,
+            "paper-order-smoke report": smoke_report,
+            "alpha-paper report": alpha_report,
+            "paper-reconcile report": reconcile_report,
+        },
+    )
+    errors.extend(campaign_errors)
 
     if shadow_report is not None:
         errors.extend(
@@ -140,6 +150,7 @@ def run_alpha_test_summary(
     return _build_report(
         summary_request,
         current_commit=current_commit,
+        campaign_id=selected_campaign_id,
         source_paths=source_paths,
         shadow_report=shadow_report,
         smoke_report=smoke_report,
@@ -320,6 +331,40 @@ def _post_execution_reconcile_errors(
     return []
 
 
+def _source_campaign_context(
+    request_campaign_id: str | None,
+    reports: Mapping[
+        str,
+        AlphaShadowRunReport
+        | PaperOrderSmokeReport
+        | AlphaPaperRunReport
+        | PaperReconcileReport
+        | None,
+    ],
+) -> tuple[str | None, list[str]]:
+    campaign_ids = {
+        label: report.campaign_id
+        for label, report in reports.items()
+        if report is not None
+    }
+    present_ids = {campaign_id for campaign_id in campaign_ids.values() if campaign_id}
+    selected_campaign_id = request_campaign_id
+    if selected_campaign_id is None and len(present_ids) == 1:
+        selected_campaign_id = next(iter(present_ids))
+
+    errors: list[str] = []
+    if len(present_ids) > 1:
+        errors.append("source reports have mismatched campaign_id values")
+    if selected_campaign_id is None:
+        return None, errors
+    for label, campaign_id in campaign_ids.items():
+        if campaign_id is None:
+            errors.append(f"{label} lacks campaign_id")
+        elif campaign_id != selected_campaign_id:
+            errors.append(f"{label} campaign_id does not match {selected_campaign_id}")
+    return selected_campaign_id, errors
+
+
 def _shared_report_errors(
     payload: Mapping[str, Any],
     *,
@@ -387,6 +432,7 @@ def _build_report(
     request: AlphaTestSummaryRequest,
     *,
     current_commit: str | None,
+    campaign_id: str | None,
     source_paths: dict[str, str],
     shadow_report: AlphaShadowRunReport | None,
     smoke_report: PaperOrderSmokeReport | None,
@@ -432,11 +478,25 @@ def _build_report(
         "alpha_paper_report": alpha_report.timestamp if alpha_report else None,
         "paper_reconcile_report": reconcile_report.timestamp if reconcile_report else None,
     }
+    report_request = (
+        request
+        if request.campaign_id == campaign_id
+        else request.model_copy(update={"campaign_id": campaign_id})
+    )
     return AlphaTestSummaryReport(
         ok=final_status != AlphaTestSummaryStatus.FAILED,
-        request=request,
+        request=report_request,
         commit_sha=current_commit,
+        campaign_id=campaign_id,
         source_report_paths=source_paths,
+        source_report_campaign_ids={
+            "alpha_shadow_report": shadow_report.campaign_id if shadow_report else None,
+            "paper_smoke_report": smoke_report.campaign_id if smoke_report else None,
+            "alpha_paper_report": alpha_report.campaign_id if alpha_report else None,
+            "paper_reconcile_report": (
+                reconcile_report.campaign_id if reconcile_report else None
+            ),
+        },
         source_report_statuses=statuses,
         source_report_commits=commits,
         source_report_timestamps=timestamps,

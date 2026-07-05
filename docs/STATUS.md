@@ -120,13 +120,13 @@
 - Offline `evaluator-compare` compares approved moving-average diagnostic condition counts across explicit window candidates only, reports `broker_contacted=false`, `generated_signals=false`, `signal_count=0`, `order_intents_generated=false`, `orders_simulated=false`, `portfolio_accounting=false`, and `pnl_calculated=false`.
 - Latest local data-quality check found `DBA` has `2` zero-volume bars; default gate fails closed, while an explicit `--max-zero-volume-bars 2` threshold documents the known partial symbol.
 - Latest local `evaluator-compare` completed for `SPY,AAPL,GLD,USO,DBA` with window pairs `5:20,10:30`, `390` observations per candidate, and no generated signals or P&L.
-- `paper-reconcile` distinguishes completed zero-position responses from unavailable positions, requests current-day execution/commission evidence, and writes a broker-state fingerprint while keeping `submitted_orders=false` and `order_api_invoked=false`.
+- `paper-reconcile` distinguishes completed zero-position responses from unavailable positions, requests current-day execution/commission evidence, writes a broker-state fingerprint, and verifies source-report campaign IDs while keeping `submitted_orders=false` and `order_api_invoked=false`.
+- Alpha shadow, paper smoke, alpha paper, reconcile, and alpha summary reports now carry a no-secret `campaign_id`; reconcile, alpha paper, and summary fail closed when source report campaign IDs do not match.
 
 ## Next Recommended Steps
 
 1. Run `paper-reconcile` after every paper-order window and review position-query completion, zero-position confirmation, execution order IDs, commission rows, and broker-state fingerprint before marking the next alpha window eligible.
-2. Add campaign identity across alpha shadow, paper smoke, alpha paper, reconcile, and summary reports so one ignored local paper campaign can be verified end to end.
-3. Create `alpha-campaign-run` to orchestrate read-only shadow, deliberate paper window, Read-Only restoration, reconciliation, and summary in a single sequential command.
-4. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
-5. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
-6. Build the paper ledger and autonomous shadow daemon before any broader paper execution daemon.
+2. Create `alpha-campaign-run` to orchestrate read-only shadow, deliberate paper window, Read-Only restoration, reconciliation, and summary in a single sequential command.
+3. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
+4. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
+5. Build the paper ledger and autonomous shadow daemon before any broader paper execution daemon.

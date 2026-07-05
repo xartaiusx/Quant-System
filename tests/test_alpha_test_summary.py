@@ -27,6 +27,8 @@ from trader.models import (
 )
 from trader.reporting.reports import markdown_summary
 
+CAMPAIGN_ID = "campaign-001"
+
 
 def now() -> datetime:
     return datetime(2026, 7, 4, 17, tzinfo=UTC)
@@ -34,6 +36,7 @@ def now() -> datetime:
 
 def summary_request(tmp_path: Path) -> AlphaTestSummaryRequest:
     return AlphaTestSummaryRequest(
+        campaign_id=CAMPAIGN_ID,
         alpha_shadow_report_path=(tmp_path / "shadow.json").as_posix(),
         paper_smoke_report_path=(tmp_path / "smoke.json").as_posix(),
         alpha_paper_report_path=(tmp_path / "alpha.json").as_posix(),
@@ -42,10 +45,15 @@ def summary_request(tmp_path: Path) -> AlphaTestSummaryRequest:
     )
 
 
-def shadow_report(*, commit_sha: str = "abc123") -> AlphaShadowRunReport:
+def shadow_report(
+    *,
+    commit_sha: str = "abc123",
+    campaign_id: str | None = CAMPAIGN_ID,
+) -> AlphaShadowRunReport:
     return AlphaShadowRunReport(
         ok=True,
         commit_sha=commit_sha,
+        campaign_id=campaign_id,
         request=AlphaShadowRunRequest(),
         selected_universe=["SPY"],
         broker_connected=True,
@@ -72,11 +80,13 @@ def shadow_report(*, commit_sha: str = "abc123") -> AlphaShadowRunReport:
 def smoke_report(
     *,
     commit_sha: str = "abc123",
+    campaign_id: str | None = CAMPAIGN_ID,
     ok: bool = True,
 ) -> PaperOrderSmokeReport:
     return PaperOrderSmokeReport(
         ok=ok,
         commit_sha=commit_sha,
+        campaign_id=campaign_id,
         request=PaperOrderSmokeRequest(
             confirm="PAPER_SMOKE_SPY_1",
             transmit=True,
@@ -110,10 +120,15 @@ def smoke_report(
     )
 
 
-def alpha_report(*, commit_sha: str = "abc123") -> AlphaPaperRunReport:
+def alpha_report(
+    *,
+    commit_sha: str = "abc123",
+    campaign_id: str | None = CAMPAIGN_ID,
+) -> AlphaPaperRunReport:
     return AlphaPaperRunReport(
         ok=True,
         commit_sha=commit_sha,
+        campaign_id=campaign_id,
         request=AlphaPaperRunRequest(
             confirm="ALPHA_PAPER_SPY_1",
             cancel_after_seconds=0,
@@ -146,6 +161,7 @@ def alpha_report(*, commit_sha: str = "abc123") -> AlphaPaperRunReport:
 def reconcile_report(
     *,
     commit_sha: str = "abc123",
+    campaign_id: str | None = CAMPAIGN_ID,
     open_order_count: int = 0,
     timestamp: datetime | None = None,
 ) -> PaperReconcileReport:
@@ -165,6 +181,7 @@ def reconcile_report(
     return PaperReconcileReport(
         ok=True,
         commit_sha=commit_sha,
+        campaign_id=campaign_id,
         request=PaperReconcileRequest(),
         mode="paper",
         host="127.0.0.1",
@@ -232,6 +249,8 @@ def test_alpha_test_summary_success_aggregates_campaign(tmp_path: Path, monkeypa
 
     assert report.ok is True
     assert report.final_status == AlphaTestSummaryStatus.COMPLETED_WITH_WARNINGS
+    assert report.campaign_id == CAMPAIGN_ID
+    assert set(report.source_report_campaign_ids.values()) == {CAMPAIGN_ID}
     assert report.alpha_shadow_verified is True
     assert report.paper_smoke_verified is True
     assert report.alpha_paper_verified is True
@@ -245,6 +264,7 @@ def test_alpha_test_summary_success_aggregates_campaign(tmp_path: Path, monkeypa
 
     markdown = markdown_summary(report.model_dump(mode="json"))
     assert "IBKR Alpha Test Summary" in markdown
+    assert CAMPAIGN_ID in markdown
     assert "Next eligible for alpha window" in markdown
 
 
@@ -296,6 +316,26 @@ def test_alpha_test_summary_mismatched_commit_fails(tmp_path: Path, monkeypatch)
     assert report.ok is False
     assert report.final_status == AlphaTestSummaryStatus.FAILED
     assert "different commit" in " ".join(report.errors)
+
+
+def test_alpha_test_summary_mismatched_campaign_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.alpha_summary._current_commit_sha", lambda: "abc123")
+    selected_request = write_all_reports(
+        tmp_path,
+        shadow=shadow_report(),
+        smoke=smoke_report(campaign_id="campaign-002"),
+        alpha=alpha_report(),
+        reconcile=reconcile_report(),
+    )
+
+    report = run_alpha_test_summary(selected_request, now=now())
+
+    assert report.ok is False
+    assert report.final_status == AlphaTestSummaryStatus.FAILED
+    assert "campaign_id" in " ".join(report.errors)
 
 
 def test_alpha_test_summary_open_order_warns_and_blocks_next_window(

@@ -29,6 +29,7 @@ from trader.models import (
     RiskDecision,
     Signal,
     SignalDirection,
+    new_campaign_id,
     utc_now,
 )
 from trader.paper_readiness import (
@@ -98,7 +99,7 @@ def run_alpha_shadow_run(
 ) -> AlphaShadowRunReport:
     """Run a read-only broker-connected alpha shadow workflow."""
 
-    alpha_request = request or AlphaShadowRunRequest()
+    alpha_request = _request_with_campaign_id(request or AlphaShadowRunRequest())
     readiness_request = _readiness_request(alpha_request)
     selected_journal = journal or Journal()
     stages: list[PaperReadinessRunStage] = []
@@ -298,6 +299,12 @@ def _config_errors(config: TraderConfig) -> list[str]:
     if config.trading_mode != TradingMode.PAPER:
         errors.append("TRADING_MODE must be paper for alpha-shadow-run")
     return errors
+
+
+def _request_with_campaign_id(request: AlphaShadowRunRequest) -> AlphaShadowRunRequest:
+    if request.campaign_id:
+        return request
+    return request.model_copy(update={"campaign_id": new_campaign_id()})
 
 
 def _readiness_request(request: AlphaShadowRunRequest) -> PaperReadinessRunRequest:
@@ -590,6 +597,7 @@ def _build_alpha_report(
     return AlphaShadowRunReport(
         ok=final_status != AlphaShadowRunStatus.FAILED,
         request=request,
+        campaign_id=request.campaign_id,
         selected_universe=request.symbols,
         stages=stages,
         stage_statuses={stage.name: _status_text(stage.final_status) for stage in stages},

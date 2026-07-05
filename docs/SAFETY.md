@@ -210,7 +210,8 @@ paper-order evidence lacks a matching broker execution row. It reports
 `order_routing_enabled=false`, and `order_api_invoked=false`, and it fails if a
 real broker account summary is unavailable. `alpha-test-summary` is offline
 only: it reads ignored local reports, validates same-commit source evidence,
-and never contacts IBKR or invokes order APIs.
+verifies the no-secret `campaign_id` across source reports, fails closed on
+campaign mismatches, and never contacts IBKR or invokes order APIs.
 
 Commodity scope remains research-only after paper execution hardening. `GLD`
 and `USO` can be research candidates, `DBA` stays excluded from execution until

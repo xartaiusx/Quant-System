@@ -293,7 +293,7 @@ milestone. It runs broker/account checks, an SPY historical snapshot, offline
 load, SPY data-quality gates, analytical signal evaluation, shadow trade-plan
 construction, dry-run risk checks, and simulator routing. Reports are written to
 `reports/alpha_shadow_run_<timestamp>.json` plus `.md` and include masked
-account IDs, stage paths, data-quality metrics, shadow signal/trade-plan/risk
+account IDs, `campaign_id`, stage paths, data-quality metrics, shadow signal/trade-plan/risk
 counts, simulator fill counts, `submitted_orders=false`, and
 `paper_orders_enabled=false`.
 
@@ -327,8 +327,8 @@ After any paper order smoke or alpha paper window, run the read-only
 post-run checks before continuing development:
 
 ```bash
-python -m trader.cli paper-reconcile --timeout 30
-python -m trader.cli alpha-test-summary
+python -m trader.cli paper-reconcile --campaign-id campaign-YYYYMMDD-spy-001 --timeout 30
+python -m trader.cli alpha-test-summary --campaign-id campaign-YYYYMMDD-spy-001
 ```
 
 `paper-reconcile` expects Read-Only API to be re-enabled and
@@ -338,7 +338,10 @@ latest local order IDs/perm IDs, and a broker-state fingerprint without
 placing, modifying, or canceling orders. It distinguishes a completed
 zero-position response from unavailable positions. `alpha-test-summary` is offline-only
 and aggregates the latest alpha shadow, paper smoke, alpha paper, and
-reconciliation reports into a no-secret campaign summary.
+reconciliation reports into a no-secret campaign summary. Use one no-secret
+`campaign_id` across `alpha-shadow-run`, `paper-order-smoke`, `alpha-paper-run`,
+`paper-reconcile`, and `alpha-test-summary`; summary and reconciliation fail
+closed when loaded source reports carry different campaign IDs.
 
 The offline fixture stress suite uses temporary synthetic historical snapshots
 to validate loader, feed, engine, strategy-contract, strategy-runner, and

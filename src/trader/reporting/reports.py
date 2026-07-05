@@ -1485,6 +1485,7 @@ def alpha_shadow_run_markdown(payload: Mapping[str, Any]) -> str:
         "",
         f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
         f"- Command: `{payload.get('command', 'alpha-shadow-run')}`",
+        f"- Campaign ID: `{payload.get('campaign_id', 'n/a')}`",
         f"- Final status: `{payload.get('final_status', 'unknown')}`",
         f"- Selected universe: `{', '.join(payload.get('selected_universe', []))}`",
         f"- Broker stage pause seconds: `{broker_stage_pause}`",
@@ -1597,6 +1598,7 @@ def paper_order_smoke_markdown(payload: Mapping[str, Any]) -> str:
         "",
         f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
         f"- Command: `{payload.get('command', 'paper-order-smoke')}`",
+        f"- Campaign ID: `{payload.get('campaign_id', 'n/a')}`",
         f"- Final status: `{payload.get('final_status', 'unknown')}`",
         f"- Mode: `{payload.get('mode', 'unknown')}`",
         f"- Host: `{payload.get('host', 'unknown')}`",
@@ -1680,6 +1682,7 @@ def alpha_paper_run_markdown(payload: Mapping[str, Any]) -> str:
     request = payload.get("request", {})
     paper_order = payload.get("paper_order_report", {})
     source_paths = payload.get("source_report_paths", {})
+    source_campaigns = payload.get("source_report_campaign_ids", {})
     account_ids = payload.get("account_ids_masked", [])
     request_symbol = request.get("symbol", "unknown") if isinstance(request, Mapping) else "unknown"
 
@@ -1690,6 +1693,7 @@ def alpha_paper_run_markdown(payload: Mapping[str, Any]) -> str:
         f"- Command: `{payload.get('command', 'alpha-paper-run')}`",
         f"- Final status: `{payload.get('final_status', 'unknown')}`",
         f"- Commit SHA: `{payload.get('commit_sha', 'unknown')}`",
+        f"- Campaign ID: `{payload.get('campaign_id', 'n/a')}`",
         f"- Mode: `{payload.get('mode', 'unknown')}`",
         f"- Host: `{payload.get('host', 'unknown')}`",
         f"- Port: `{payload.get('port', 'unknown')}`",
@@ -1721,7 +1725,12 @@ def alpha_paper_run_markdown(payload: Mapping[str, Any]) -> str:
     ]
     if isinstance(source_paths, Mapping) and source_paths:
         for label, path in sorted(source_paths.items()):
-            lines.append(f"- `{label}`: `{path}`")
+            campaign = (
+                source_campaigns.get(label, "n/a")
+                if isinstance(source_campaigns, Mapping)
+                else "n/a"
+            )
+            lines.append(f"- `{label}`: `{path}` campaign_id=`{campaign}`")
     else:
         lines.append("- None")
 
@@ -1758,6 +1767,7 @@ def paper_reconcile_markdown(payload: Mapping[str, Any]) -> str:
     warnings = payload.get("warnings", [])
     errors = payload.get("errors", [])
     source_paths = payload.get("source_report_paths", {})
+    source_campaigns = payload.get("source_report_campaign_ids", {})
     account_ids = payload.get("account_ids_masked", [])
     open_orders = payload.get("open_orders", [])
     executions = payload.get("executions_snapshot", [])
@@ -1771,6 +1781,7 @@ def paper_reconcile_markdown(payload: Mapping[str, Any]) -> str:
         f"- Command: `{payload.get('command', 'paper-reconcile')}`",
         f"- Final status: `{payload.get('final_status', 'unknown')}`",
         f"- Commit SHA: `{payload.get('commit_sha', 'unknown')}`",
+        f"- Campaign ID: `{payload.get('campaign_id', 'n/a')}`",
         f"- Mode: `{payload.get('mode', 'unknown')}`",
         f"- Broker kind: `{payload.get('broker_kind', 'unknown')}`",
         f"- Host: `{payload.get('host', 'unknown')}`",
@@ -1810,7 +1821,12 @@ def paper_reconcile_markdown(payload: Mapping[str, Any]) -> str:
     ]
     if isinstance(source_paths, Mapping) and source_paths:
         for label, path in sorted(source_paths.items()):
-            lines.append(f"- `{label}`: `{path}`")
+            campaign = (
+                source_campaigns.get(label, "n/a")
+                if isinstance(source_campaigns, Mapping)
+                else "n/a"
+            )
+            lines.append(f"- `{label}`: `{path}` campaign_id=`{campaign}`")
     else:
         lines.append("- None")
 
@@ -1878,6 +1894,7 @@ def paper_reconcile_markdown(payload: Mapping[str, Any]) -> str:
                 "- "
                 f"`{item.get('source', 'unknown')}` "
                 f"status=`{item.get('final_status', 'unknown')}` "
+                f"campaign_id=`{item.get('campaign_id', 'n/a')}` "
                 f"submitted=`{item.get('submitted_orders', False)}` "
                 f"order_id=`{item.get('order_id', 'n/a')}` "
                 f"perm_id=`{item.get('perm_id', 'n/a')}` "
@@ -1900,6 +1917,7 @@ def alpha_test_summary_markdown(payload: Mapping[str, Any]) -> str:
     source_statuses = payload.get("source_report_statuses", {})
     source_commits = payload.get("source_report_commits", {})
     source_timestamps = payload.get("source_report_timestamps", {})
+    source_campaigns = payload.get("source_report_campaign_ids", {})
     account_ids = payload.get("account_ids_masked", [])
     next_reasons = payload.get("next_eligibility_reason", [])
 
@@ -1910,6 +1928,7 @@ def alpha_test_summary_markdown(payload: Mapping[str, Any]) -> str:
         f"- Command: `{payload.get('command', 'alpha-test-summary')}`",
         f"- Final status: `{payload.get('final_status', 'unknown')}`",
         f"- Commit SHA: `{payload.get('commit_sha', 'unknown')}`",
+        f"- Campaign ID: `{payload.get('campaign_id', 'n/a')}`",
         f"- Alpha shadow verified: `{payload.get('alpha_shadow_verified', False)}`",
         f"- Paper smoke verified: `{payload.get('paper_smoke_verified', False)}`",
         f"- Alpha paper verified: `{payload.get('alpha_paper_verified', False)}`",
@@ -1958,10 +1977,15 @@ def alpha_test_summary_markdown(payload: Mapping[str, Any]) -> str:
                 if isinstance(source_timestamps, Mapping)
                 else "unknown"
             )
+            campaign = (
+                source_campaigns.get(label, "n/a")
+                if isinstance(source_campaigns, Mapping)
+                else "n/a"
+            )
             lines.append(
                 "- "
                 f"`{label}`: `{path}` status=`{status}` "
-                f"commit=`{commit}` timestamp=`{timestamp}`"
+                f"commit=`{commit}` timestamp=`{timestamp}` campaign_id=`{campaign}`"
             )
     else:
         lines.append("- None")
