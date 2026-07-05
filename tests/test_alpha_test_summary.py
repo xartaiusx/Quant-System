@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -147,6 +147,7 @@ def reconcile_report(
     *,
     commit_sha: str = "abc123",
     open_order_count: int = 0,
+    timestamp: datetime | None = None,
 ) -> PaperReconcileReport:
     open_orders = (
         [
@@ -189,7 +190,7 @@ def reconcile_report(
         final_status=PaperReconcileStatus.COMPLETED
         if not open_orders
         else PaperReconcileStatus.COMPLETED_WITH_WARNINGS,
-        timestamp=now(),
+        timestamp=timestamp or now(),
     )
 
 
@@ -318,3 +319,24 @@ def test_alpha_test_summary_open_order_warns_and_blocks_next_window(
     assert report.next_eligible_for_alpha_window is False
     assert "open broker orders" in " ".join(report.warnings)
     assert "open broker orders must be cleared" in " ".join(report.next_eligibility_reason)
+
+
+def test_alpha_test_summary_requires_reconcile_after_paper_execution(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.alpha_summary._current_commit_sha", lambda: "abc123")
+    selected_request = write_all_reports(
+        tmp_path,
+        shadow=shadow_report(),
+        smoke=smoke_report(),
+        alpha=alpha_report(),
+        reconcile=reconcile_report(timestamp=now() - timedelta(minutes=5)),
+    )
+
+    report = run_alpha_test_summary(selected_request, now=now())
+
+    assert report.ok is False
+    assert report.final_status == AlphaTestSummaryStatus.FAILED
+    assert report.next_eligible_for_alpha_window is False
+    assert "older than the latest submitted paper order" in " ".join(report.errors)

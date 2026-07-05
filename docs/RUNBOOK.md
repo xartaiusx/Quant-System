@@ -325,6 +325,8 @@ Expected behavior:
 - runs offline only and does not contact IBKR
 - verifies same-commit, fresh `alpha-shadow-run`, transmitted
   `paper-order-smoke`, `alpha-paper-run`, and `paper-reconcile` reports
+- fails closed if `paper-reconcile` is older than the latest submitted paper
+  smoke or alpha paper report
 - records fill/cancel outcome, order IDs, perm IDs, open-order count, masked
   account evidence, source report paths, warnings, errors, and next eligibility
 - writes ignored JSON and Markdown reports under `reports/`

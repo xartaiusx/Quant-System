@@ -117,6 +117,14 @@ def run_alpha_test_summary(
         if not reconcile_report.broker_positions_available:
             warnings.append("broker positions were unavailable or empty in reconciliation")
 
+    errors.extend(
+        _post_execution_reconcile_errors(
+            smoke_report=smoke_report,
+            alpha_report=alpha_report,
+            reconcile_report=reconcile_report,
+        )
+    )
+
     next_reasons = _next_eligibility_reasons(
         errors=errors,
         shadow_report=shadow_report,
@@ -285,6 +293,31 @@ def _reconcile_errors(
     if not report.account_summary_verified:
         errors.append("paper-reconcile lacks verified account summary")
     return errors
+
+
+def _post_execution_reconcile_errors(
+    *,
+    smoke_report: PaperOrderSmokeReport | None,
+    alpha_report: AlphaPaperRunReport | None,
+    reconcile_report: PaperReconcileReport | None,
+) -> list[str]:
+    """Require reconciliation evidence after the latest paper execution report."""
+
+    if reconcile_report is None:
+        return []
+    execution_timestamps = [
+        report.timestamp
+        for report in (smoke_report, alpha_report)
+        if report is not None and report.submitted_orders
+    ]
+    if not execution_timestamps:
+        return []
+    latest_execution_timestamp = max(execution_timestamps)
+    if reconcile_report.timestamp < latest_execution_timestamp:
+        return [
+            "paper-reconcile report is older than the latest submitted paper order report"
+        ]
+    return []
 
 
 def _shared_report_errors(
