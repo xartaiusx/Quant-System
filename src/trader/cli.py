@@ -16,6 +16,7 @@ from rich.table import Table
 from trader.alpha_campaign import READ_ONLY_OFF_CONFIRMATION, run_alpha_campaign_run
 from trader.alpha_paper import ALPHA_PAPER_CONFIRMATION, run_alpha_paper_run
 from trader.alpha_shadow import run_alpha_shadow_run
+from trader.alpha_shadow_daemon import run_alpha_shadow_daemon
 from trader.alpha_summary import run_alpha_test_summary
 from trader.backtest.data_adapter import build_backtest_feed, build_backtest_feed_report
 from trader.backtest.engine import build_backtest_run_report
@@ -41,6 +42,8 @@ from trader.models import (
     AlphaCampaignRunRequest,
     AlphaPaperRunReport,
     AlphaPaperRunRequest,
+    AlphaShadowDaemonReport,
+    AlphaShadowDaemonRequest,
     AlphaShadowRunReport,
     AlphaShadowRunRequest,
     AlphaTestSummaryReport,
@@ -1564,6 +1567,131 @@ def alpha_shadow_run(
         raise typer.Exit(code=1)
 
 
+@app.command("alpha-shadow-daemon")
+def alpha_shadow_daemon(
+    campaign_id: Annotated[
+        str | None,
+        typer.Option(
+            "--campaign-id",
+            help="Optional no-secret daemon campaign correlation ID.",
+        ),
+    ] = None,
+    symbol: Annotated[
+        str,
+        typer.Option("--symbol", help="Daemon symbol. Only SPY is allowed."),
+    ] = "SPY",
+    session: Annotated[
+        str,
+        typer.Option("--session", help="Session profile. Only regular is allowed."),
+    ] = "regular",
+    interval_seconds: Annotated[
+        int,
+        typer.Option("--interval-seconds", help="Seconds between shadow cycles."),
+    ] = 300,
+    max_cycles: Annotated[
+        int,
+        typer.Option("--max-cycles", help="Maximum controlled shadow cycles."),
+    ] = 1,
+    stale_after_minutes: Annotated[
+        int,
+        typer.Option(
+            "--stale-after-minutes",
+            help="Maximum source-bar age before the daemon halts failed.",
+        ),
+    ] = 1440,
+    graduation_clean_sessions_required: Annotated[
+        int,
+        typer.Option(
+            "--graduation-clean-sessions-required",
+            help="Clean shadow sessions required before paper-daemon consideration.",
+        ),
+    ] = 5,
+    kill_switch_path: Annotated[
+        Path,
+        typer.Option("--kill-switch-path", help="File path that halts the daemon safely."),
+    ] = Path("state/alpha_shadow_daemon.kill"),
+    heartbeat_path: Annotated[
+        Path,
+        typer.Option("--heartbeat-path", help="Ignored local daemon heartbeat JSON path."),
+    ] = Path("state/alpha_shadow_daemon_heartbeat.json"),
+    duration: Annotated[
+        str,
+        typer.Option("--duration", help="Historical snapshot duration."),
+    ] = "1 D",
+    bar_size: Annotated[
+        str,
+        typer.Option("--bar-size", help="Historical snapshot bar size."),
+    ] = "5 mins",
+    what_to_show: Annotated[
+        str,
+        typer.Option("--what-to-show", help="Historical data type."),
+    ] = "TRADES",
+    use_rth: Annotated[
+        int,
+        typer.Option("--use-rth", help="Use regular trading hours: 1 or 0."),
+    ] = 1,
+    broker_timeout: Annotated[
+        float,
+        typer.Option("--broker-timeout", help="Broker request timeout seconds."),
+    ] = 15,
+    history_timeout: Annotated[
+        float,
+        typer.Option("--history-timeout", help="Historical request timeout seconds."),
+    ] = 30,
+    broker_stage_pause: Annotated[
+        float,
+        typer.Option(
+            "--broker-stage-pause",
+            help="Pause seconds between broker-contact stages.",
+        ),
+    ] = 1,
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical data base path."),
+    ] = Path("data/historical"),
+) -> None:
+    """Run controlled read-only autonomous SPY shadow cycles."""
+
+    config = _load_config_or_exit()
+    request = AlphaShadowDaemonRequest(
+        campaign_id=campaign_id,
+        symbol=symbol,
+        session=session,
+        interval_seconds=interval_seconds,
+        max_cycles=max_cycles,
+        stale_after_minutes=stale_after_minutes,
+        graduation_clean_sessions_required=graduation_clean_sessions_required,
+        kill_switch_path=kill_switch_path.as_posix(),
+        heartbeat_path=heartbeat_path.as_posix(),
+        duration=duration,
+        bar_size=bar_size,
+        what_to_show=what_to_show,
+        use_rth=_validate_use_rth_option(use_rth),
+        broker_timeout_seconds=_validate_timeout_option(broker_timeout) or 15,
+        history_timeout_seconds=_validate_timeout_option(history_timeout) or 30,
+        broker_stage_pause_seconds=_validate_non_negative_seconds_option(
+            broker_stage_pause,
+            30,
+        ),
+        base_data_path=base_path.as_posix(),
+    )
+    report = run_alpha_shadow_daemon(config, request)
+    json_path, md_path = Journal().write_cycle("alpha_shadow_daemon", _report_dict(report))
+
+    console.print("[bold]Read-only alpha shadow daemon[/bold]")
+    console.print("Broker contact: read-only account and historical-data requests only.")
+    console.print("Order routing: disabled.")
+    console.print("Paper execution: disabled.")
+    console.print("Submitted orders: false.")
+    console.print("Read-Only API expected: true.")
+    console.print("Kill switch: create the configured kill-switch file to halt safely.")
+    _print_alpha_shadow_daemon_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("paper-order-smoke")
 def paper_order_smoke(
     campaign_id: Annotated[
@@ -2307,6 +2435,7 @@ def _report_dict(
         AnalyticalSignalEvaluationReport
         | AlphaCampaignRunReport
         | AlphaPaperRunReport
+        | AlphaShadowDaemonReport
         | AlphaShadowRunReport
         | BacktestDataAdapterReport
         | BacktestRunReport
@@ -2897,6 +3026,62 @@ def _print_alpha_shadow_run_result(report: AlphaShadowRunReport) -> None:
             console.print(f"- {escape(warning)}")
     if report.errors:
         console.print("[red]Alpha shadow errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_alpha_shadow_daemon_result(report: AlphaShadowDaemonReport) -> None:
+    table = Table(title="Alpha Shadow Daemon")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Final status", _enum_value(report.final_status))
+    table.add_row("Commit SHA", report.commit_sha or "unknown")
+    table.add_row("Campaign ID", report.campaign_id or "n/a")
+    table.add_row("Cycles", str(report.cycle_count))
+    table.add_row("Clean cycles", str(report.clean_cycle_count))
+    table.add_row("Graduation ready", str(report.graduation_ready).lower())
+    table.add_row("Broker-connected cycles", str(report.broker_connected_cycles))
+    table.add_row(
+        "Account-verified cycles",
+        str(report.account_summary_verified_cycles),
+    )
+    table.add_row("Stale data detected", str(report.stale_data_detected).lower())
+    table.add_row("Halted by kill switch", str(report.halted_by_kill_switch).lower())
+    table.add_row("Heartbeat path", report.heartbeat_path)
+    table.add_row("Kill switch path", report.kill_switch_path)
+    table.add_row("Submitted orders", str(report.submitted_orders).lower())
+    table.add_row("Paper orders enabled", str(report.paper_orders_enabled).lower())
+    table.add_row("Read-Only API expected", str(report.read_only_api_expected).lower())
+    table.add_row("Order routing", "disabled")
+    table.add_row("Order API invoked", str(report.order_api_invoked).lower())
+    console.print(table)
+
+    if report.cycles:
+        cycle_table = Table(title="Daemon Cycles")
+        cycle_table.add_column("Cycle")
+        cycle_table.add_column("Status")
+        cycle_table.add_column("OK")
+        cycle_table.add_column("Broker")
+        cycle_table.add_column("Account")
+        cycle_table.add_column("Stale")
+        cycle_table.add_column("Reports")
+        for cycle in report.cycles:
+            cycle_table.add_row(
+                str(cycle.cycle_index),
+                _enum_value(cycle.final_status),
+                str(cycle.ok).lower(),
+                str(cycle.broker_connected).lower(),
+                str(cycle.account_summary_verified).lower(),
+                str(cycle.stale_data_detected).lower(),
+                str(len(cycle.shadow_report_paths)),
+            )
+        console.print(cycle_table)
+    if report.warnings:
+        console.print("[yellow]Alpha shadow daemon warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Alpha shadow daemon errors[/red]")
         for error in report.errors:
             console.print(f"- {escape(error)}")
 

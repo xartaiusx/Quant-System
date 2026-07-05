@@ -231,6 +231,17 @@ evidence, then upserts one masked JSONL row under ignored `state/`. It never
 contacts IBKR, enables paper orders, invokes order APIs, routes execution,
 calculates P&L, or expands commodity execution.
 
+Milestone 26 adds `alpha-shadow-daemon`, the first controlled autonomous mode.
+It repeats the existing SPY-only `alpha-shadow-run` path for a finite number of
+cycles, requires `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=false`,
+`ALLOW_LIVE_ORDERS=false`, localhost, and paper port `7497` or `4002`, expects
+IBKR Read-Only API to remain enabled, writes ignored heartbeat evidence under
+`state/`, and halts on a kill-switch file before the next cycle. It fails closed
+on stale source bars or shadow-cycle errors and reports clean-cycle graduation
+evidence. It does not submit, modify, or cancel orders, does not invoke broker
+order APIs, does not enable live trading, does not calculate P&L, and does not
+enable commodity execution.
+
 Commodity scope remains research-only after paper execution hardening. `GLD`
 and `USO` can be research candidates, `DBA` stays excluded from execution until
 liquidity gates pass, and direct futures remain out of scope until an explicit

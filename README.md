@@ -372,6 +372,24 @@ paper smoke reports, `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`,
 `ALLOW_LIVE_ORDERS=false`, localhost, paper port `7497` or `4002`, and
 `IBKR_CLIENT_ID=21`.
 
+`alpha-shadow-daemon` is the first controlled autonomous mode. It repeats the
+existing read-only SPY shadow path for a bounded number of cycles, writes
+heartbeat evidence under ignored local `state/`, and halts failed on stale
+source bars or safety violations. Keep IBKR Read-Only API enabled and
+`ALLOW_PAPER_ORDERS=false`; the daemon never invokes broker order APIs:
+
+```bash
+python -m trader.cli alpha-shadow-daemon --campaign-id campaign-YYYYMMDD-spy-shadow-daemon-001 --max-cycles 5 --interval-seconds 300
+```
+
+Create the configured kill-switch file, default
+`state/alpha_shadow_daemon.kill`, to stop before the next cycle. The daemon
+reports `submitted_orders=false`, `paper_orders_enabled=false`,
+`order_routing_enabled=false`, `order_api_invoked=false`, stale-data status,
+clean-cycle count, heartbeat path, and whether the configured clean-session
+threshold is met. Paper execution daemons remain out of scope until repeated
+shadow sessions and ledger-backed broker truth are stable.
+
 The offline fixture stress suite uses temporary synthetic historical snapshots
 to validate loader, feed, engine, strategy-contract, strategy-runner, and
 signal-contract/signal-runner/signal-evaluate behavior against partial, gapped,

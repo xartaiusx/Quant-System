@@ -378,6 +378,54 @@ the execution window and re-enable it immediately afterward. It does not add new
 order routes; any order submission still flows through the existing SPY-only
 `alpha-paper-run` and paper-smoke executor boundary.
 
+## Controlled Alpha Shadow Daemon
+
+Run this only after individual read-only shadow campaigns are stable. It is the
+first autonomous mode, but it remains shadow-only: no paper orders, no live
+ports, no market orders, no direct futures, no options, no P&L, and no
+portfolio accounting.
+
+Required operator setup:
+
+- IBKR Read-Only API remains enabled.
+- `ALLOW_PAPER_ORDERS=false`.
+- `ALLOW_LIVE_ORDERS=false`.
+- Paper IB Gateway remains on `127.0.0.1:4002` or paper TWS on
+  `127.0.0.1:7497`.
+- Use a broker client ID dedicated to shadow daemon cycles.
+- Run with a finite `--max-cycles` until repeated sessions are clean.
+
+For IB Gateway paper:
+
+```bash
+export TRADING_MODE=paper
+export ALLOW_PAPER_ORDERS=false
+export ALLOW_LIVE_ORDERS=false
+export IBKR_HOST=127.0.0.1
+export IBKR_PORT=4002
+export BROKER_KIND=ib_gateway
+export IBKR_CLIENT_ID=61
+export MAX_TRADE_NOTIONAL=1000
+export MAX_OPEN_POSITIONS=1
+export CAMPAIGN_ID=campaign-YYYYMMDD-spy-shadow-daemon-001
+
+python -m trader.cli alpha-shadow-daemon --campaign-id "$CAMPAIGN_ID" --max-cycles 5 --interval-seconds 300 --stale-after-minutes 1440
+```
+
+Expected behavior:
+
+- runs bounded read-only SPY shadow cycles through the existing
+  `alpha-shadow-run` path
+- writes per-cycle shadow reports and an ignored heartbeat file at
+  `state/alpha_shadow_daemon_heartbeat.json`
+- stops failed on stale source bars, broker/account failures, or safety
+  violations
+- halts safely before a cycle when `state/alpha_shadow_daemon.kill` exists
+- reports clean-cycle count and `graduation_ready=true` only after the
+  configured clean-session threshold is met
+- reports `submitted_orders=false`, `paper_orders_enabled=false`,
+  `order_routing_enabled=false`, and `order_api_invoked=false`
+
 ## Read-Only Market-Data Diagnostics
 
 ```bash

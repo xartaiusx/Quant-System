@@ -124,12 +124,13 @@
 - Alpha shadow, paper smoke, alpha paper, reconcile, and alpha summary reports now carry a no-secret `campaign_id`; reconcile, alpha paper, and summary fail closed when source report campaign IDs do not match.
 - `alpha-campaign-run` orchestrates the existing staged SPY paper-alpha workflow in `shadow` or `paper` mode, writes a top-level campaign report, and keeps order APIs confined to the existing paper execution boundary.
 - `paper-ledger-update` reads ignored summary and reconciliation reports offline, validates current-commit same-campaign broker truth, and upserts one masked local JSONL campaign row under ignored `state/`.
+- `alpha-shadow-daemon` runs bounded autonomous read-only SPY shadow cycles, writes ignored heartbeat evidence, detects stale source bars, honors a kill-switch file, and keeps order APIs disabled.
 
 ## Next Recommended Steps
 
-1. Run `paper-reconcile`, `alpha-test-summary`, and `paper-ledger-update` after every paper-order window before marking the next alpha window eligible.
-2. Run repeated `alpha-campaign-run --mode shadow` campaigns against IB Gateway/TWS paper with Read-Only API enabled and compare ledger/report drift.
-3. Build the autonomous shadow daemon only after repeated read-only shadow campaigns have clean broker-state evidence.
+1. Run bounded `alpha-shadow-daemon --max-cycles 5` sessions against IB Gateway/TWS paper with Read-Only API enabled and review clean-cycle, stale-data, heartbeat, and broker/account evidence.
+2. Run `paper-reconcile`, `alpha-test-summary`, and `paper-ledger-update` after every paper-order window before marking the next alpha window eligible.
+3. Add daemon-session summarization and drift comparison across multiple shadow-daemon reports before any broader paper execution daemon.
 4. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
 5. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
 6. Require ledger-matched broker truth before any broader paper execution daemon.

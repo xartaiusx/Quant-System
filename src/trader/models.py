@@ -199,6 +199,15 @@ class AlphaShadowRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class AlphaShadowDaemonStatus(StrEnum):
+    """Autonomous read-only alpha shadow daemon states."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    HALTED = "halted"
+    FAILED = "failed"
+
+
 class PaperOrderSmokeRunStatus(StrEnum):
     """Gated IBKR paper-order smoke run states."""
 
@@ -2493,6 +2502,262 @@ class AlphaShadowRunReport(SerializableModel):
             raise ValueError("direct_futures_data_enabled must remain false")
         if not self.no_order_guarantee:
             raise ValueError("no_order_guarantee must remain true")
+        return self
+
+
+class AlphaShadowDaemonRequest(SerializableModel):
+    """Controlled read-only autonomous shadow loop request."""
+
+    campaign_id: str | None = None
+    symbol: str = "SPY"
+    session: str = "regular"
+    interval_seconds: int = 300
+    max_cycles: int = 1
+    stale_after_minutes: int = 1440
+    graduation_clean_sessions_required: int = 5
+    kill_switch_path: str = "state/alpha_shadow_daemon.kill"
+    heartbeat_path: str = "state/alpha_shadow_daemon_heartbeat.json"
+    duration: str = "1 D"
+    bar_size: str = "5 mins"
+    what_to_show: str = "TRADES"
+    use_rth: int = 1
+    broker_timeout_seconds: float = 15
+    history_timeout_seconds: float = 30
+    broker_stage_pause_seconds: float = 1
+    base_data_path: str = "data/historical"
+    short_window: int = 5
+    long_window: int = 20
+    min_bars: int = 50
+    max_zero_volume_bars: int = 0
+    min_average_volume: Decimal = Decimal("100")
+    min_average_dollar_volume: Decimal = Decimal("5000")
+    max_trade_notional: Decimal = Decimal("1000")
+    max_open_positions: int = 1
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_spy_only(cls, value: str) -> str:
+        symbol = value.strip().upper()
+        if symbol != "SPY":
+            raise ValueError("alpha-shadow-daemon is SPY-only in this milestone")
+        return symbol
+
+    @field_validator("session")
+    @classmethod
+    def validate_session(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized != "regular":
+            raise ValueError("alpha-shadow-daemon supports only regular session")
+        return normalized
+
+    @field_validator(
+        "kill_switch_path",
+        "heartbeat_path",
+        "duration",
+        "bar_size",
+        "what_to_show",
+        "base_data_path",
+    )
+    @classmethod
+    def validate_non_empty_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("alpha shadow daemon text fields must not be empty")
+        return normalized
+
+    @field_validator("what_to_show")
+    @classmethod
+    def normalize_what_to_show(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("use_rth")
+    @classmethod
+    def validate_use_rth(cls, value: int) -> int:
+        if value not in {0, 1}:
+            raise ValueError("use_rth must be 0 or 1")
+        return value
+
+    @field_validator(
+        "interval_seconds",
+        "max_cycles",
+        "stale_after_minutes",
+        "graduation_clean_sessions_required",
+        "short_window",
+        "long_window",
+        "min_bars",
+        "max_open_positions",
+    )
+    @classmethod
+    def validate_positive_ints(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("alpha shadow daemon integer settings must be positive")
+        return value
+
+    @field_validator("max_zero_volume_bars")
+    @classmethod
+    def validate_non_negative_int(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("max_zero_volume_bars must be non-negative")
+        return value
+
+    @field_validator(
+        "broker_timeout_seconds",
+        "history_timeout_seconds",
+        "broker_stage_pause_seconds",
+    )
+    @classmethod
+    def validate_seconds(cls, value: float) -> float:
+        if value < 0 or value > 120:
+            raise ValueError("alpha shadow daemon timing settings must be 0 through 120 seconds")
+        return value
+
+    @field_validator(
+        "min_average_volume",
+        "min_average_dollar_volume",
+        "max_trade_notional",
+    )
+    @classmethod
+    def validate_positive_decimals(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("alpha shadow daemon decimal settings must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_windows(self) -> AlphaShadowDaemonRequest:
+        if self.short_window > self.long_window:
+            raise ValueError("short_window must be less than or equal to long_window")
+        return self
+
+
+class AlphaShadowDaemonCycle(SerializableModel):
+    """One read-only alpha shadow daemon cycle."""
+
+    cycle_index: int
+    cycle_campaign_id: str
+    ok: bool
+    final_status: AlphaShadowDaemonStatus
+    started_at: datetime = Field(default_factory=utc_now)
+    finished_at: datetime = Field(default_factory=utc_now)
+    shadow_report_paths: dict[str, str] = Field(default_factory=dict)
+    shadow_final_status: str | None = None
+    broker_connected: bool = False
+    account_summary_verified: bool = False
+    source_bar_timestamp_by_symbol: dict[str, str] = Field(default_factory=dict)
+    stale_data_detected: bool = False
+    stale_symbols: list[str] = Field(default_factory=list)
+    heartbeat_written: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    live_orders_enabled: bool = False
+    order_routing_enabled: bool = False
+    order_api_invoked: bool = False
+
+    @field_validator("cycle_index")
+    @classmethod
+    def validate_cycle_index(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("cycle_index must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_cycle_safety(self) -> AlphaShadowDaemonCycle:
+        if self.submitted_orders:
+            raise ValueError("alpha-shadow-daemon cycles must not submit orders")
+        if self.paper_orders_enabled:
+            raise ValueError("paper orders must remain disabled in alpha-shadow-daemon")
+        if self.live_orders_enabled:
+            raise ValueError("live orders must remain disabled in alpha-shadow-daemon")
+        if self.order_routing_enabled or self.order_api_invoked:
+            raise ValueError("alpha-shadow-daemon must not invoke order routing")
+        if self.ok and self.errors:
+            raise ValueError("ok daemon cycles must not include errors")
+        return self
+
+
+class AlphaShadowDaemonReport(SerializableModel):
+    """No-secret report for a controlled read-only autonomous shadow daemon."""
+
+    title: str = "Read-only IBKR Alpha Shadow Daemon"
+    report_type: str = "alpha_shadow_daemon"
+    command: str = "alpha-shadow-daemon"
+    ok: bool
+    request: AlphaShadowDaemonRequest
+    commit_sha: str | None = None
+    campaign_id: str | None = None
+    cycles: list[AlphaShadowDaemonCycle] = Field(default_factory=list)
+    cycle_count: int = 0
+    clean_cycle_count: int = 0
+    graduation_ready: bool = False
+    heartbeat_path: str
+    kill_switch_path: str
+    halted_by_kill_switch: bool = False
+    stale_data_detected: bool = False
+    broker_connected_cycles: int = 0
+    account_summary_verified_cycles: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    live_orders_enabled: bool = False
+    read_only_api_expected: bool = True
+    order_routing_enabled: bool = False
+    order_api_invoked: bool = False
+    broker_contact_read_only: bool = True
+    paper_execution_enabled: bool = False
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    futures_contracts_enabled: bool = False
+    direct_futures_data_enabled: bool = False
+    options_contracts_enabled: bool = False
+    no_order_guarantee: bool = True
+    safety_statement: str = (
+        "alpha-shadow-daemon runs controlled read-only SPY shadow cycles. It expects "
+        "IBKR Read-Only API to stay enabled, requires ALLOW_PAPER_ORDERS=false, "
+        "writes heartbeat evidence, and never invokes broker order APIs."
+    )
+    commodity_scope: str = (
+        "Commodity-linked proxies remain research-only. Direct futures, options, "
+        "rollover, margin, and commodity execution are out of scope."
+    )
+    final_status: AlphaShadowDaemonStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_daemon_safety(self) -> AlphaShadowDaemonReport:
+        if self.submitted_orders:
+            raise ValueError("alpha-shadow-daemon must not submit orders")
+        if self.paper_orders_enabled:
+            raise ValueError("paper_orders_enabled must remain false for alpha-shadow-daemon")
+        if self.live_orders_enabled:
+            raise ValueError("live_orders_enabled must remain false")
+        if not self.read_only_api_expected:
+            raise ValueError("read_only_api_expected must remain true")
+        if self.order_routing_enabled or self.order_api_invoked:
+            raise ValueError("alpha-shadow-daemon must not invoke order routing")
+        if not self.broker_contact_read_only:
+            raise ValueError("broker contact must remain read-only")
+        if self.paper_execution_enabled:
+            raise ValueError("paper execution must remain disabled")
+        if self.generated_orders or self.order_intents_generated:
+            raise ValueError("alpha-shadow-daemon must not generate broker orders")
+        if self.pnl_calculated or self.portfolio_accounting:
+            raise ValueError("alpha-shadow-daemon must not calculate P&L or account portfolios")
+        if (
+            self.futures_contracts_enabled
+            or self.direct_futures_data_enabled
+            or self.options_contracts_enabled
+        ):
+            raise ValueError("derivatives execution must remain disabled")
+        if not self.no_order_guarantee:
+            raise ValueError("no_order_guarantee must remain true")
+        if self.cycle_count != len(self.cycles):
+            raise ValueError("cycle_count must match cycles length")
+        if self.ok and self.errors:
+            raise ValueError("ok daemon reports must not include errors")
         return self
 
 
