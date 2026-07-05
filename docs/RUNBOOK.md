@@ -270,6 +270,65 @@ export ALLOW_PAPER_ORDERS=false
 Re-enable IBKR Read-Only API unless actively running a gated paper execution
 command.
 
+## Post-Paper-Run Reconciliation
+
+Run this immediately after `paper-order-smoke` or `alpha-paper-run`, once the
+paper execution window is closed.
+
+Required operator setup:
+
+- Re-enable IBKR Read-Only API.
+- Set `ALLOW_PAPER_ORDERS=false`.
+- Keep `ALLOW_LIVE_ORDERS=false`.
+- Keep paper IB Gateway on `127.0.0.1:4002` or paper TWS on
+  `127.0.0.1:7497`; live ports `4001` and `7496` remain rejected.
+- Run the commands sequentially, not in parallel.
+
+For IB Gateway paper:
+
+```bash
+export TRADING_MODE=paper
+export ALLOW_PAPER_ORDERS=false
+export ALLOW_LIVE_ORDERS=false
+export IBKR_HOST=127.0.0.1
+export IBKR_PORT=4002
+export BROKER_KIND=ib_gateway
+export IBKR_CLIENT_ID=11
+```
+
+Then reconcile current broker state:
+
+```bash
+python -m trader.cli paper-reconcile --timeout 30
+```
+
+Expected behavior:
+
+- contacts IBKR through read-only account, positions, and open-order requests
+- reads latest ignored `paper-order-smoke` and `alpha-paper-run` reports for
+  order ID and perm ID evidence
+- reports masked account IDs, open-order count, latest order IDs, latest perm
+  IDs, positions availability, warnings, and errors
+- reports `submitted_orders=false`, `paper_orders_enabled=false`,
+  `order_routing_enabled=false`, and `order_api_invoked=false`
+- fails if a real broker account summary is unavailable; mock fallback data is
+  not accepted as success
+
+Finally summarize the local campaign evidence:
+
+```bash
+python -m trader.cli alpha-test-summary
+```
+
+Expected behavior:
+
+- runs offline only and does not contact IBKR
+- verifies same-commit, fresh `alpha-shadow-run`, transmitted
+  `paper-order-smoke`, `alpha-paper-run`, and `paper-reconcile` reports
+- records fill/cancel outcome, order IDs, perm IDs, open-order count, masked
+  account evidence, source report paths, warnings, errors, and next eligibility
+- writes ignored JSON and Markdown reports under `reports/`
+
 ## Read-Only Market-Data Diagnostics
 
 ```bash

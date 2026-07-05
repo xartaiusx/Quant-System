@@ -98,6 +98,8 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - `paper-readiness-run` runs broker probe, broker account summary, historical snapshot, offline load, commodity proxy universe, and analytical signal evaluation sequentially.
 - `paper-readiness-run` uses distinct IBKR client IDs for broker-contact stages and pauses between those stages by default; override with `--broker-stage-pause` if needed.
 - `paper-readiness-run` fails if broker account summary is unavailable or only mock fallback data is available.
+- `paper-reconcile` is the read-only post-paper-run broker-state check. Run it after re-enabling Read-Only API and setting `ALLOW_PAPER_ORDERS=false`.
+- `alpha-test-summary` is offline-only and aggregates ignored local run reports into a no-secret paper campaign summary.
 - Paper execution remains blocked by the refusing paper executor.
 - Live trading remains impossible.
 
@@ -138,6 +140,8 @@ python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --histo
 python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
 python -m trader.cli paper-readiness-run
 python -m trader.cli paper-readiness-run --broker-stage-pause 2
+python -m trader.cli paper-reconcile --timeout 30
+python -m trader.cli alpha-test-summary
 ```
 
 `account --connect` and `positions --connect` are read-only. If the broker is unavailable, they clearly fall back to mock data instead of pretending mock data came from TWS or Gateway.

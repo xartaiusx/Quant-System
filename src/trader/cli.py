@@ -15,6 +15,7 @@ from rich.table import Table
 
 from trader.alpha_paper import ALPHA_PAPER_CONFIRMATION, run_alpha_paper_run
 from trader.alpha_shadow import run_alpha_shadow_run
+from trader.alpha_summary import run_alpha_test_summary
 from trader.backtest.data_adapter import build_backtest_feed, build_backtest_feed_report
 from trader.backtest.engine import build_backtest_run_report
 from trader.config import ConfigError, TraderConfig, load_config
@@ -38,6 +39,8 @@ from trader.models import (
     AlphaPaperRunRequest,
     AlphaShadowRunReport,
     AlphaShadowRunRequest,
+    AlphaTestSummaryReport,
+    AlphaTestSummaryRequest,
     AnalyticalSignalEvaluationReport,
     AnalyticalSignalEvaluationRequest,
     BacktestAlignmentMode,
@@ -67,6 +70,8 @@ from trader.models import (
     PaperOrderSmokeRequest,
     PaperReadinessRunReport,
     PaperReadinessRunRequest,
+    PaperReconcileReport,
+    PaperReconcileRequest,
     RiskDecision,
     SignalContractReport,
     SignalContractValidationRequest,
@@ -74,6 +79,7 @@ from trader.models import (
     StrategyContractValidationRequest,
 )
 from trader.paper_readiness import run_paper_readiness_run
+from trader.paper_reconcile import run_paper_reconcile
 from trader.portfolio.construction import build_trade_plans
 from trader.reporting.journal import Journal
 from trader.risk.rules import evaluate_trade_plans
@@ -1713,6 +1719,93 @@ def alpha_paper_run(
         raise typer.Exit(code=1)
 
 
+@app.command("paper-reconcile")
+def paper_reconcile(
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Broker request timeout seconds."),
+    ] = 30,
+    paper_smoke_report: Annotated[
+        Path,
+        typer.Option(
+            "--paper-smoke-report",
+            help="Latest transmitted paper-order-smoke report path.",
+        ),
+    ] = Path("reports/latest_paper_order_smoke.json"),
+    alpha_paper_report: Annotated[
+        Path,
+        typer.Option(
+            "--alpha-paper-report",
+            help="Latest alpha-paper-run report path.",
+        ),
+    ] = Path("reports/latest_alpha_paper_run.json"),
+) -> None:
+    """Run read-only post-paper-run broker reconciliation."""
+
+    config = _load_config_or_exit()
+    request = PaperReconcileRequest(
+        timeout_seconds=_validate_timeout_option(timeout) or 30,
+        paper_smoke_report_path=paper_smoke_report.as_posix(),
+        alpha_paper_report_path=alpha_paper_report.as_posix(),
+    )
+    report = run_paper_reconcile(config, request)
+    json_path, md_path = Journal().write_cycle("paper_reconcile", _report_dict(report))
+
+    console.print("[bold]IBKR paper reconciliation[/bold]")
+    console.print("Broker contact: read-only account, positions, and open-order checks only.")
+    console.print("Order routing: disabled.")
+    console.print("Submitted orders: false.")
+    _print_paper_reconcile_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("alpha-test-summary")
+def alpha_test_summary(
+    alpha_shadow_report: Annotated[
+        Path,
+        typer.Option("--alpha-shadow-report", help="Alpha-shadow report path."),
+    ] = Path("reports/latest_alpha_shadow_run.json"),
+    paper_smoke_report: Annotated[
+        Path,
+        typer.Option("--paper-smoke-report", help="Paper-order-smoke report path."),
+    ] = Path("reports/latest_paper_order_smoke.json"),
+    alpha_paper_report: Annotated[
+        Path,
+        typer.Option("--alpha-paper-report", help="Alpha-paper-run report path."),
+    ] = Path("reports/latest_alpha_paper_run.json"),
+    paper_reconcile_report: Annotated[
+        Path,
+        typer.Option("--paper-reconcile-report", help="Paper-reconcile report path."),
+    ] = Path("reports/latest_paper_reconcile.json"),
+    max_report_age_hours: Annotated[
+        int,
+        typer.Option("--max-report-age-hours", help="Maximum source report age."),
+    ] = 24,
+) -> None:
+    """Summarize one paper alpha test campaign from ignored local reports."""
+
+    request = AlphaTestSummaryRequest(
+        alpha_shadow_report_path=alpha_shadow_report.as_posix(),
+        paper_smoke_report_path=paper_smoke_report.as_posix(),
+        alpha_paper_report_path=alpha_paper_report.as_posix(),
+        paper_reconcile_report_path=paper_reconcile_report.as_posix(),
+        max_report_age_hours=max_report_age_hours,
+    )
+    report = run_alpha_test_summary(request)
+    json_path, md_path = Journal().write_cycle("alpha_test_summary", _report_dict(report))
+
+    console.print("[bold]IBKR alpha test summary[/bold]")
+    console.print("Offline report aggregation only; no broker contact and no order APIs.")
+    _print_alpha_test_summary_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def account(
     connect: Annotated[
@@ -2026,8 +2119,10 @@ def _report_dict(
         | HistoricalSnapshotReport
         | InertStrategyRunnerReport
         | MarketDataDiagnosticReport
+        | AlphaTestSummaryReport
         | PaperOrderSmokeReport
         | PaperReadinessRunReport
+        | PaperReconcileReport
         | SignalContractReport
         | StrategyContractReport
     ),
@@ -2737,6 +2832,165 @@ def _print_alpha_paper_run_result(report: AlphaPaperRunReport) -> None:
             console.print(f"- {escape(error)}")
 
 
+def _print_paper_reconcile_result(report: PaperReconcileReport) -> None:
+    table = Table(title="Paper Reconciliation")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Final status", _enum_value(report.final_status))
+    table.add_row("Mode", report.mode)
+    table.add_row("Host", report.host)
+    table.add_row("Port", str(report.port))
+    table.add_row("Client ID", str(report.client_id))
+    table.add_row("Broker connected", str(report.broker_connected).lower())
+    table.add_row("Account verified", str(report.account_summary_verified).lower())
+    table.add_row("Account source", report.account_summary_source)
+    table.add_row("Positions available", str(report.broker_positions_available).lower())
+    table.add_row("Open orders", str(report.open_order_count))
+    table.add_row("Latest order IDs", _format_ints(report.latest_order_ids))
+    table.add_row("Latest perm IDs", _format_ints(report.latest_perm_ids))
+    table.add_row("Submitted orders", str(report.submitted_orders).lower())
+    table.add_row("Paper orders enabled", str(report.paper_orders_enabled).lower())
+    table.add_row(
+        "Configured ALLOW_PAPER_ORDERS",
+        str(report.configured_allow_paper_orders).lower(),
+    )
+    table.add_row("Live orders enabled", str(report.live_orders_enabled).lower())
+    table.add_row("Read-Only API expected", str(report.read_only_api_expected).lower())
+    table.add_row("Order routing", "disabled")
+    table.add_row("Order API invoked", str(report.order_api_invoked).lower())
+    console.print(table)
+
+    if report.account_ids_masked:
+        console.print(
+            "Masked accounts: "
+            + ", ".join(escape(account) for account in report.account_ids_masked)
+        )
+    if report.open_orders:
+        open_table = Table(title="Broker Open Orders")
+        open_table.add_column("Order ID")
+        open_table.add_column("Perm ID")
+        open_table.add_column("Symbol")
+        open_table.add_column("Action")
+        open_table.add_column("Status")
+        for open_order in report.open_orders:
+            open_table.add_row(
+                str(open_order.order_id),
+                str(open_order.perm_id or "n/a"),
+                open_order.symbol,
+                open_order.action or "n/a",
+                open_order.status or "n/a",
+            )
+        console.print(open_table)
+    if report.latest_order_evidence:
+        evidence_table = Table(title="Latest Local Order Evidence")
+        evidence_table.add_column("Source")
+        evidence_table.add_column("Status")
+        evidence_table.add_column("Order ID")
+        evidence_table.add_column("Perm ID")
+        evidence_table.add_column("Fill Qty")
+        evidence_table.add_column("Canceled")
+        for evidence in report.latest_order_evidence:
+            evidence_table.add_row(
+                evidence.source,
+                evidence.final_status or "unknown",
+                str(evidence.order_id or "n/a"),
+                str(evidence.perm_id or "n/a"),
+                str(evidence.fill_quantity or "n/a"),
+                str(evidence.canceled).lower(),
+            )
+        console.print(evidence_table)
+    if report.source_report_paths:
+        source_table = Table(title="Source Reports")
+        source_table.add_column("Report")
+        source_table.add_column("Path")
+        for label, path in sorted(report.source_report_paths.items()):
+            source_table.add_row(label, path)
+        console.print(source_table)
+    if report.warnings:
+        console.print("[yellow]Paper reconciliation warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Paper reconciliation errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_alpha_test_summary_result(report: AlphaTestSummaryReport) -> None:
+    table = Table(title="Alpha Test Summary")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Final status", _enum_value(report.final_status))
+    table.add_row("Commit SHA", report.commit_sha or "unknown")
+    table.add_row("Alpha shadow verified", str(report.alpha_shadow_verified).lower())
+    table.add_row("Paper smoke verified", str(report.paper_smoke_verified).lower())
+    table.add_row("Alpha paper verified", str(report.alpha_paper_verified).lower())
+    table.add_row("Paper reconcile verified", str(report.paper_reconcile_verified).lower())
+    table.add_row("Account verified", str(report.account_summary_verified).lower())
+    table.add_row(
+        "Open orders",
+        str(report.open_order_count) if report.open_order_count is not None else "unknown",
+    )
+    table.add_row("Latest order IDs", _format_ints(report.latest_order_ids))
+    table.add_row("Latest perm IDs", _format_ints(report.latest_perm_ids))
+    table.add_row("Paper smoke status", report.paper_smoke_order_status or "n/a")
+    table.add_row(
+        "Paper smoke fill qty",
+        str(report.paper_smoke_fill_quantity or "n/a"),
+    )
+    table.add_row(
+        "Paper smoke canceled",
+        _format_optional_bool(report.paper_smoke_canceled),
+    )
+    table.add_row("Alpha paper status", report.alpha_paper_order_status or "n/a")
+    table.add_row(
+        "Alpha paper fill qty",
+        str(report.alpha_paper_fill_quantity or "n/a"),
+    )
+    table.add_row(
+        "Alpha paper canceled",
+        _format_optional_bool(report.alpha_paper_canceled),
+    )
+    table.add_row("Source submitted orders", str(report.submitted_orders).lower())
+    table.add_row("Order routing", "disabled")
+    table.add_row("Order API invoked by summary", str(report.order_api_invoked).lower())
+    table.add_row(
+        "Next alpha-window eligible",
+        str(report.next_eligible_for_alpha_window).lower(),
+    )
+    console.print(table)
+
+    if report.account_ids_masked:
+        console.print(
+            "Masked accounts: "
+            + ", ".join(escape(account) for account in report.account_ids_masked)
+        )
+    if report.source_report_paths:
+        source_table = Table(title="Source Reports")
+        source_table.add_column("Report")
+        source_table.add_column("Status")
+        source_table.add_column("Path")
+        for label, path in sorted(report.source_report_paths.items()):
+            source_table.add_row(
+                label,
+                report.source_report_statuses.get(label, "unknown"),
+                path,
+            )
+        console.print(source_table)
+    if report.next_eligibility_reason:
+        console.print("[bold]Next eligibility[/bold]")
+        for reason in report.next_eligibility_reason:
+            console.print(f"- {escape(reason)}")
+    if report.warnings:
+        console.print("[yellow]Alpha test summary warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Alpha test summary errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
 def _print_broker_result(report: BrokerDiagnosticReport) -> None:
     table = Table(title="Broker Connectivity")
     table.add_column("Check")
@@ -3185,6 +3439,14 @@ def _enum_value(value: object) -> str:
 
 def _format_sample_values(values: list[str]) -> str:
     return ", ".join(values) if values else "none"
+
+
+def _format_ints(values: list[int]) -> str:
+    return ", ".join(str(value) for value in values) if values else "none"
+
+
+def _format_optional_bool(value: bool | None) -> str:
+    return "n/a" if value is None else str(value).lower()
 
 
 def _format_decimal(value: Decimal | None) -> str:

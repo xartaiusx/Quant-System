@@ -51,6 +51,10 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return paper_order_smoke_markdown(payload)
     if payload.get("report_type") == "alpha_paper_run":
         return alpha_paper_run_markdown(payload)
+    if payload.get("report_type") == "paper_reconcile":
+        return paper_reconcile_markdown(payload)
+    if payload.get("report_type") == "alpha_test_summary":
+        return alpha_test_summary_markdown(payload)
 
     lines = [
         f"# {payload.get('title', 'Trading Report')}",
@@ -1741,6 +1745,196 @@ def alpha_paper_run_markdown(payload: Mapping[str, Any]) -> str:
                 f"- Canceled: `{paper_order.get('canceled', False)}`",
             ]
         )
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def paper_reconcile_markdown(payload: Mapping[str, Any]) -> str:
+    """Render the read-only post-paper-run reconciliation report."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    source_paths = payload.get("source_report_paths", {})
+    account_ids = payload.get("account_ids_masked", [])
+    open_orders = payload.get("open_orders", [])
+    evidence = payload.get("latest_order_evidence", [])
+
+    lines = [
+        f"# {payload.get('title', 'IBKR Paper Reconciliation')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'paper-reconcile')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Commit SHA: `{payload.get('commit_sha', 'unknown')}`",
+        f"- Mode: `{payload.get('mode', 'unknown')}`",
+        f"- Broker kind: `{payload.get('broker_kind', 'unknown')}`",
+        f"- Host: `{payload.get('host', 'unknown')}`",
+        f"- Port: `{payload.get('port', 'unknown')}`",
+        f"- Client ID: `{payload.get('client_id', 'unknown')}`",
+        f"- Broker connected: `{payload.get('broker_connected', False)}`",
+        f"- Account summary verified: `{payload.get('account_summary_verified', False)}`",
+        f"- Account summary source: `{payload.get('account_summary_source', 'unknown')}`",
+        f"- Broker positions available: `{payload.get('broker_positions_available', False)}`",
+        f"- Positions source: `{payload.get('positions_source', 'unknown')}`",
+        f"- Open-order count: `{payload.get('open_order_count', 0)}`",
+        f"- Open-order source: `{payload.get('open_order_source', 'unknown')}`",
+        f"- Executions available: `{payload.get('executions_available', False)}`",
+        f"- Executions source: `{payload.get('executions_source', 'unknown')}`",
+        f"- Latest order IDs: `{_sample_values(payload.get('latest_order_ids', []))}`",
+        f"- Latest perm IDs: `{_sample_values(payload.get('latest_perm_ids', []))}`",
+        f"- Submitted orders: `{payload.get('submitted_orders', True)}`",
+        f"- Paper orders enabled: `{payload.get('paper_orders_enabled', True)}`",
+        f"- Configured allow paper orders: `{payload.get('configured_allow_paper_orders', True)}`",
+        f"- Live orders enabled: `{payload.get('live_orders_enabled', True)}`",
+        f"- Read-Only API expected: `{payload.get('read_only_api_expected', False)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
+        "",
+        "## Safety",
+        "",
+        str(payload.get("safety_statement", "Reconciliation safety scope unavailable.")),
+        "",
+        "## Source Reports",
+        "",
+    ]
+    if isinstance(source_paths, Mapping) and source_paths:
+        for label, path in sorted(source_paths.items()):
+            lines.append(f"- `{label}`: `{path}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Masked Accounts", ""])
+    if account_ids:
+        lines.extend(f"- `{account_id}`" for account_id in account_ids)
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Open Orders", ""])
+    if isinstance(open_orders, list) and open_orders:
+        for item in open_orders:
+            if not isinstance(item, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"order_id=`{item.get('order_id', 'n/a')}` "
+                f"perm_id=`{item.get('perm_id', 'n/a')}` "
+                f"symbol=`{item.get('symbol', 'unknown')}` "
+                f"action=`{item.get('action', 'n/a')}` "
+                f"status=`{item.get('status', 'n/a')}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Latest Order Evidence", ""])
+    if isinstance(evidence, list) and evidence:
+        for item in evidence:
+            if not isinstance(item, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"`{item.get('source', 'unknown')}` "
+                f"status=`{item.get('final_status', 'unknown')}` "
+                f"submitted=`{item.get('submitted_orders', False)}` "
+                f"order_id=`{item.get('order_id', 'n/a')}` "
+                f"perm_id=`{item.get('perm_id', 'n/a')}` "
+                f"fill_quantity=`{item.get('fill_quantity', 'n/a')}` "
+                f"canceled=`{item.get('canceled', False)}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def alpha_test_summary_markdown(payload: Mapping[str, Any]) -> str:
+    """Render the offline alpha campaign summary report."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    source_paths = payload.get("source_report_paths", {})
+    source_statuses = payload.get("source_report_statuses", {})
+    source_commits = payload.get("source_report_commits", {})
+    source_timestamps = payload.get("source_report_timestamps", {})
+    account_ids = payload.get("account_ids_masked", [])
+    next_reasons = payload.get("next_eligibility_reason", [])
+
+    lines = [
+        f"# {payload.get('title', 'IBKR Alpha Test Summary')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'alpha-test-summary')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Commit SHA: `{payload.get('commit_sha', 'unknown')}`",
+        f"- Alpha shadow verified: `{payload.get('alpha_shadow_verified', False)}`",
+        f"- Paper smoke verified: `{payload.get('paper_smoke_verified', False)}`",
+        f"- Alpha paper verified: `{payload.get('alpha_paper_verified', False)}`",
+        f"- Paper reconcile verified: `{payload.get('paper_reconcile_verified', False)}`",
+        f"- Account summary verified: `{payload.get('account_summary_verified', False)}`",
+        f"- Open-order count: `{payload.get('open_order_count', 'unknown')}`",
+        f"- Latest order IDs: `{_sample_values(payload.get('latest_order_ids', []))}`",
+        f"- Latest perm IDs: `{_sample_values(payload.get('latest_perm_ids', []))}`",
+        f"- Paper smoke order status: `{payload.get('paper_smoke_order_status', 'n/a')}`",
+        f"- Paper smoke fill quantity: `{payload.get('paper_smoke_fill_quantity', 'n/a')}`",
+        f"- Paper smoke canceled: `{payload.get('paper_smoke_canceled', 'n/a')}`",
+        f"- Alpha paper order status: `{payload.get('alpha_paper_order_status', 'n/a')}`",
+        f"- Alpha paper fill quantity: `{payload.get('alpha_paper_fill_quantity', 'n/a')}`",
+        f"- Alpha paper canceled: `{payload.get('alpha_paper_canceled', 'n/a')}`",
+        f"- Submitted orders in source evidence: `{payload.get('submitted_orders', False)}`",
+        f"- Paper orders enabled now: `{payload.get('paper_orders_enabled', True)}`",
+        f"- Live orders enabled: `{payload.get('live_orders_enabled', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- Order API invoked by summary: `{payload.get('order_api_invoked', True)}`",
+        "- Next eligible for alpha window: "
+        f"`{payload.get('next_eligible_for_alpha_window', False)}`",
+        "",
+        "## Safety",
+        "",
+        str(payload.get("safety_statement", "Alpha summary safety scope unavailable.")),
+        "",
+        str(payload.get("commodity_scope", "Commodity scope unavailable.")),
+        "",
+        "## Source Reports",
+        "",
+    ]
+    if isinstance(source_paths, Mapping) and source_paths:
+        for label, path in sorted(source_paths.items()):
+            status = (
+                source_statuses.get(label, "unknown")
+                if isinstance(source_statuses, Mapping)
+                else "unknown"
+            )
+            commit = (
+                source_commits.get(label, "unknown")
+                if isinstance(source_commits, Mapping)
+                else "unknown"
+            )
+            timestamp = (
+                source_timestamps.get(label, "unknown")
+                if isinstance(source_timestamps, Mapping)
+                else "unknown"
+            )
+            lines.append(
+                "- "
+                f"`{label}`: `{path}` status=`{status}` "
+                f"commit=`{commit}` timestamp=`{timestamp}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Masked Accounts", ""])
+    if account_ids:
+        lines.extend(f"- `{account_id}`" for account_id in account_ids)
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Next Eligibility", ""])
+    if isinstance(next_reasons, list) and next_reasons:
+        lines.extend(f"- {reason}" for reason in next_reasons)
     else:
         lines.append("- None")
 
