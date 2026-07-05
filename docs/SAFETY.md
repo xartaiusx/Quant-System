@@ -222,6 +222,15 @@ view to `ALLOW_PAPER_ORDERS=false`, runs `paper-reconcile`, and writes
 enable live trading, live ports, market orders, direct futures, options, algos,
 brackets, shorts, fractional or cash-quantity stock orders, or batches.
 
+Milestone 25 adds `paper-ledger-update`, an offline ignored local ledger updater
+for completed SPY paper campaigns. It reads `alpha-test-summary` and
+`paper-reconcile` reports, requires current-commit same-campaign evidence,
+verified account summary, completed broker positions query, zero open broker
+orders, broker-state fingerprint, and order/perm ID coverage in broker-state
+evidence, then upserts one masked JSONL row under ignored `state/`. It never
+contacts IBKR, enables paper orders, invokes order APIs, routes execution,
+calculates P&L, or expands commodity execution.
+
 Commodity scope remains research-only after paper execution hardening. `GLD`
 and `USO` can be research candidates, `DBA` stays excluded from execution until
 liquidity gates pass, and direct futures remain out of scope until an explicit

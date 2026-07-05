@@ -70,6 +70,8 @@ from trader.models import (
     MarketDataDiagnosticReport,
     MarketDataRequestType,
     MarketQuote,
+    PaperLedgerUpdateReport,
+    PaperLedgerUpdateRequest,
     PaperOrderSmokeReport,
     PaperOrderSmokeRequest,
     PaperReadinessRunReport,
@@ -82,6 +84,7 @@ from trader.models import (
     StrategyContractReport,
     StrategyContractValidationRequest,
 )
+from trader.paper_ledger import run_paper_ledger_update
 from trader.paper_readiness import run_paper_readiness_run
 from trader.paper_reconcile import run_paper_reconcile
 from trader.portfolio.construction import build_trade_plans
@@ -1850,6 +1853,54 @@ def alpha_test_summary(
         raise typer.Exit(code=1)
 
 
+@app.command("paper-ledger-update")
+def paper_ledger_update(
+    campaign_id: Annotated[
+        str | None,
+        typer.Option(
+            "--campaign-id",
+            help="Optional no-secret campaign correlation ID matching source reports.",
+        ),
+    ] = None,
+    alpha_test_summary_report: Annotated[
+        Path,
+        typer.Option(
+            "--alpha-test-summary-report",
+            help="Alpha-test-summary report path.",
+        ),
+    ] = Path("reports/latest_alpha_test_summary.json"),
+    paper_reconcile_report: Annotated[
+        Path,
+        typer.Option("--paper-reconcile-report", help="Paper-reconcile report path."),
+    ] = Path("reports/latest_paper_reconcile.json"),
+    ledger_path: Annotated[
+        Path,
+        typer.Option(
+            "--ledger-path",
+            help="Ignored local paper ledger JSONL path.",
+        ),
+    ] = Path("state/paper_ledger.jsonl"),
+) -> None:
+    """Upsert one ignored local paper-campaign ledger row from source reports."""
+
+    request = PaperLedgerUpdateRequest(
+        campaign_id=campaign_id,
+        alpha_test_summary_report_path=alpha_test_summary_report.as_posix(),
+        paper_reconcile_report_path=paper_reconcile_report.as_posix(),
+        ledger_path=ledger_path.as_posix(),
+    )
+    report = run_paper_ledger_update(request)
+    json_path, md_path = Journal().write_cycle("paper_ledger_update", _report_dict(report))
+
+    console.print("[bold]IBKR paper ledger update[/bold]")
+    console.print("Offline ledger update only; no broker contact and no order APIs.")
+    _print_paper_ledger_update_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("alpha-campaign-run")
 def alpha_campaign_run(
     mode: Annotated[
@@ -2271,6 +2322,7 @@ def _report_dict(
         | MarketDataDiagnosticReport
         | AlphaTestSummaryReport
         | PaperOrderSmokeReport
+        | PaperLedgerUpdateReport
         | PaperReadinessRunReport
         | PaperReconcileReport
         | SignalContractReport
@@ -3137,6 +3189,74 @@ def _print_alpha_test_summary_result(report: AlphaTestSummaryReport) -> None:
             console.print(f"- {escape(warning)}")
     if report.errors:
         console.print("[red]Alpha test summary errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_paper_ledger_update_result(report: PaperLedgerUpdateReport) -> None:
+    table = Table(title="Paper Ledger Update")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Final status", _enum_value(report.final_status))
+    table.add_row("Commit SHA", report.commit_sha or "unknown")
+    table.add_row("Campaign ID", report.campaign_id or "n/a")
+    table.add_row("Ledger path", report.ledger_path)
+    table.add_row("Entry written", str(report.ledger_entry_written).lower())
+    table.add_row("Record count", str(report.ledger_record_count))
+    table.add_row("Replaced existing", str(report.replaced_existing_entry).lower())
+    table.add_row("Submitted orders", str(report.submitted_orders).lower())
+    table.add_row("Broker contacted", str(report.broker_contacted).lower())
+    table.add_row("Order routing", "disabled")
+    table.add_row("Order API invoked", str(report.order_api_invoked).lower())
+    console.print(table)
+
+    if report.ledger_entry is not None:
+        entry_table = Table(title="Ledger Entry")
+        entry_table.add_column("Field")
+        entry_table.add_column("Value")
+        entry_table.add_row("Open orders", str(report.ledger_entry.open_order_count))
+        entry_table.add_row(
+            "Positions query completed",
+            str(report.ledger_entry.positions_query_completed).lower(),
+        )
+        entry_table.add_row(
+            "Zero positions confirmed",
+            str(report.ledger_entry.zero_positions_confirmed).lower(),
+        )
+        entry_table.add_row(
+            "Account verified",
+            str(report.ledger_entry.account_summary_verified).lower(),
+        )
+        entry_table.add_row(
+            "Next eligible",
+            str(report.ledger_entry.next_eligible_for_alpha_window).lower(),
+        )
+        entry_table.add_row(
+            "Broker fingerprint",
+            report.ledger_entry.broker_state_fingerprint or "missing",
+        )
+        entry_table.add_row(
+            "Latest order IDs",
+            _format_ints(report.ledger_entry.latest_order_ids),
+        )
+        entry_table.add_row(
+            "Latest perm IDs",
+            _format_ints(report.ledger_entry.latest_perm_ids),
+        )
+        console.print(entry_table)
+    if report.source_report_paths:
+        source_table = Table(title="Source Reports")
+        source_table.add_column("Report")
+        source_table.add_column("Path")
+        for label, path in sorted(report.source_report_paths.items()):
+            source_table.add_row(label, path)
+        console.print(source_table)
+    if report.warnings:
+        console.print("[yellow]Paper ledger warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Paper ledger errors[/red]")
         for error in report.errors:
             console.print(f"- {escape(error)}")
 

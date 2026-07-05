@@ -329,6 +329,7 @@ post-run checks before continuing development:
 ```bash
 python -m trader.cli paper-reconcile --campaign-id campaign-YYYYMMDD-spy-001 --timeout 30
 python -m trader.cli alpha-test-summary --campaign-id campaign-YYYYMMDD-spy-001
+python -m trader.cli paper-ledger-update --campaign-id campaign-YYYYMMDD-spy-001
 ```
 
 `paper-reconcile` expects Read-Only API to be re-enabled and
@@ -342,6 +343,12 @@ reconciliation reports into a no-secret campaign summary. Use one no-secret
 `campaign_id` across `alpha-shadow-run`, `paper-order-smoke`, `alpha-paper-run`,
 `paper-reconcile`, and `alpha-test-summary`; summary and reconciliation fail
 closed when loaded source reports carry different campaign IDs.
+`paper-ledger-update` is offline-only and upserts one masked campaign row into
+ignored local `state/paper_ledger.jsonl` after the summary is eligible. It fails
+closed on mismatched campaign IDs, different commit SHAs, unverified account
+summary, incomplete broker positions query, open broker orders, missing broker
+state fingerprint, or missing order/perm IDs in broker-state evidence. It does
+not contact IBKR, enable paper orders, or invoke order APIs.
 
 `alpha-campaign-run` wraps the staged workflow without adding new order routes.
 Shadow mode runs the read-only alpha shadow stage and writes a top-level

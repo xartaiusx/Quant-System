@@ -28,6 +28,8 @@ env/
 # Runtime output
 reports/*
 !reports/.gitkeep
+state/*
+!state/.gitkeep
 data/historical/**/*.jsonl
 data/historical/**/*_manifest.json
 logs/

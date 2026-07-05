@@ -100,6 +100,7 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - `paper-readiness-run` fails if broker account summary is unavailable or only mock fallback data is available.
 - `paper-reconcile` is the read-only post-paper-run broker-state check. Run it after re-enabling Read-Only API and setting `ALLOW_PAPER_ORDERS=false`.
 - `alpha-test-summary` is offline-only and aggregates ignored local run reports into a no-secret paper campaign summary.
+- `paper-ledger-update` is offline-only and writes one masked campaign row to ignored local `state/paper_ledger.jsonl` after reconciliation and summary evidence pass.
 - Paper execution remains blocked by the refusing paper executor.
 - Live trading remains impossible.
 
@@ -142,6 +143,7 @@ python -m trader.cli paper-readiness-run
 python -m trader.cli paper-readiness-run --broker-stage-pause 2
 python -m trader.cli paper-reconcile --timeout 30
 python -m trader.cli alpha-test-summary
+python -m trader.cli paper-ledger-update
 python -m trader.cli alpha-campaign-run --mode shadow --campaign-id campaign-YYYYMMDD-spy-001
 python -m trader.cli alpha-campaign-run --mode paper --campaign-id campaign-YYYYMMDD-spy-001 --read-only-off-confirm READ_ONLY_OFF_FOR_ALPHA_PAPER
 ```
