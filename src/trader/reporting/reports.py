@@ -55,6 +55,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return paper_reconcile_markdown(payload)
     if payload.get("report_type") == "alpha_test_summary":
         return alpha_test_summary_markdown(payload)
+    if payload.get("report_type") == "alpha_campaign_run":
+        return alpha_campaign_run_markdown(payload)
 
     lines = [
         f"# {payload.get('title', 'Trading Report')}",
@@ -1999,6 +2001,65 @@ def alpha_test_summary_markdown(payload: Mapping[str, Any]) -> str:
     lines.extend(["", "## Next Eligibility", ""])
     if isinstance(next_reasons, list) and next_reasons:
         lines.extend(f"- {reason}" for reason in next_reasons)
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def alpha_campaign_run_markdown(payload: Mapping[str, Any]) -> str:
+    """Render the sequential alpha campaign run report."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    stages = payload.get("stages", [])
+    report_paths = payload.get("report_paths", {})
+
+    lines = [
+        f"# {payload.get('title', 'IBKR Alpha Campaign Run')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'alpha-campaign-run')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Commit SHA: `{payload.get('commit_sha', 'unknown')}`",
+        f"- Campaign ID: `{payload.get('campaign_id', 'n/a')}`",
+        f"- Mode: `{payload.get('mode', 'unknown')}`",
+        f"- Alpha shadow completed: `{payload.get('alpha_shadow_completed', False)}`",
+        f"- Alpha paper completed: `{payload.get('alpha_paper_completed', False)}`",
+        f"- Paper reconcile completed: `{payload.get('paper_reconcile_completed', False)}`",
+        f"- Alpha summary completed: `{payload.get('alpha_test_summary_completed', False)}`",
+        f"- Submitted orders: `{payload.get('submitted_orders', False)}`",
+        f"- Paper orders enabled at finish: `{payload.get('paper_orders_enabled', True)}`",
+        f"- Live orders enabled: `{payload.get('live_orders_enabled', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        f"- Read-Only restore required: `{payload.get('read_only_restore_required', False)}`",
+        "",
+        "## Safety",
+        "",
+        str(payload.get("safety_statement", "Alpha campaign safety scope unavailable.")),
+        "",
+        "## Stages",
+        "",
+    ]
+    if isinstance(stages, list) and stages:
+        for stage in stages:
+            if not isinstance(stage, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"`{stage.get('name', 'unknown')}` "
+                f"status=`{stage.get('final_status', 'unknown')}` "
+                f"ok=`{stage.get('ok', False)}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Report Paths", ""])
+    if isinstance(report_paths, Mapping) and report_paths:
+        for label, path in sorted(report_paths.items()):
+            lines.append(f"- `{label}`: `{path}`")
     else:
         lines.append("- None")
 

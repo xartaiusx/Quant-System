@@ -122,11 +122,13 @@
 - Latest local `evaluator-compare` completed for `SPY,AAPL,GLD,USO,DBA` with window pairs `5:20,10:30`, `390` observations per candidate, and no generated signals or P&L.
 - `paper-reconcile` distinguishes completed zero-position responses from unavailable positions, requests current-day execution/commission evidence, writes a broker-state fingerprint, and verifies source-report campaign IDs while keeping `submitted_orders=false` and `order_api_invoked=false`.
 - Alpha shadow, paper smoke, alpha paper, reconcile, and alpha summary reports now carry a no-secret `campaign_id`; reconcile, alpha paper, and summary fail closed when source report campaign IDs do not match.
+- `alpha-campaign-run` orchestrates the existing staged SPY paper-alpha workflow in `shadow` or `paper` mode, writes a top-level campaign report, and keeps order APIs confined to the existing paper execution boundary.
 
 ## Next Recommended Steps
 
 1. Run `paper-reconcile` after every paper-order window and review position-query completion, zero-position confirmation, execution order IDs, commission rows, and broker-state fingerprint before marking the next alpha window eligible.
-2. Create `alpha-campaign-run` to orchestrate read-only shadow, deliberate paper window, Read-Only restoration, reconciliation, and summary in a single sequential command.
-3. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
-4. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
-5. Build the paper ledger and autonomous shadow daemon before any broader paper execution daemon.
+2. Run `alpha-campaign-run --mode shadow` against IB Gateway/TWS paper with Read-Only API enabled and review the top-level campaign report.
+3. Run `alpha-campaign-run --mode paper` only during a deliberate Read-Only-off paper window after same-campaign shadow and transmitted smoke evidence are fresh.
+4. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
+5. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
+6. Build the paper ledger and autonomous shadow daemon before any broader paper execution daemon.

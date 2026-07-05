@@ -343,6 +343,28 @@ reconciliation reports into a no-secret campaign summary. Use one no-secret
 `paper-reconcile`, and `alpha-test-summary`; summary and reconciliation fail
 closed when loaded source reports carry different campaign IDs.
 
+`alpha-campaign-run` wraps the staged workflow without adding new order routes.
+Shadow mode runs the read-only alpha shadow stage and writes a top-level
+campaign report:
+
+```bash
+python -m trader.cli alpha-campaign-run --mode shadow --campaign-id campaign-YYYYMMDD-spy-001
+```
+
+Paper mode is a deliberate Read-Only-off window over the existing alpha paper
+runner, then it switches its post-run config view back to
+`ALLOW_PAPER_ORDERS=false`, runs `paper-reconcile`, and writes
+`alpha-test-summary`:
+
+```bash
+python -m trader.cli alpha-campaign-run --mode paper --campaign-id campaign-YYYYMMDD-spy-001 --read-only-off-confirm READ_ONLY_OFF_FOR_ALPHA_PAPER
+```
+
+Paper mode still requires existing same-commit alpha shadow and transmitted
+paper smoke reports, `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`,
+`ALLOW_LIVE_ORDERS=false`, localhost, paper port `7497` or `4002`, and
+`IBKR_CLIENT_ID=21`.
+
 The offline fixture stress suite uses temporary synthetic historical snapshots
 to validate loader, feed, engine, strategy-contract, strategy-runner, and
 signal-contract/signal-runner/signal-evaluate behavior against partial, gapped,

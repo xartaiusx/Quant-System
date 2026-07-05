@@ -231,6 +231,21 @@ class AlphaTestSummaryStatus(StrEnum):
     FAILED = "failed"
 
 
+class AlphaCampaignRunMode(StrEnum):
+    """Sequential alpha campaign orchestration modes."""
+
+    SHADOW = "shadow"
+    PAPER = "paper"
+
+
+class AlphaCampaignRunStatus(StrEnum):
+    """Sequential alpha campaign orchestration states."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    FAILED = "failed"
+
+
 class PaperReadinessStageStatus(StrEnum):
     """Stage-level status for the paper readiness orchestration."""
 
@@ -3099,6 +3114,113 @@ class AlphaTestSummaryReport(SerializableModel):
             raise ValueError("summary with errors cannot be next-window eligible")
         if self.next_eligible_for_alpha_window and self.open_order_count not in {0, None}:
             raise ValueError("open orders block next alpha-window eligibility")
+        return self
+
+
+class AlphaCampaignRunRequest(SerializableModel):
+    """Sequential orchestration request for one SPY paper alpha campaign."""
+
+    campaign_id: str | None = None
+    mode: AlphaCampaignRunMode = AlphaCampaignRunMode.SHADOW
+    broker_timeout_seconds: float = 30
+    history_timeout_seconds: float = 45
+    broker_stage_pause_seconds: float = 2
+    cancel_after_seconds: float = 30
+    allow_fill: bool = False
+    max_report_age_hours: int = 24
+    alpha_shadow_report_path: str = "reports/latest_alpha_shadow_run.json"
+    paper_smoke_report_path: str = "reports/latest_paper_order_smoke.json"
+    read_only_off_confirm: str = ""
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def validate_mode(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator(
+        "broker_timeout_seconds",
+        "history_timeout_seconds",
+        "broker_stage_pause_seconds",
+        "cancel_after_seconds",
+    )
+    @classmethod
+    def validate_seconds(cls, value: float) -> float:
+        if value < 0 or value > 120:
+            raise ValueError("alpha campaign timing settings must be 0 through 120 seconds")
+        return value
+
+    @field_validator("max_report_age_hours")
+    @classmethod
+    def validate_report_age(cls, value: int) -> int:
+        if value <= 0 or value > 168:
+            raise ValueError("max_report_age_hours must be greater than 0 and no more than 168")
+        return value
+
+    @field_validator("alpha_shadow_report_path", "paper_smoke_report_path")
+    @classmethod
+    def validate_report_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("alpha campaign source report paths must not be empty")
+        return normalized
+
+
+class AlphaCampaignRunReport(SerializableModel):
+    """No-secret report for a sequential SPY paper alpha campaign run."""
+
+    title: str = "IBKR Alpha Campaign Run"
+    report_type: str = "alpha_campaign_run"
+    command: str = "alpha-campaign-run"
+    ok: bool
+    request: AlphaCampaignRunRequest
+    commit_sha: str | None = None
+    campaign_id: str | None = None
+    mode: AlphaCampaignRunMode
+    stages: list[PaperReadinessRunStage] = Field(default_factory=list)
+    stage_statuses: dict[str, str] = Field(default_factory=dict)
+    report_paths: dict[str, str] = Field(default_factory=dict)
+    alpha_shadow_completed: bool = False
+    alpha_paper_completed: bool = False
+    paper_reconcile_completed: bool = False
+    alpha_test_summary_completed: bool = False
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    live_orders_enabled: bool = False
+    live_route_possible: bool = False
+    order_routing_enabled: bool = False
+    order_api_invoked: bool = False
+    read_only_api_expected_initially: bool = True
+    read_only_restore_required: bool = False
+    paper_execution_window_confirmed: bool = False
+    futures_contracts_enabled: bool = False
+    direct_futures_data_enabled: bool = False
+    options_contracts_enabled: bool = False
+    market_order_requested: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    safety_statement: str = (
+        "alpha-campaign-run is a sequential orchestrator over existing SPY-only "
+        "paper alpha stages. It does not add live trading, live ports, market orders, "
+        "direct futures, options, algos, brackets, shorts, fractional/cash-quantity "
+        "stock orders, or multi-order batches."
+    )
+    final_status: AlphaCampaignRunStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_campaign_safety(self) -> AlphaCampaignRunReport:
+        if self.live_orders_enabled or self.live_route_possible:
+            raise ValueError("live order routing must remain disabled")
+        if self.futures_contracts_enabled or self.direct_futures_data_enabled:
+            raise ValueError("direct futures must remain disabled")
+        if self.options_contracts_enabled:
+            raise ValueError("options must remain disabled")
+        if self.market_order_requested:
+            raise ValueError("market orders are not allowed")
+        if self.paper_orders_enabled and self.mode != AlphaCampaignRunMode.PAPER:
+            raise ValueError("paper_orders_enabled is only valid in paper mode")
         return self
 
 

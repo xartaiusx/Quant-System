@@ -341,6 +341,34 @@ Expected behavior:
   account evidence, source report paths, warnings, errors, and next eligibility
 - writes ignored JSON and Markdown reports under `reports/`
 
+## Sequential Alpha Campaign Runner
+
+After the individual stages are understood, use `alpha-campaign-run` to reduce
+manual report stitching while keeping the same safety boundaries.
+
+Shadow mode runs only the read-only shadow path:
+
+```bash
+export ALLOW_PAPER_ORDERS=false
+export IBKR_CLIENT_ID=61
+python -m trader.cli alpha-campaign-run --mode shadow --campaign-id "$CAMPAIGN_ID" --broker-timeout 30 --history-timeout 45 --broker-stage-pause 2
+```
+
+Paper mode runs the existing strategy-gated alpha paper runner, then switches
+its post-run config view to `ALLOW_PAPER_ORDERS=false`, runs reconciliation,
+and writes the alpha test summary:
+
+```bash
+export ALLOW_PAPER_ORDERS=true
+export IBKR_CLIENT_ID=21
+python -m trader.cli alpha-campaign-run --mode paper --campaign-id "$CAMPAIGN_ID" --read-only-off-confirm READ_ONLY_OFF_FOR_ALPHA_PAPER --allow-fill false --cancel-after-seconds 30
+```
+
+Paper mode still requires the operator to disable IBKR Read-Only API only for
+the execution window and re-enable it immediately afterward. It does not add new
+order routes; any order submission still flows through the existing SPY-only
+`alpha-paper-run` and paper-smoke executor boundary.
+
 ## Read-Only Market-Data Diagnostics
 
 ```bash
