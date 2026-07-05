@@ -27,6 +27,7 @@ from trader.models import (
     PaperOrderSmokeRequest,
     PaperOrderSmokeRunStatus,
     TradeAction,
+    new_campaign_id,
     utc_now,
 )
 
@@ -857,6 +858,7 @@ def run_paper_order_smoke(
 ) -> PaperOrderSmokeReport:
     """Run the gated paper-only order smoke workflow."""
 
+    request = _request_with_campaign_id(request)
     warnings = [
         "IBKR Read-Only API must be disabled only while running paper-order-smoke.",
         "Re-enable IBKR Read-Only API immediately after the smoke run.",
@@ -1146,6 +1148,12 @@ def _validate_smoke_gates(config: TraderConfig, request: PaperOrderSmokeRequest)
     return errors
 
 
+def _request_with_campaign_id(request: PaperOrderSmokeRequest) -> PaperOrderSmokeRequest:
+    if request.campaign_id:
+        return request
+    return request.model_copy(update={"campaign_id": new_campaign_id()})
+
+
 def _duplicate_open_orders(
     open_orders: list[PaperBrokerOpenOrder],
     request: PaperOrderSmokeRequest,
@@ -1248,6 +1256,7 @@ def _build_report(
     return PaperOrderSmokeReport(
         ok=final_status != PaperOrderSmokeRunStatus.FAILED and not report_errors,
         request=request,
+        campaign_id=request.campaign_id,
         mode=_enum_value(config.trading_mode),
         host=config.ibkr_host,
         port=config.ibkr_port,

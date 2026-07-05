@@ -29,6 +29,8 @@ from trader.models import (
 )
 from trader.reporting.reports import markdown_summary
 
+CAMPAIGN_ID = "campaign-001"
+
 
 def now() -> datetime:
     return datetime(2026, 7, 4, 14, tzinfo=UTC)
@@ -62,6 +64,7 @@ def request(**overrides: object) -> AlphaPaperRunRequest:
 def shadow_report(
     *,
     commit_sha: str = "abc123",
+    campaign_id: str | None = CAMPAIGN_ID,
     direction: SignalDirection = SignalDirection.BUY,
 ) -> AlphaShadowRunReport:
     signal_count = 1 if direction else 0
@@ -70,6 +73,7 @@ def shadow_report(
     return AlphaShadowRunReport(
         ok=True,
         commit_sha=commit_sha,
+        campaign_id=campaign_id,
         request=AlphaShadowRunRequest(),
         selected_universe=["SPY"],
         account_summary_verified=True,
@@ -94,6 +98,7 @@ def shadow_report(
 def smoke_report(
     *,
     commit_sha: str = "abc123",
+    campaign_id: str | None = CAMPAIGN_ID,
     ok: bool = True,
     transmitted: bool = True,
     submitted_orders: bool = True,
@@ -102,6 +107,7 @@ def smoke_report(
     return PaperOrderSmokeReport(
         ok=ok,
         commit_sha=commit_sha,
+        campaign_id=campaign_id,
         request=PaperOrderSmokeRequest(
             confirm="PAPER_SMOKE_SPY_1",
             transmit=transmitted,
@@ -264,6 +270,10 @@ def test_alpha_paper_run_submits_one_paper_order_after_verified_reports(
 
     assert report.final_status == AlphaPaperRunStatus.COMPLETED
     assert report.ok is True
+    assert report.campaign_id == CAMPAIGN_ID
+    assert set(report.source_report_campaign_ids.values()) == {CAMPAIGN_ID}
+    assert report.paper_order_report is not None
+    assert report.paper_order_report.campaign_id == CAMPAIGN_ID
     assert report.alpha_shadow_report_verified is True
     assert report.paper_smoke_report_verified is True
     assert report.submitted_orders is True
@@ -339,6 +349,32 @@ def test_alpha_paper_run_rejects_different_commit_report(
     assert report.order_api_invoked is False
 
 
+def test_alpha_paper_run_rejects_mismatched_campaign(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.alpha_paper._current_commit_sha", lambda: "abc123")
+    shadow_path = write_report(tmp_path / "shadow.json", shadow_report())
+    smoke_path = write_report(
+        tmp_path / "smoke.json",
+        smoke_report(campaign_id="campaign-002"),
+    )
+
+    report = run_alpha_paper_run(
+        config(),
+        request(
+            alpha_shadow_report_path=shadow_path.as_posix(),
+            paper_smoke_report_path=smoke_path.as_posix(),
+        ),
+        broker_factory=lambda _config: FakePaperOrderBroker(),
+        now=now(),
+    )
+
+    assert report.final_status == AlphaPaperRunStatus.FAILED
+    assert "campaign_id" in " ".join(report.errors)
+    assert report.order_api_invoked is False
+
+
 def test_alpha_paper_run_requires_transmitted_smoke_report(
     tmp_path: Path,
     monkeypatch,
@@ -410,6 +446,7 @@ def test_alpha_paper_markdown_renders_source_and_order_evidence(
     markdown = markdown_summary(report.model_dump(mode="json"))
 
     assert "# IBKR Alpha Paper Run" in markdown
+    assert CAMPAIGN_ID in markdown
     assert "alpha_shadow_report" in markdown
     assert "Paper Order Evidence" in markdown
     assert "DUQ2****23" in markdown

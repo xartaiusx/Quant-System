@@ -26,6 +26,8 @@ from trader.models import (
 from trader.paper_reconcile import run_paper_reconcile
 from trader.reporting.reports import markdown_summary
 
+CAMPAIGN_ID = "campaign-001"
+
 
 def now() -> datetime:
     return datetime(2026, 7, 4, 16, tzinfo=UTC)
@@ -91,10 +93,15 @@ def broker_report(
     )
 
 
-def smoke_report(*, fill_quantity: Decimal = Decimal("0")) -> PaperOrderSmokeReport:
+def smoke_report(
+    *,
+    campaign_id: str | None = CAMPAIGN_ID,
+    fill_quantity: Decimal = Decimal("0"),
+) -> PaperOrderSmokeReport:
     return PaperOrderSmokeReport(
         ok=True,
         commit_sha="abc123",
+        campaign_id=campaign_id,
         request=PaperOrderSmokeRequest(
             confirm="PAPER_SMOKE_SPY_1",
             transmit=True,
@@ -126,10 +133,11 @@ def smoke_report(*, fill_quantity: Decimal = Decimal("0")) -> PaperOrderSmokeRep
     )
 
 
-def alpha_report() -> AlphaPaperRunReport:
+def alpha_report(*, campaign_id: str | None = CAMPAIGN_ID) -> AlphaPaperRunReport:
     return AlphaPaperRunReport(
         ok=True,
         commit_sha="abc123",
+        campaign_id=campaign_id,
         request=AlphaPaperRunRequest(
             confirm="ALPHA_PAPER_SPY_1",
             cancel_after_seconds=0,
@@ -244,6 +252,8 @@ def test_paper_reconcile_success_serializes_and_keeps_no_order_guarantee(
 
     assert report.ok is True
     assert report.final_status == PaperReconcileStatus.COMPLETED_WITH_WARNINGS
+    assert report.campaign_id == CAMPAIGN_ID
+    assert set(report.source_report_campaign_ids.values()) == {CAMPAIGN_ID}
     assert client.include_account is True
     assert client.include_positions is True
     assert open_broker.disconnected is True
@@ -264,8 +274,34 @@ def test_paper_reconcile_success_serializes_and_keeps_no_order_guarantee(
     assert payload["submitted_orders"] is False
     markdown = markdown_summary(payload)
     assert "IBKR Paper Reconciliation" in markdown
+    assert CAMPAIGN_ID in markdown
     assert "No order guarantee" in markdown
     assert "Broker state fingerprint" in markdown
+
+
+def test_paper_reconcile_fails_on_source_campaign_mismatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.paper_reconcile._current_commit_sha", lambda: "abc123")
+    selected_request = request(tmp_path)
+    Path(selected_request.paper_smoke_report_path).write_text(
+        json.dumps(smoke_report(campaign_id=CAMPAIGN_ID).model_dump(mode="json"))
+    )
+    Path(selected_request.alpha_paper_report_path).write_text(
+        json.dumps(alpha_report(campaign_id="campaign-002").model_dump(mode="json"))
+    )
+
+    report = run_paper_reconcile(
+        config(),
+        selected_request,
+        broker_client_factory=lambda _: FakeBrokerClient(broker_report()),
+        open_order_broker_factory=lambda _: FakeOpenOrderBroker(),
+    )
+
+    assert report.ok is False
+    assert report.final_status == PaperReconcileStatus.FAILED
+    assert "campaign_id" in " ".join(report.errors)
 
 
 def test_paper_reconcile_confirms_zero_positions(tmp_path: Path, monkeypatch) -> None:

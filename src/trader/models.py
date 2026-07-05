@@ -26,6 +26,45 @@ class SerializableModel(BaseModel):
 
     model_config = ConfigDict(frozen=True, use_enum_values=True)
 
+    @field_validator("campaign_id", mode="before", check_fields=False)
+    @classmethod
+    def normalize_campaign_id_field(cls, value: object) -> str | None:
+        return normalize_campaign_id(value)
+
+
+_CAMPAIGN_ID_ALLOWED_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyz"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789"
+    "._:-"
+)
+
+
+def new_campaign_id() -> str:
+    """Return a no-secret local correlation ID for one paper alpha campaign."""
+
+    return f"campaign-{uuid4().hex[:12]}"
+
+
+def normalize_campaign_id(value: object) -> str | None:
+    """Normalize optional campaign IDs used to correlate ignored local reports."""
+
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("campaign_id must be text")
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized) > 80:
+        raise ValueError("campaign_id must be 80 characters or fewer")
+    if any(character not in _CAMPAIGN_ID_ALLOWED_CHARS for character in normalized):
+        raise ValueError(
+            "campaign_id may contain only letters, numbers, dots, underscores, colons, "
+            "and hyphens"
+        )
+    return normalized
+
 
 class AssetType(StrEnum):
     EQUITY = "equity"
@@ -2231,6 +2270,7 @@ class PaperReadinessRunReport(SerializableModel):
 class AlphaShadowRunRequest(SerializableModel):
     """Read-only alpha shadow run request for the first SPY-only paper test."""
 
+    campaign_id: str | None = None
     symbols: list[str] = Field(default_factory=lambda: ["SPY"])
     duration: str = "1 D"
     bar_size: str = "5 mins"
@@ -2329,6 +2369,7 @@ class AlphaShadowRunReport(SerializableModel):
     report_type: str = "alpha_shadow_run"
     command: str = "alpha-shadow-run"
     commit_sha: str | None = None
+    campaign_id: str | None = None
     ok: bool
     request: AlphaShadowRunRequest
     selected_universe: list[str] = Field(default_factory=list)
@@ -2478,6 +2519,7 @@ class PaperOrderQuote(SerializableModel):
 class PaperOrderSmokeRequest(SerializableModel):
     """Strict request for the first paper-only order lifecycle smoke test."""
 
+    campaign_id: str | None = None
     symbol: str = "SPY"
     action: TradeAction = TradeAction.BUY
     quantity: int = 1
@@ -2556,6 +2598,7 @@ class PaperOrderSmokeReport(SerializableModel):
     report_type: str = "paper_order_smoke"
     command: str = "paper-order-smoke"
     commit_sha: str | None = None
+    campaign_id: str | None = None
     ok: bool
     request: PaperOrderSmokeRequest
     mode: str
@@ -2647,6 +2690,7 @@ class PaperOrderSmokeReport(SerializableModel):
 class AlphaPaperRunRequest(SerializableModel):
     """Strict request for the first strategy-gated SPY paper alpha run."""
 
+    campaign_id: str | None = None
     symbol: str = "SPY"
     quantity: int = 1
     allow_fill: bool = False
@@ -2719,7 +2763,9 @@ class AlphaPaperRunReport(SerializableModel):
     client_id: int
     broker_kind: str
     commit_sha: str | None = None
+    campaign_id: str | None = None
     source_report_paths: dict[str, str] = Field(default_factory=dict)
+    source_report_campaign_ids: dict[str, str | None] = Field(default_factory=dict)
     alpha_shadow_report_verified: bool = False
     paper_smoke_report_verified: bool = False
     alpha_shadow_commit_sha: str | None = None
@@ -2801,6 +2847,7 @@ class AlphaPaperRunReport(SerializableModel):
 class PaperReconcileRequest(SerializableModel):
     """Read-only post-paper-run broker reconciliation request."""
 
+    campaign_id: str | None = None
     timeout_seconds: float = 30
     paper_smoke_report_path: str = "reports/latest_paper_order_smoke.json"
     alpha_paper_report_path: str = "reports/latest_alpha_paper_run.json"
@@ -2842,6 +2889,7 @@ class PaperOrderEvidence(SerializableModel):
     source: str
     report_path: str
     report_type: str | None = None
+    campaign_id: str | None = None
     ok: bool | None = None
     final_status: str | None = None
     commit_sha: str | None = None
@@ -2871,6 +2919,7 @@ class PaperReconcileReport(SerializableModel):
     client_id: int
     broker_kind: str
     commit_sha: str | None = None
+    campaign_id: str | None = None
     broker_connected: bool = False
     account_summary_verified: bool = False
     account_summary_source: str = "unavailable_or_mock_fallback_rejected"
@@ -2892,6 +2941,7 @@ class PaperReconcileReport(SerializableModel):
     commission_reports: list[dict[str, Any]] = Field(default_factory=list)
     broker_state_fingerprint: str | None = None
     source_report_paths: dict[str, str] = Field(default_factory=dict)
+    source_report_campaign_ids: dict[str, str | None] = Field(default_factory=dict)
     latest_order_evidence: list[PaperOrderEvidence] = Field(default_factory=list)
     latest_order_ids: list[int] = Field(default_factory=list)
     latest_perm_ids: list[int] = Field(default_factory=list)
@@ -2952,6 +3002,7 @@ class PaperReconcileReport(SerializableModel):
 class AlphaTestSummaryRequest(SerializableModel):
     """Offline summary request for a paper alpha test campaign."""
 
+    campaign_id: str | None = None
     alpha_shadow_report_path: str = "reports/latest_alpha_shadow_run.json"
     paper_smoke_report_path: str = "reports/latest_paper_order_smoke.json"
     alpha_paper_report_path: str = "reports/latest_alpha_paper_run.json"
@@ -2988,7 +3039,9 @@ class AlphaTestSummaryReport(SerializableModel):
     ok: bool
     request: AlphaTestSummaryRequest
     commit_sha: str | None = None
+    campaign_id: str | None = None
     source_report_paths: dict[str, str] = Field(default_factory=dict)
+    source_report_campaign_ids: dict[str, str | None] = Field(default_factory=dict)
     source_report_statuses: dict[str, str] = Field(default_factory=dict)
     source_report_commits: dict[str, str | None] = Field(default_factory=dict)
     source_report_timestamps: dict[str, datetime | None] = Field(default_factory=dict)

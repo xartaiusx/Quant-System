@@ -52,6 +52,7 @@ def run_alpha_paper_run(
         "This command refuses live ports, live mode, market orders, shorts, and batches.",
     ]
     errors = _config_errors(config, alpha_request)
+    selected_campaign_id = alpha_request.campaign_id
     source_paths = {
         "alpha_shadow_report": alpha_request.alpha_shadow_report_path,
         "paper_smoke_report": alpha_request.paper_smoke_report_path,
@@ -62,6 +63,7 @@ def run_alpha_paper_run(
             config,
             alpha_request,
             current_commit=current_commit,
+            campaign_id=selected_campaign_id,
             source_report_paths=source_paths,
             warnings=warnings,
             errors=errors,
@@ -74,6 +76,14 @@ def run_alpha_paper_run(
     smoke_report, smoke_errors = _load_smoke_report(Path(alpha_request.paper_smoke_report_path))
     errors.extend(shadow_errors)
     errors.extend(smoke_errors)
+    selected_campaign_id, campaign_errors = _source_campaign_context(
+        alpha_request.campaign_id,
+        {
+            "alpha-shadow report": shadow_report,
+            "paper-order-smoke report": smoke_report,
+        },
+    )
+    errors.extend(campaign_errors)
 
     if shadow_report is not None:
         errors.extend(
@@ -101,6 +111,7 @@ def run_alpha_paper_run(
             config,
             alpha_request,
             current_commit=current_commit,
+            campaign_id=selected_campaign_id,
             source_report_paths=source_paths,
             shadow_report=shadow_report,
             smoke_report=smoke_report,
@@ -118,6 +129,7 @@ def run_alpha_paper_run(
             config,
             alpha_request,
             current_commit=current_commit,
+            campaign_id=selected_campaign_id,
             source_report_paths=source_paths,
             shadow_report=shadow_report,
             smoke_report=smoke_report,
@@ -133,6 +145,7 @@ def run_alpha_paper_run(
             config,
             alpha_request,
             current_commit=current_commit,
+            campaign_id=selected_campaign_id,
             source_report_paths=source_paths,
             shadow_report=shadow_report,
             smoke_report=smoke_report,
@@ -145,6 +158,7 @@ def run_alpha_paper_run(
         )
 
     order_request = PaperOrderSmokeRequest(
+        campaign_id=selected_campaign_id,
         symbol=alpha_request.symbol,
         quantity=alpha_request.quantity,
         transmit=True,
@@ -166,6 +180,7 @@ def run_alpha_paper_run(
         config,
         alpha_request,
         current_commit=current_commit,
+        campaign_id=selected_campaign_id,
         source_report_paths=source_paths,
         shadow_report=shadow_report,
         smoke_report=smoke_report,
@@ -292,6 +307,33 @@ def _paper_smoke_report_errors(
     return errors
 
 
+def _source_campaign_context(
+    request_campaign_id: str | None,
+    reports: Mapping[str, AlphaShadowRunReport | PaperOrderSmokeReport | None],
+) -> tuple[str | None, list[str]]:
+    campaign_ids = {
+        label: report.campaign_id
+        for label, report in reports.items()
+        if report is not None
+    }
+    present_ids = {campaign_id for campaign_id in campaign_ids.values() if campaign_id}
+    selected_campaign_id = request_campaign_id
+    if selected_campaign_id is None and len(present_ids) == 1:
+        selected_campaign_id = next(iter(present_ids))
+
+    errors: list[str] = []
+    if len(present_ids) > 1:
+        errors.append("source reports have mismatched campaign_id values")
+    if selected_campaign_id is None:
+        return None, errors
+    for label, campaign_id in campaign_ids.items():
+        if campaign_id is None:
+            errors.append(f"{label} lacks campaign_id")
+        elif campaign_id != selected_campaign_id:
+            errors.append(f"{label} campaign_id does not match {selected_campaign_id}")
+    return selected_campaign_id, errors
+
+
 def _shared_report_errors(
     payload: Mapping[str, Any],
     *,
@@ -343,6 +385,7 @@ def _build_report(
     request: AlphaPaperRunRequest,
     *,
     current_commit: str | None,
+    campaign_id: str | None,
     source_report_paths: dict[str, str],
     shadow_report: AlphaShadowRunReport | None = None,
     smoke_report: PaperOrderSmokeReport | None = None,
@@ -355,16 +398,26 @@ def _build_report(
     final_status: AlphaPaperRunStatus,
 ) -> AlphaPaperRunReport:
     order_report = paper_order_report
+    report_request = (
+        request
+        if request.campaign_id == campaign_id
+        else request.model_copy(update={"campaign_id": campaign_id})
+    )
     return AlphaPaperRunReport(
         ok=final_status != AlphaPaperRunStatus.FAILED,
-        request=request,
+        request=report_request,
         mode=_enum_value(config.trading_mode),
         host=config.ibkr_host,
         port=config.ibkr_port,
         client_id=config.ibkr_client_id,
         broker_kind=config.inferred_broker_kind,
         commit_sha=current_commit,
+        campaign_id=campaign_id,
         source_report_paths=source_report_paths,
+        source_report_campaign_ids={
+            "alpha_shadow_report": shadow_report.campaign_id if shadow_report else None,
+            "paper_smoke_report": smoke_report.campaign_id if smoke_report else None,
+        },
         alpha_shadow_report_verified=_prerequisite_verified(shadow_report, current_commit),
         paper_smoke_report_verified=_prerequisite_verified(smoke_report, current_commit),
         alpha_shadow_commit_sha=_model_extra_commit(shadow_report),
