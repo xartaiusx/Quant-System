@@ -327,6 +327,7 @@ Finally summarize the local campaign evidence:
 
 ```bash
 python -m trader.cli alpha-test-summary --campaign-id "$CAMPAIGN_ID"
+python -m trader.cli paper-ledger-update --campaign-id "$CAMPAIGN_ID"
 ```
 
 Expected behavior:
@@ -340,6 +341,14 @@ Expected behavior:
 - records fill/cancel outcome, order IDs, perm IDs, open-order count, masked
   account evidence, source report paths, warnings, errors, and next eligibility
 - writes ignored JSON and Markdown reports under `reports/`
+
+`paper-ledger-update` runs offline after the summary. It upserts one masked
+campaign row into ignored local `state/paper_ledger.jsonl` and writes an ignored
+update report under `reports/`. It fails closed when the summary or
+reconciliation is not from the current commit, the campaign IDs differ, broker
+account evidence is unavailable, broker positions were not queried, open orders
+remain, the broker-state fingerprint is missing, or summary order/perm IDs are
+missing from broker-state evidence.
 
 ## Sequential Alpha Campaign Runner
 

@@ -246,6 +246,14 @@ class AlphaCampaignRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class PaperLedgerUpdateStatus(StrEnum):
+    """Local paper ledger update states."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    FAILED = "failed"
+
+
 class PaperReadinessStageStatus(StrEnum):
     """Stage-level status for the paper readiness orchestration."""
 
@@ -3221,6 +3229,120 @@ class AlphaCampaignRunReport(SerializableModel):
             raise ValueError("market orders are not allowed")
         if self.paper_orders_enabled and self.mode != AlphaCampaignRunMode.PAPER:
             raise ValueError("paper_orders_enabled is only valid in paper mode")
+        return self
+
+
+class PaperLedgerEntry(SerializableModel):
+    """One ignored local broker-truth ledger row for a paper campaign."""
+
+    campaign_id: str
+    commit_sha: str | None = None
+    recorded_at: datetime = Field(default_factory=utc_now)
+    source_report_paths: dict[str, str] = Field(default_factory=dict)
+    account_ids_masked: list[str] = Field(default_factory=list)
+    account_summary_verified: bool = False
+    open_order_count: int = 0
+    zero_positions_confirmed: bool = False
+    positions_query_completed: bool = False
+    latest_order_ids: list[int] = Field(default_factory=list)
+    latest_perm_ids: list[int] = Field(default_factory=list)
+    paper_smoke_order_status: str | None = None
+    paper_smoke_fill_quantity: Decimal | None = None
+    paper_smoke_canceled: bool | None = None
+    alpha_paper_order_status: str | None = None
+    alpha_paper_fill_quantity: Decimal | None = None
+    alpha_paper_canceled: bool | None = None
+    broker_state_fingerprint: str | None = None
+    next_eligible_for_alpha_window: bool = False
+    next_eligibility_reason: list[str] = Field(default_factory=list)
+
+    @field_validator("campaign_id")
+    @classmethod
+    def validate_campaign_id_required(cls, value: str) -> str:
+        normalized = normalize_campaign_id(value)
+        if normalized is None:
+            raise ValueError("paper ledger campaign_id is required")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_ledger_entry(self) -> PaperLedgerEntry:
+        if self.open_order_count < 0:
+            raise ValueError("open_order_count must not be negative")
+        return self
+
+
+class PaperLedgerUpdateRequest(SerializableModel):
+    """Offline request to upsert ignored local paper campaign ledger evidence."""
+
+    campaign_id: str | None = None
+    alpha_test_summary_report_path: str = "reports/latest_alpha_test_summary.json"
+    paper_reconcile_report_path: str = "reports/latest_paper_reconcile.json"
+    ledger_path: str = "state/paper_ledger.jsonl"
+
+    @field_validator(
+        "alpha_test_summary_report_path",
+        "paper_reconcile_report_path",
+        "ledger_path",
+    )
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("paper ledger paths must not be empty")
+        return normalized
+
+
+class PaperLedgerUpdateReport(SerializableModel):
+    """No-secret report for updating the ignored local paper ledger."""
+
+    title: str = "IBKR Paper Ledger Update"
+    report_type: str = "paper_ledger_update"
+    command: str = "paper-ledger-update"
+    ok: bool
+    request: PaperLedgerUpdateRequest
+    commit_sha: str | None = None
+    campaign_id: str | None = None
+    ledger_path: str
+    ledger_entry: PaperLedgerEntry | None = None
+    ledger_entry_written: bool = False
+    ledger_record_count: int = 0
+    replaced_existing_entry: bool = False
+    source_report_paths: dict[str, str] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    live_orders_enabled: bool = False
+    live_route_possible: bool = False
+    order_routing_enabled: bool = False
+    order_api_invoked: bool = False
+    broker_contacted: bool = False
+    futures_contracts_enabled: bool = False
+    direct_futures_data_enabled: bool = False
+    options_contracts_enabled: bool = False
+    safety_statement: str = (
+        "paper-ledger-update is offline-only. It reads ignored local reports and "
+        "upserts one masked JSONL ledger row; it does not contact IBKR or invoke order APIs."
+    )
+    final_status: PaperLedgerUpdateStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_ledger_update_safety(self) -> PaperLedgerUpdateReport:
+        if self.live_orders_enabled or self.live_route_possible:
+            raise ValueError("live order routing must remain disabled")
+        if self.order_routing_enabled or self.order_api_invoked:
+            raise ValueError("paper-ledger-update must not invoke order routing")
+        if self.broker_contacted:
+            raise ValueError("paper-ledger-update must remain offline")
+        if self.paper_orders_enabled:
+            raise ValueError("paper-ledger-update must not enable paper orders")
+        if self.futures_contracts_enabled or self.direct_futures_data_enabled:
+            raise ValueError("direct futures must remain disabled")
+        if self.options_contracts_enabled:
+            raise ValueError("options must remain disabled")
+        if self.ledger_entry_written and self.ledger_entry is None:
+            raise ValueError("written ledger reports must include a ledger entry")
         return self
 
 

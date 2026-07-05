@@ -57,6 +57,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return alpha_test_summary_markdown(payload)
     if payload.get("report_type") == "alpha_campaign_run":
         return alpha_campaign_run_markdown(payload)
+    if payload.get("report_type") == "paper_ledger_update":
+        return paper_ledger_update_markdown(payload)
 
     lines = [
         f"# {payload.get('title', 'Trading Report')}",
@@ -2060,6 +2062,94 @@ def alpha_campaign_run_markdown(payload: Mapping[str, Any]) -> str:
     if isinstance(report_paths, Mapping) and report_paths:
         for label, path in sorted(report_paths.items()):
             lines.append(f"- `{label}`: `{path}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def paper_ledger_update_markdown(payload: Mapping[str, Any]) -> str:
+    """Render the offline paper ledger update report."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    source_paths = payload.get("source_report_paths", {})
+    ledger_entry = payload.get("ledger_entry") or {}
+    next_reasons = (
+        ledger_entry.get("next_eligibility_reason", [])
+        if isinstance(ledger_entry, Mapping)
+        else []
+    )
+
+    lines = [
+        f"# {payload.get('title', 'IBKR Paper Ledger Update')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'paper-ledger-update')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Commit SHA: `{payload.get('commit_sha', 'unknown')}`",
+        f"- Campaign ID: `{payload.get('campaign_id', 'n/a')}`",
+        f"- Ledger path: `{payload.get('ledger_path', 'unknown')}`",
+        f"- Ledger entry written: `{payload.get('ledger_entry_written', False)}`",
+        f"- Ledger record count: `{payload.get('ledger_record_count', 0)}`",
+        f"- Replaced existing entry: `{payload.get('replaced_existing_entry', False)}`",
+        f"- Submitted orders: `{payload.get('submitted_orders', False)}`",
+        f"- Paper orders enabled: `{payload.get('paper_orders_enabled', True)}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        "",
+        "## Safety",
+        "",
+        str(payload.get("safety_statement", "Paper ledger safety scope unavailable.")),
+        "",
+        "## Source Reports",
+        "",
+    ]
+    if isinstance(source_paths, Mapping) and source_paths:
+        for label, path in sorted(source_paths.items()):
+            lines.append(f"- `{label}`: `{path}`")
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Ledger Entry", ""])
+    if isinstance(ledger_entry, Mapping) and ledger_entry:
+        lines.extend(
+            [
+                f"- Recorded at: `{ledger_entry.get('recorded_at', 'unknown')}`",
+                f"- Account verified: `{ledger_entry.get('account_summary_verified', False)}`",
+                f"- Open-order count: `{ledger_entry.get('open_order_count', 'unknown')}`",
+                "- Positions query completed: "
+                f"`{ledger_entry.get('positions_query_completed', False)}`",
+                "- Zero positions confirmed: "
+                f"`{ledger_entry.get('zero_positions_confirmed', False)}`",
+                f"- Latest order IDs: `{_sample_values(ledger_entry.get('latest_order_ids', []))}`",
+                f"- Latest perm IDs: `{_sample_values(ledger_entry.get('latest_perm_ids', []))}`",
+                "- Paper smoke order status: "
+                f"`{ledger_entry.get('paper_smoke_order_status', 'n/a')}`",
+                "- Paper smoke fill quantity: "
+                f"`{ledger_entry.get('paper_smoke_fill_quantity', 'n/a')}`",
+                "- Paper smoke canceled: "
+                f"`{ledger_entry.get('paper_smoke_canceled', 'n/a')}`",
+                "- Alpha paper order status: "
+                f"`{ledger_entry.get('alpha_paper_order_status', 'n/a')}`",
+                "- Alpha paper fill quantity: "
+                f"`{ledger_entry.get('alpha_paper_fill_quantity', 'n/a')}`",
+                "- Alpha paper canceled: "
+                f"`{ledger_entry.get('alpha_paper_canceled', 'n/a')}`",
+                "- Broker-state fingerprint: "
+                f"`{ledger_entry.get('broker_state_fingerprint', 'missing')}`",
+                "- Next eligible for alpha window: "
+                f"`{ledger_entry.get('next_eligible_for_alpha_window', False)}`",
+            ]
+        )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Next Eligibility", ""])
+    if isinstance(next_reasons, list) and next_reasons:
+        lines.extend(f"- {reason}" for reason in next_reasons)
     else:
         lines.append("- None")
 
