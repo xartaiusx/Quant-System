@@ -6,7 +6,11 @@ from decimal import Decimal
 from pathlib import Path
 
 from trader.config import BrokerKind, TraderConfig, TradingMode
-from trader.execution.paper_order_smoke import PaperBrokerOpenOrder
+from trader.execution.paper_order_smoke import (
+    PaperBrokerCommissionReport,
+    PaperBrokerExecution,
+    PaperBrokerOpenOrder,
+)
 from trader.models import (
     AlphaPaperRunReport,
     AlphaPaperRunRequest,
@@ -50,7 +54,12 @@ def request(tmp_path: Path) -> PaperReconcileRequest:
     )
 
 
-def broker_report(*, account: bool = True, positions: bool = True) -> BrokerDiagnosticReport:
+def broker_report(
+    *,
+    account: bool = True,
+    positions: bool = True,
+    positions_query_completed: bool = True,
+) -> BrokerDiagnosticReport:
     return BrokerDiagnosticReport(
         ok=True,
         mode="paper",
@@ -77,17 +86,19 @@ def broker_report(*, account: bool = True, positions: bool = True) -> BrokerDiag
             if positions
             else []
         ),
+        positions_query_completed=positions_query_completed,
         final_status="connected",
     )
 
 
-def smoke_report() -> PaperOrderSmokeReport:
+def smoke_report(*, fill_quantity: Decimal = Decimal("0")) -> PaperOrderSmokeReport:
     return PaperOrderSmokeReport(
         ok=True,
         commit_sha="abc123",
         request=PaperOrderSmokeRequest(
             confirm="PAPER_SMOKE_SPY_1",
             transmit=True,
+            allow_fill=fill_quantity > 0,
             cancel_after_seconds=0,
         ),
         mode="paper",
@@ -106,10 +117,10 @@ def smoke_report() -> PaperOrderSmokeReport:
         transmitted=True,
         order_id=22,
         perm_id=2200,
-        order_status="Cancelled",
-        fill_quantity=Decimal("0"),
-        cancel_requested=True,
-        canceled=True,
+        order_status="Filled" if fill_quantity > 0 else "Cancelled",
+        fill_quantity=fill_quantity,
+        cancel_requested=fill_quantity == 0,
+        canceled=fill_quantity == 0,
         final_status=PaperOrderSmokeRunStatus.COMPLETED,
         timestamp=now(),
     )
@@ -179,8 +190,17 @@ class FakeBrokerClient:
 
 
 class FakeOpenOrderBroker:
-    def __init__(self, orders: list[PaperBrokerOpenOrder] | None = None) -> None:
+    def __init__(
+        self,
+        orders: list[PaperBrokerOpenOrder] | None = None,
+        executions: list[PaperBrokerExecution] | None = None,
+        commissions: list[PaperBrokerCommissionReport] | None = None,
+        fail_executions: bool = False,
+    ) -> None:
         self.orders = orders or []
+        self.executions = executions or []
+        self.commissions = commissions or []
+        self.fail_executions = fail_executions
         self.connected = False
         self.disconnected = False
 
@@ -194,6 +214,16 @@ class FakeOpenOrderBroker:
     def request_open_orders(self, *, timeout: float) -> list[PaperBrokerOpenOrder]:
         del timeout
         return self.orders
+
+    def request_executions(
+        self,
+        *,
+        timeout: float,
+    ) -> tuple[list[PaperBrokerExecution], list[PaperBrokerCommissionReport]]:
+        del timeout
+        if self.fail_executions:
+            raise RuntimeError("execution request timed out")
+        return self.executions, self.commissions
 
 
 def test_paper_reconcile_success_serializes_and_keeps_no_order_guarantee(
@@ -218,7 +248,12 @@ def test_paper_reconcile_success_serializes_and_keeps_no_order_guarantee(
     assert client.include_positions is True
     assert open_broker.disconnected is True
     assert report.account_summary_verified is True
+    assert report.positions_query_completed is True
+    assert report.zero_positions_confirmed is False
+    assert report.positions_unavailable_reason is None
     assert report.open_order_count == 0
+    assert report.executions_source == "broker_read_only_current_day_executions"
+    assert report.broker_state_fingerprint
     assert report.latest_order_ids == [22, 23]
     assert report.latest_perm_ids == [2200, 2300]
     assert report.submitted_orders is False
@@ -230,6 +265,147 @@ def test_paper_reconcile_success_serializes_and_keeps_no_order_guarantee(
     markdown = markdown_summary(payload)
     assert "IBKR Paper Reconciliation" in markdown
     assert "No order guarantee" in markdown
+    assert "Broker state fingerprint" in markdown
+
+
+def test_paper_reconcile_confirms_zero_positions(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("trader.paper_reconcile._current_commit_sha", lambda: "abc123")
+    selected_request = write_reports(tmp_path)
+
+    report = run_paper_reconcile(
+        config(),
+        selected_request,
+        broker_client_factory=lambda _: FakeBrokerClient(
+            broker_report(positions=False, positions_query_completed=True)
+        ),
+        open_order_broker_factory=lambda _: FakeOpenOrderBroker(),
+    )
+
+    assert report.ok is True
+    assert report.positions_query_completed is True
+    assert report.zero_positions_confirmed is True
+    assert report.broker_positions_available is True
+    assert report.positions_source == "broker_read_only_positions"
+    assert report.positions_unavailable_reason is None
+
+
+def test_paper_reconcile_labels_unavailable_positions(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("trader.paper_reconcile._current_commit_sha", lambda: "abc123")
+    selected_request = write_reports(tmp_path)
+
+    report = run_paper_reconcile(
+        config(),
+        selected_request,
+        broker_client_factory=lambda _: FakeBrokerClient(
+            broker_report(positions=False, positions_query_completed=False)
+        ),
+        open_order_broker_factory=lambda _: FakeOpenOrderBroker(),
+    )
+
+    assert report.ok is True
+    assert report.positions_query_completed is False
+    assert report.zero_positions_confirmed is False
+    assert report.broker_positions_available is False
+    assert report.positions_source == "unavailable_or_mock_fallback_rejected"
+    assert report.positions_unavailable_reason is not None
+
+
+def test_paper_reconcile_records_execution_and_commission_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.paper_reconcile._current_commit_sha", lambda: "abc123")
+    selected_request = request(tmp_path)
+    Path(selected_request.paper_smoke_report_path).write_text(
+        json.dumps(smoke_report(fill_quantity=Decimal("1")).model_dump(mode="json"))
+    )
+    Path(selected_request.alpha_paper_report_path).write_text(
+        json.dumps(alpha_report().model_dump(mode="json"))
+    )
+    execution = PaperBrokerExecution(
+        req_id=20001,
+        order_id=22,
+        perm_id=2200,
+        exec_id="0001",
+        symbol="SPY",
+        side="BOT",
+        shares=Decimal("1"),
+        price=Decimal("500.01"),
+        time="20260705  09:31:00",
+        account_id_masked="DUQ2****23",
+        exchange="ARCA",
+        cum_qty=Decimal("1"),
+        avg_price=Decimal("500.01"),
+    )
+    commission = PaperBrokerCommissionReport(
+        exec_id="0001",
+        commission=Decimal("0.35"),
+        currency="USD",
+        realized_pnl=Decimal("0"),
+        yield_value=None,
+        yield_redemption_date=None,
+    )
+
+    report = run_paper_reconcile(
+        config(),
+        selected_request,
+        broker_client_factory=lambda _: FakeBrokerClient(broker_report()),
+        open_order_broker_factory=lambda _: FakeOpenOrderBroker(
+            executions=[execution],
+            commissions=[commission],
+        ),
+    )
+
+    assert report.ok is True
+    assert report.executions_available is True
+    assert report.execution_order_ids == [22]
+    assert report.executions_snapshot[0]["order_id"] == 22
+    assert report.executions_snapshot[0]["shares"] == "1"
+    assert report.commission_reports[0]["commission"] == "0.35"
+
+
+def test_paper_reconcile_fails_when_filled_order_lacks_execution(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.paper_reconcile._current_commit_sha", lambda: "abc123")
+    selected_request = request(tmp_path)
+    Path(selected_request.paper_smoke_report_path).write_text(
+        json.dumps(smoke_report(fill_quantity=Decimal("1")).model_dump(mode="json"))
+    )
+    Path(selected_request.alpha_paper_report_path).write_text(
+        json.dumps(alpha_report().model_dump(mode="json"))
+    )
+
+    report = run_paper_reconcile(
+        config(),
+        selected_request,
+        broker_client_factory=lambda _: FakeBrokerClient(broker_report()),
+        open_order_broker_factory=lambda _: FakeOpenOrderBroker(),
+    )
+
+    assert report.ok is False
+    assert report.final_status == PaperReconcileStatus.FAILED
+    assert "missing broker execution rows" in " ".join(report.errors)
+
+
+def test_paper_reconcile_fails_when_execution_query_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.paper_reconcile._current_commit_sha", lambda: "abc123")
+    selected_request = write_reports(tmp_path)
+
+    report = run_paper_reconcile(
+        config(),
+        selected_request,
+        broker_client_factory=lambda _: FakeBrokerClient(broker_report()),
+        open_order_broker_factory=lambda _: FakeOpenOrderBroker(fail_executions=True),
+    )
+
+    assert report.ok is False
+    assert report.final_status == PaperReconcileStatus.FAILED
+    assert "execution-history query is unavailable" in " ".join(report.errors)
 
 
 def test_paper_reconcile_reports_open_order_warning(tmp_path: Path, monkeypatch) -> None:

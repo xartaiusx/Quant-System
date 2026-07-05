@@ -33,11 +33,13 @@ from trader.models import (
 try:
     _client_module = importlib.import_module("ibapi.client")
     _contract_module = importlib.import_module("ibapi.contract")
+    _execution_module = importlib.import_module("ibapi.execution")
     _order_module = importlib.import_module("ibapi.order")
     _wrapper_module = importlib.import_module("ibapi.wrapper")
     _IBAPI_IMPORT_ERROR: BaseException | None = None
     _IBAPI_ECLIENT: Any = _client_module.EClient
     _IBAPI_CONTRACT: Any = _contract_module.Contract
+    _IBAPI_EXECUTION_FILTER: Any = _execution_module.ExecutionFilter
     _IBAPI_ORDER: Any = _order_module.Order
     _IBAPI_EWRAPPER: Any = _wrapper_module.EWrapper
 except Exception as exc:  # pragma: no cover - exercised through availability injection
@@ -66,6 +68,7 @@ except Exception as exc:  # pragma: no cover - exercised through availability in
 
     _IBAPI_ECLIENT = _MissingEClient
     _IBAPI_CONTRACT = None
+    _IBAPI_EXECUTION_FILTER = None
     _IBAPI_ORDER = None
     _IBAPI_EWRAPPER = _MissingEWrapper
 
@@ -115,6 +118,37 @@ class PaperBrokerOpenOrder:
     action: str | None
     status: str | None
     perm_id: int | None = None
+
+
+@dataclass(frozen=True)
+class PaperBrokerExecution:
+    """Read-only execution row returned by broker reconciliation."""
+
+    req_id: int
+    order_id: int | None
+    perm_id: int | None
+    exec_id: str | None
+    symbol: str | None
+    side: str | None
+    shares: Decimal | None
+    price: Decimal | None
+    time: str | None
+    account_id_masked: str | None
+    exchange: str | None
+    cum_qty: Decimal | None
+    avg_price: Decimal | None
+
+
+@dataclass(frozen=True)
+class PaperBrokerCommissionReport:
+    """Read-only commission row returned by broker reconciliation."""
+
+    exec_id: str | None
+    commission: Decimal | None
+    currency: str | None
+    realized_pnl: Decimal | None
+    yield_value: Decimal | None
+    yield_redemption_date: int | None
 
 
 @dataclass(frozen=True)
@@ -186,6 +220,7 @@ class PaperOrderAppProtocol(Protocol):
     open_order_event: threading.Event
     open_order_end_event: threading.Event
     order_event: threading.Event
+    execution_details_end_event: threading.Event
     market_data_events: dict[int, threading.Event]
     contract_details_events: dict[int, threading.Event]
     next_valid_order_id: int | None
@@ -196,6 +231,8 @@ class PaperOrderAppProtocol(Protocol):
     order_perm_ids: dict[int, int]
     filled_quantities: dict[int, Decimal]
     remaining_quantities: dict[int, Decimal]
+    executions: list[PaperBrokerExecution]
+    commission_reports: list[PaperBrokerCommissionReport]
     quote_values: dict[int, dict[str, Decimal]]
     quote_timestamps: dict[int, Any]
     callback_events: list[PaperOrderCallbackEvent]
@@ -221,6 +258,9 @@ class PaperOrderAppProtocol(Protocol):
         raise NotImplementedError
 
     def reqOpenOrders(self) -> None:
+        raise NotImplementedError
+
+    def reqExecutions(self, reqId: int, filter: object) -> None:
         raise NotImplementedError
 
     def reqMarketDataType(self, marketDataType: int) -> None:
@@ -260,6 +300,7 @@ class _PaperOrderIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
         self.open_order_event = threading.Event()
         self.open_order_end_event = threading.Event()
         self.order_event = threading.Event()
+        self.execution_details_end_event = threading.Event()
         self.market_data_events: dict[int, threading.Event] = {}
         self.contract_details_events: dict[int, threading.Event] = {}
         self.next_valid_order_id: int | None = None
@@ -270,6 +311,8 @@ class _PaperOrderIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
         self.order_perm_ids: dict[int, int] = {}
         self.filled_quantities: dict[int, Decimal] = {}
         self.remaining_quantities: dict[int, Decimal] = {}
+        self.executions: list[PaperBrokerExecution] = []
+        self.commission_reports: list[PaperBrokerCommissionReport] = []
         self.quote_values: dict[int, dict[str, Decimal]] = {}
         self.quote_timestamps: dict[int, Any] = {}
         self.callback_events: list[PaperOrderCallbackEvent] = []
@@ -381,11 +424,36 @@ class _PaperOrderIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
         self.order_event.set()
 
     def execDetails(self, reqId: int, contract: object, execution: object) -> None:  # noqa: N802
-        del reqId, contract
         order_id = _safe_int(getattr(execution, "orderId", None))
         perm_id = _safe_int(getattr(execution, "permId", None))
+        exec_id = _safe_str(getattr(execution, "execId", None))
+        symbol = _safe_str(getattr(contract, "symbol", None))
+        side = _safe_str(getattr(execution, "side", None))
         shares = _safe_decimal(getattr(execution, "shares", None))
+        price = _safe_decimal(getattr(execution, "price", None))
+        execution_time = _safe_str(getattr(execution, "time", None))
+        account = _safe_str(getattr(execution, "acctNumber", None))
+        exchange = _safe_str(getattr(execution, "exchange", None))
+        cum_qty = _safe_decimal(getattr(execution, "cumQty", None))
+        avg_price = _safe_decimal(getattr(execution, "avgPrice", None))
         with self._lock:
+            self.executions.append(
+                PaperBrokerExecution(
+                    req_id=reqId,
+                    order_id=order_id,
+                    perm_id=perm_id,
+                    exec_id=exec_id,
+                    symbol=symbol,
+                    side=side,
+                    shares=shares,
+                    price=price,
+                    time=execution_time,
+                    account_id_masked=mask_account_id(account) if account else None,
+                    exchange=exchange,
+                    cum_qty=cum_qty,
+                    avg_price=avg_price,
+                )
+            )
             self.callback_events.append(
                 PaperOrderCallbackEvent(
                     event_type="execDetails",
@@ -396,6 +464,24 @@ class _PaperOrderIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
                 )
             )
         self.order_event.set()
+
+    def execDetailsEnd(self, _reqId: int) -> None:  # noqa: N802
+        self.execution_details_end_event.set()
+
+    def commissionReport(self, commissionReport: object) -> None:  # noqa: N802
+        with self._lock:
+            self.commission_reports.append(
+                PaperBrokerCommissionReport(
+                    exec_id=_safe_str(getattr(commissionReport, "execId", None)),
+                    commission=_safe_decimal(getattr(commissionReport, "commission", None)),
+                    currency=_safe_str(getattr(commissionReport, "currency", None)),
+                    realized_pnl=_safe_decimal(getattr(commissionReport, "realizedPNL", None)),
+                    yield_value=_safe_decimal(getattr(commissionReport, "yield_", None)),
+                    yield_redemption_date=_safe_int(
+                        getattr(commissionReport, "yieldRedemptionDate", None)
+                    ),
+                )
+            )
 
     def tickPrice(self, reqId: int, tickType: int, price: float, _attrib: object) -> None:  # noqa: N802
         field = _PRICE_TICK_FIELDS.get(tickType)
@@ -450,6 +536,7 @@ class _PaperOrderIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
     def _release_events(self, req_id: int | None = None) -> None:
         self.order_event.set()
         self.open_order_event.set()
+        self.execution_details_end_event.set()
         if req_id is None or req_id < 0:
             for event in self.market_data_events.values():
                 event.set()
@@ -609,6 +696,23 @@ class IBKRPaperOrderBroker:
         app.reqOpenOrders()
         app.open_order_end_event.wait(timeout)
         return list(app.open_orders.values())
+
+    def request_executions(
+        self,
+        *,
+        timeout: float,
+    ) -> tuple[list[PaperBrokerExecution], list[PaperBrokerCommissionReport]]:
+        """Request read-only current-day execution evidence."""
+
+        app = self._require_app()
+        req_id = self._next_request_id()
+        app.execution_details_end_event.clear()
+        app.reqExecutions(req_id, _make_execution_filter())
+        if not app.execution_details_end_event.wait(timeout):
+            raise PaperOrderSmokeError(
+                f"execution reconciliation timed out after {timeout:g} seconds"
+            )
+        return list(app.executions), list(app.commission_reports)
 
     def request_quote(
         self,
@@ -1213,6 +1317,12 @@ def _make_stock_contract(symbol: str) -> object:
     return contract
 
 
+def _make_execution_filter() -> object:
+    if _IBAPI_EXECUTION_FILTER is None:
+        raise PaperOrderSmokeError("ibapi ExecutionFilter class is unavailable")
+    return _IBAPI_EXECUTION_FILTER()
+
+
 def _make_limit_order(
     *,
     action: TradeAction,
@@ -1263,6 +1373,13 @@ def _safe_decimal(value: Any) -> Decimal | None:
         return Decimal(str(value))
     except Exception:
         return None
+
+
+def _safe_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _read_only_rejection(errors: list[str]) -> bool:

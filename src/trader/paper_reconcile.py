@@ -6,14 +6,18 @@ import json
 import subprocess
 from collections.abc import Callable, Mapping
 from contextlib import suppress
+from dataclasses import asdict
+from decimal import Decimal
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from trader.config import LIVE_PORTS, PAPER_PORTS, TraderConfig, TradingMode
 from trader.execution.paper_order_smoke import (
     IBKRPaperOrderBroker,
+    PaperBrokerCommissionReport,
+    PaperBrokerExecution,
     PaperBrokerOpenOrder,
-    PaperOrderBroker,
 )
 from trader.models import (
     AlphaPaperRunReport,
@@ -41,8 +45,28 @@ class ReconcileBrokerClient(Protocol):
         """Return broker diagnostics without order routing."""
 
 
+class ReconcileOrderBroker(Protocol):
+    """Read-only order-state surface required for reconciliation."""
+
+    def connect(self, *, timeout: float) -> None:
+        """Connect to the broker."""
+
+    def disconnect(self) -> None:
+        """Disconnect from the broker."""
+
+    def request_open_orders(self, *, timeout: float) -> list[PaperBrokerOpenOrder]:
+        """Return current open orders without modifying them."""
+
+    def request_executions(
+        self,
+        *,
+        timeout: float,
+    ) -> tuple[list[PaperBrokerExecution], list[PaperBrokerCommissionReport]]:
+        """Return current-day execution and commission evidence."""
+
+
 BrokerClientFactory = Callable[[TraderConfig], ReconcileBrokerClient]
-OpenOrderBrokerFactory = Callable[[TraderConfig], PaperOrderBroker]
+OpenOrderBrokerFactory = Callable[[TraderConfig], ReconcileOrderBroker]
 
 
 def default_broker_client_factory(config: TraderConfig) -> ReconcileBrokerClient:
@@ -87,7 +111,10 @@ def run_paper_reconcile(
 
     broker_report: BrokerDiagnosticReport | None = None
     open_orders: list[BrokerOpenOrderSnapshot] = []
+    executions: list[PaperBrokerExecution] = []
+    commission_reports: list[PaperBrokerCommissionReport] = []
     open_order_query_failed = False
+    execution_query_failed = False
 
     try:
         broker_report = broker_client_factory(config).diagnostic_report(
@@ -110,15 +137,27 @@ def run_paper_reconcile(
     open_order_broker = open_order_broker_factory(config)
     try:
         open_order_broker.connect(timeout=reconcile_request.timeout_seconds)
-        open_orders = [
-            _open_order_snapshot(order)
-            for order in open_order_broker.request_open_orders(
+        try:
+            open_orders = [
+                _open_order_snapshot(order)
+                for order in open_order_broker.request_open_orders(
+                    timeout=reconcile_request.timeout_seconds
+                )
+            ]
+        except Exception as exc:
+            open_order_query_failed = True
+            errors.append(f"open-order reconciliation failed: {exc}")
+        try:
+            executions, commission_reports = open_order_broker.request_executions(
                 timeout=reconcile_request.timeout_seconds
             )
-        ]
+        except Exception as exc:
+            execution_query_failed = True
+            errors.append(f"execution-history reconciliation failed: {exc}")
     except Exception as exc:
         open_order_query_failed = True
-        errors.append(f"open-order reconciliation failed: {exc}")
+        execution_query_failed = True
+        errors.append(f"broker order-state reconciliation failed: {exc}")
     finally:
         with suppress(Exception):
             open_order_broker.disconnect()
@@ -127,13 +166,20 @@ def run_paper_reconcile(
     warnings.extend(evidence_warnings)
     if open_orders:
         warnings.append("broker reported open orders after the paper execution window")
-    warnings.append("execution-history reconciliation is not implemented in the current adapter")
 
     account_verified = bool(broker_report and broker_report.account_snapshot)
     if not account_verified:
         errors.append("broker account summary is unavailable; mock fallback is not accepted")
     if open_order_query_failed:
         errors.append("broker open-order query is unavailable")
+    if execution_query_failed:
+        errors.append("broker execution-history query is unavailable")
+    missing_filled_execution_ids = _missing_filled_execution_ids(order_evidence, executions)
+    if missing_filled_execution_ids:
+        errors.append(
+            "filled paper order evidence is missing broker execution rows for order IDs "
+            f"{','.join(str(order_id) for order_id in missing_filled_execution_ids)}"
+        )
 
     final_status = _final_status(errors=errors, warnings=warnings, open_orders=open_orders)
     return _build_report(
@@ -143,6 +189,8 @@ def run_paper_reconcile(
         source_report_paths=source_report_paths,
         broker_report=broker_report,
         open_orders=open_orders,
+        executions=executions,
+        commission_reports=commission_reports,
         order_evidence=order_evidence,
         warnings=warnings,
         errors=errors,
@@ -287,9 +335,13 @@ def _build_report(
     final_status: PaperReconcileStatus,
     broker_report: BrokerDiagnosticReport | None = None,
     open_orders: list[BrokerOpenOrderSnapshot] | None = None,
+    executions: list[PaperBrokerExecution] | None = None,
+    commission_reports: list[PaperBrokerCommissionReport] | None = None,
     order_evidence: list[PaperOrderEvidence] | None = None,
 ) -> PaperReconcileReport:
     selected_open_orders = open_orders or []
+    selected_executions = executions or []
+    selected_commissions = commission_reports or []
     selected_evidence = order_evidence or []
     account_snapshot = (
         broker_report.account_snapshot
@@ -297,6 +349,13 @@ def _build_report(
         else {}
     )
     positions = list(broker_report.positions_snapshot if broker_report else [])
+    positions_query_completed = bool(broker_report and broker_report.positions_query_completed)
+    zero_positions_confirmed = positions_query_completed and not positions
+    positions_unavailable_reason = (
+        None
+        if positions_query_completed
+        else "positions request did not complete or broker diagnostic was unavailable"
+    )
     account_ids = sorted(account_snapshot) if account_snapshot else []
     evidence_order_ids = [
         evidence.order_id for evidence in selected_evidence if evidence.order_id is not None
@@ -304,6 +363,23 @@ def _build_report(
     evidence_perm_ids = [
         evidence.perm_id for evidence in selected_evidence if evidence.perm_id is not None
     ]
+    execution_rows = [_execution_snapshot(execution) for execution in selected_executions]
+    commission_rows = [_commission_snapshot(report) for report in selected_commissions]
+    execution_order_ids = sorted(
+        {
+            execution.order_id
+            for execution in selected_executions
+            if execution.order_id is not None
+        }
+    )
+    fingerprint = _broker_state_fingerprint(
+        account_ids=account_ids,
+        positions=positions,
+        open_orders=[order.model_dump(mode="json") for order in selected_open_orders],
+        executions=execution_rows,
+        latest_order_ids=sorted(set(evidence_order_ids)),
+        latest_perm_ids=sorted(set(evidence_perm_ids)),
+    )
     return PaperReconcileReport(
         ok=final_status != PaperReconcileStatus.FAILED,
         request=request,
@@ -325,12 +401,21 @@ def _build_report(
         positions_snapshot=positions,
         positions_source=(
             "broker_read_only_positions"
-            if positions
+            if positions_query_completed
             else "unavailable_or_mock_fallback_rejected"
         ),
-        broker_positions_available=bool(positions),
+        broker_positions_available=positions_query_completed,
+        positions_query_completed=positions_query_completed,
+        zero_positions_confirmed=zero_positions_confirmed,
+        positions_unavailable_reason=positions_unavailable_reason,
         open_orders=selected_open_orders,
         open_order_count=len(selected_open_orders),
+        executions_snapshot=execution_rows,
+        executions_available=bool(execution_rows),
+        executions_source="broker_read_only_current_day_executions",
+        execution_order_ids=execution_order_ids,
+        commission_reports=commission_rows,
+        broker_state_fingerprint=fingerprint,
         source_report_paths=source_report_paths,
         latest_order_evidence=selected_evidence,
         latest_order_ids=sorted(set(evidence_order_ids)),
@@ -349,6 +434,62 @@ def _broker_error_messages(report: BrokerDiagnosticReport) -> list[str]:
         f"IBKR {error.code}: {error.message}" if error.code is not None else error.message
         for error in report.errors
     ]
+
+
+def _execution_snapshot(execution: PaperBrokerExecution) -> dict[str, Any]:
+    row = asdict(execution)
+    return {key: _json_scalar(value) for key, value in row.items()}
+
+
+def _commission_snapshot(report: PaperBrokerCommissionReport) -> dict[str, Any]:
+    row = asdict(report)
+    return {key: _json_scalar(value) for key, value in row.items()}
+
+
+def _missing_filled_execution_ids(
+    evidence: list[PaperOrderEvidence],
+    executions: list[PaperBrokerExecution],
+) -> list[int]:
+    execution_order_ids = {
+        execution.order_id for execution in executions if execution.order_id is not None
+    }
+    return sorted(
+        {
+            evidence_row.order_id
+            for evidence_row in evidence
+            if evidence_row.order_id is not None
+            and evidence_row.fill_quantity is not None
+            and evidence_row.fill_quantity > 0
+            and evidence_row.order_id not in execution_order_ids
+        }
+    )
+
+
+def _broker_state_fingerprint(
+    *,
+    account_ids: list[str],
+    positions: list[dict[str, Any]],
+    open_orders: list[dict[str, Any]],
+    executions: list[dict[str, Any]],
+    latest_order_ids: list[int],
+    latest_perm_ids: list[int],
+) -> str:
+    payload = {
+        "account_ids": account_ids,
+        "positions": positions,
+        "open_orders": open_orders,
+        "executions": executions,
+        "latest_order_ids": latest_order_ids,
+        "latest_perm_ids": latest_perm_ids,
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _json_scalar(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return str(value)
+    return value
 
 
 def _current_commit_sha() -> str | None:
