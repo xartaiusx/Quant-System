@@ -213,6 +213,15 @@ only: it reads ignored local reports, validates same-commit source evidence,
 verifies the no-secret `campaign_id` across source reports, fails closed on
 campaign mismatches, and never contacts IBKR or invokes order APIs.
 
+Milestone 24 adds `alpha-campaign-run`, a sequential orchestrator over existing
+SPY-only campaign stages. Shadow mode calls the read-only alpha shadow runner.
+Paper mode requires the explicit `READ_ONLY_OFF_FOR_ALPHA_PAPER` confirmation,
+then uses the existing `alpha-paper-run` boundary, switches its post-run config
+view to `ALLOW_PAPER_ORDERS=false`, runs `paper-reconcile`, and writes
+`alpha-test-summary`. It adds no new production order API calls and does not
+enable live trading, live ports, market orders, direct futures, options, algos,
+brackets, shorts, fractional or cash-quantity stock orders, or batches.
+
 Commodity scope remains research-only after paper execution hardening. `GLD`
 and `USO` can be research candidates, `DBA` stays excluded from execution until
 liquidity gates pass, and direct futures remain out of scope until an explicit

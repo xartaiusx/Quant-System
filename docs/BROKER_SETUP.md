@@ -142,6 +142,8 @@ python -m trader.cli paper-readiness-run
 python -m trader.cli paper-readiness-run --broker-stage-pause 2
 python -m trader.cli paper-reconcile --timeout 30
 python -m trader.cli alpha-test-summary
+python -m trader.cli alpha-campaign-run --mode shadow --campaign-id campaign-YYYYMMDD-spy-001
+python -m trader.cli alpha-campaign-run --mode paper --campaign-id campaign-YYYYMMDD-spy-001 --read-only-off-confirm READ_ONLY_OFF_FOR_ALPHA_PAPER
 ```
 
 `account --connect` and `positions --connect` are read-only. If the broker is unavailable, they clearly fall back to mock data instead of pretending mock data came from TWS or Gateway.

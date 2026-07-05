@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from trader.alpha_campaign import READ_ONLY_OFF_CONFIRMATION, run_alpha_campaign_run
 from trader.alpha_paper import ALPHA_PAPER_CONFIRMATION, run_alpha_paper_run
 from trader.alpha_shadow import run_alpha_shadow_run
 from trader.alpha_summary import run_alpha_test_summary
@@ -35,6 +36,9 @@ from trader.data.universe import parse_symbols
 from trader.execution.paper_order_smoke import run_paper_order_smoke
 from trader.execution.router import ExecutionRouter
 from trader.models import (
+    AlphaCampaignRunMode,
+    AlphaCampaignRunReport,
+    AlphaCampaignRunRequest,
     AlphaPaperRunReport,
     AlphaPaperRunRequest,
     AlphaShadowRunReport,
@@ -1846,6 +1850,111 @@ def alpha_test_summary(
         raise typer.Exit(code=1)
 
 
+@app.command("alpha-campaign-run")
+def alpha_campaign_run(
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="Campaign mode: shadow or paper."),
+    ] = "shadow",
+    campaign_id: Annotated[
+        str | None,
+        typer.Option(
+            "--campaign-id",
+            help="Optional no-secret campaign correlation ID for all campaign reports.",
+        ),
+    ] = None,
+    broker_timeout: Annotated[
+        float,
+        typer.Option("--broker-timeout", help="Broker request timeout seconds."),
+    ] = 30,
+    history_timeout: Annotated[
+        float,
+        typer.Option("--history-timeout", help="Historical request timeout seconds."),
+    ] = 45,
+    broker_stage_pause: Annotated[
+        float,
+        typer.Option(
+            "--broker-stage-pause",
+            help="Pause seconds between broker-contact stages.",
+        ),
+    ] = 2,
+    cancel_after_seconds: Annotated[
+        float,
+        typer.Option(
+            "--cancel-after-seconds",
+            help="Seconds to wait before canceling an unfilled alpha paper order.",
+        ),
+    ] = 30,
+    allow_fill: Annotated[
+        str,
+        typer.Option("--allow-fill", help="Whether a transmitted paper fill is allowed."),
+    ] = "false",
+    max_report_age_hours: Annotated[
+        int,
+        typer.Option("--max-report-age-hours", help="Maximum source report age."),
+    ] = 24,
+    alpha_shadow_report: Annotated[
+        Path,
+        typer.Option(
+            "--alpha-shadow-report",
+            help="Source alpha-shadow report path for paper mode.",
+        ),
+    ] = Path("reports/latest_alpha_shadow_run.json"),
+    paper_smoke_report: Annotated[
+        Path,
+        typer.Option(
+            "--paper-smoke-report",
+            help="Source transmitted paper-order-smoke report path for paper mode.",
+        ),
+    ] = Path("reports/latest_paper_order_smoke.json"),
+    read_only_off_confirm: Annotated[
+        str,
+        typer.Option(
+            "--read-only-off-confirm",
+            help="Required paper-mode confirmation string.",
+        ),
+    ] = "",
+) -> None:
+    """Run one sequential SPY alpha campaign mode."""
+
+    config = _load_config_or_exit()
+    request = AlphaCampaignRunRequest(
+        campaign_id=campaign_id,
+        mode=AlphaCampaignRunMode(mode.strip().lower()),
+        broker_timeout_seconds=_validate_timeout_option(broker_timeout) or 30,
+        history_timeout_seconds=_validate_timeout_option(history_timeout) or 45,
+        broker_stage_pause_seconds=_validate_non_negative_seconds_option(
+            broker_stage_pause,
+            120,
+        ),
+        cancel_after_seconds=_validate_non_negative_seconds_option(
+            cancel_after_seconds,
+            120,
+        ),
+        allow_fill=_parse_bool_option(allow_fill, "--allow-fill"),
+        max_report_age_hours=max_report_age_hours,
+        alpha_shadow_report_path=alpha_shadow_report.as_posix(),
+        paper_smoke_report_path=paper_smoke_report.as_posix(),
+        read_only_off_confirm=read_only_off_confirm,
+    )
+    report = run_alpha_campaign_run(config, request)
+    json_path, md_path = Journal().write_cycle("alpha_campaign_run", _report_dict(report))
+
+    console.print("[bold]IBKR alpha campaign run[/bold]")
+    console.print(f"Mode: {report.mode}")
+    console.print(f"Campaign ID: {report.campaign_id}")
+    console.print("Scope: SPY-only staged paper-alpha orchestration.")
+    console.print("Live trading, live ports, direct futures, options, and market orders: rejected.")
+    if mode.strip().lower() == "paper":
+        console.print(f"Required Read-Only-off confirmation: {READ_ONLY_OFF_CONFIRMATION}")
+        console.print("Re-enable IBKR Read-Only API immediately after the paper window.")
+    _print_alpha_campaign_run_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def account(
     connect: Annotated[
@@ -2145,6 +2254,7 @@ def _validate_use_rth_option(use_rth: int) -> int:
 def _report_dict(
     report: (
         AnalyticalSignalEvaluationReport
+        | AlphaCampaignRunReport
         | AlphaPaperRunReport
         | AlphaShadowRunReport
         | BacktestDataAdapterReport
@@ -3027,6 +3137,54 @@ def _print_alpha_test_summary_result(report: AlphaTestSummaryReport) -> None:
             console.print(f"- {escape(warning)}")
     if report.errors:
         console.print("[red]Alpha test summary errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_alpha_campaign_run_result(report: AlphaCampaignRunReport) -> None:
+    table = Table(title="Alpha Campaign Run")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Final status", _enum_value(report.final_status))
+    table.add_row("Commit SHA", report.commit_sha or "unknown")
+    table.add_row("Campaign ID", report.campaign_id or "n/a")
+    table.add_row("Mode", _enum_value(report.mode))
+    table.add_row("Stages", str(len(report.stages)))
+    table.add_row("Alpha shadow completed", str(report.alpha_shadow_completed).lower())
+    table.add_row("Alpha paper completed", str(report.alpha_paper_completed).lower())
+    table.add_row("Paper reconcile completed", str(report.paper_reconcile_completed).lower())
+    table.add_row("Alpha summary completed", str(report.alpha_test_summary_completed).lower())
+    table.add_row("Submitted orders", str(report.submitted_orders).lower())
+    table.add_row("Order API invoked", str(report.order_api_invoked).lower())
+    table.add_row("Paper orders enabled at finish", str(report.paper_orders_enabled).lower())
+    table.add_row("Read-Only restore required", str(report.read_only_restore_required).lower())
+    console.print(table)
+
+    if report.stages:
+        stage_table = Table(title="Campaign Stages")
+        stage_table.add_column("Stage")
+        stage_table.add_column("Status")
+        stage_table.add_column("OK")
+        for stage in report.stages:
+            stage_table.add_row(
+                stage.name,
+                _enum_value(stage.final_status),
+                str(stage.ok).lower(),
+            )
+        console.print(stage_table)
+    if report.report_paths:
+        path_table = Table(title="Campaign Report Paths")
+        path_table.add_column("Report")
+        path_table.add_column("Path")
+        for label, path in sorted(report.report_paths.items()):
+            path_table.add_row(label, path)
+        console.print(path_table)
+    if report.warnings:
+        console.print("[yellow]Alpha campaign warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Alpha campaign errors[/red]")
         for error in report.errors:
             console.print(f"- {escape(error)}")
 
