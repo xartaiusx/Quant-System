@@ -323,6 +323,21 @@ Read-Only API unless actively running the gated paper execution command.
 Reports are written to `reports/paper_order_smoke_<timestamp>.json` plus `.md`
 with masked account IDs, order/cancel callback evidence, and no secrets.
 
+After any paper order smoke or alpha paper window, run the read-only
+post-run checks before continuing development:
+
+```bash
+python -m trader.cli paper-reconcile --timeout 30
+python -m trader.cli alpha-test-summary
+```
+
+`paper-reconcile` expects Read-Only API to be re-enabled and
+`ALLOW_PAPER_ORDERS=false`. It captures masked account evidence, broker
+positions, broker open orders, and latest local order IDs/perm IDs without
+placing, modifying, or canceling orders. `alpha-test-summary` is offline-only
+and aggregates the latest alpha shadow, paper smoke, alpha paper, and
+reconciliation reports into a no-secret campaign summary.
+
 The offline fixture stress suite uses temporary synthetic historical snapshots
 to validate loader, feed, engine, strategy-contract, strategy-runner, and
 signal-contract/signal-runner/signal-evaluate behavior against partial, gapped,

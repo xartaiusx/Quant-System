@@ -198,6 +198,23 @@ boundary. Live trading, live ports, market orders, futures, options, algos,
 brackets, shorts, fractional or cash-quantity stock orders, and batches remain
 disabled.
 
+Milestone 23 adds post-paper-run hardening. `paper-reconcile` requires
+`TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=false`,
+`ALLOW_LIVE_ORDERS=false`, localhost, and paper port `7497` or `4002`. It is
+read-only: it may request account summary, positions, and open orders, but it
+must not submit, modify, or cancel orders. It reports
+`submitted_orders=false`, `paper_orders_enabled=false`,
+`order_routing_enabled=false`, and `order_api_invoked=false`, and it fails if a
+real broker account summary is unavailable. `alpha-test-summary` is offline
+only: it reads ignored local reports, validates same-commit source evidence,
+and never contacts IBKR or invokes order APIs.
+
+Commodity scope remains research-only after paper execution hardening. `GLD`
+and `USO` can be research candidates, `DBA` stays excluded from execution until
+liquidity gates pass, and direct futures remain out of scope until an explicit
+contract descriptor, expiry/multiplier, rollover, margin, and risk-model
+milestone is approved.
+
 ## Quantitative Research Gate
 
 No current milestone supports profitability, performance, or tradability claims.

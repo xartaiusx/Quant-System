@@ -176,6 +176,22 @@ class AlphaPaperRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class PaperReconcileStatus(StrEnum):
+    """Post-paper-run broker reconciliation states."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    FAILED = "failed"
+
+
+class AlphaTestSummaryStatus(StrEnum):
+    """Post-paper-run campaign summary states."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    FAILED = "failed"
+
+
 class PaperReadinessStageStatus(StrEnum):
     """Stage-level status for the paper readiness orchestration."""
 
@@ -2778,6 +2794,251 @@ class AlphaPaperRunReport(SerializableModel):
             raise ValueError("no_trade reports must not submit orders")
         if self.submitted_orders and not self.paper_orders_enabled:
             raise ValueError("submitted paper orders require paper_orders_enabled")
+        return self
+
+
+class PaperReconcileRequest(SerializableModel):
+    """Read-only post-paper-run broker reconciliation request."""
+
+    timeout_seconds: float = 30
+    paper_smoke_report_path: str = "reports/latest_paper_order_smoke.json"
+    alpha_paper_report_path: str = "reports/latest_alpha_paper_run.json"
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def validate_timeout(cls, value: float) -> float:
+        if value <= 0 or value > 120:
+            raise ValueError("paper-reconcile timeout must be greater than 0 and no more than 120")
+        return value
+
+    @field_validator("paper_smoke_report_path", "alpha_paper_report_path")
+    @classmethod
+    def validate_report_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("paper-reconcile report paths must not be empty")
+        return normalized
+
+
+class BrokerOpenOrderSnapshot(SerializableModel):
+    """Read-only open-order row captured from IBKR."""
+
+    order_id: int
+    symbol: str
+    action: str | None = None
+    status: str | None = None
+    perm_id: int | None = None
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        return value.strip().upper()
+
+
+class PaperOrderEvidence(SerializableModel):
+    """Order evidence extracted from ignored local paper-run reports."""
+
+    source: str
+    report_path: str
+    report_type: str | None = None
+    ok: bool | None = None
+    final_status: str | None = None
+    commit_sha: str | None = None
+    timestamp: datetime | None = None
+    submitted_orders: bool = False
+    order_id: int | None = None
+    perm_id: int | None = None
+    order_status: str | None = None
+    fill_quantity: Decimal | None = None
+    canceled: bool = False
+    cancel_requested: bool = False
+    live_orders_enabled: bool = False
+    live_route_possible: bool = False
+
+
+class PaperReconcileReport(SerializableModel):
+    """No-secret read-only reconciliation after paper execution windows."""
+
+    title: str = "IBKR Paper Reconciliation"
+    report_type: str = "paper_reconcile"
+    command: str = "paper-reconcile"
+    ok: bool
+    request: PaperReconcileRequest
+    mode: str
+    host: str
+    port: int
+    client_id: int
+    broker_kind: str
+    commit_sha: str | None = None
+    broker_connected: bool = False
+    account_summary_verified: bool = False
+    account_summary_source: str = "unavailable_or_mock_fallback_rejected"
+    account_ids_masked: list[str] = Field(default_factory=list)
+    account_snapshot: dict[str, Any] = Field(default_factory=dict)
+    positions_snapshot: list[dict[str, Any]] = Field(default_factory=list)
+    positions_source: str = "unavailable_or_mock_fallback_rejected"
+    broker_positions_available: bool = False
+    open_orders: list[BrokerOpenOrderSnapshot] = Field(default_factory=list)
+    open_order_count: int = 0
+    open_order_source: str = "broker_read_only_open_orders"
+    executions_snapshot: list[dict[str, Any]] = Field(default_factory=list)
+    executions_available: bool = False
+    executions_source: str = "not_implemented_in_current_ibkr_adapter"
+    source_report_paths: dict[str, str] = Field(default_factory=dict)
+    latest_order_evidence: list[PaperOrderEvidence] = Field(default_factory=list)
+    latest_order_ids: list[int] = Field(default_factory=list)
+    latest_perm_ids: list[int] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    configured_allow_paper_orders: bool = False
+    live_orders_enabled: bool = False
+    read_only_api_expected: bool = True
+    order_routing_enabled: bool = False
+    paper_execution_enabled: bool = False
+    live_route_possible: bool = False
+    order_api_invoked: bool = False
+    place_order_invoked: bool = False
+    cancel_order_invoked: bool = False
+    market_order_requested: bool = False
+    futures_contracts_enabled: bool = False
+    direct_futures_data_enabled: bool = False
+    options_contracts_enabled: bool = False
+    no_order_guarantee: bool = True
+    safety_statement: str = (
+        "This reconciliation command is read-only. It may query account summary, "
+        "positions, and open orders, but it must not submit, modify, or cancel orders."
+    )
+    final_status: PaperReconcileStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_reconcile_safety(self) -> PaperReconcileReport:
+        if self.submitted_orders:
+            raise ValueError("paper-reconcile must not submit orders")
+        if self.paper_orders_enabled:
+            raise ValueError("paper-reconcile requires paper_orders_enabled=false")
+        if self.live_orders_enabled:
+            raise ValueError("live_orders_enabled must remain false")
+        if self.order_routing_enabled:
+            raise ValueError("paper-reconcile must keep order_routing_enabled=false")
+        if self.paper_execution_enabled:
+            raise ValueError("paper execution must remain disabled")
+        if self.live_route_possible:
+            raise ValueError("live_route_possible must remain false")
+        if self.order_api_invoked or self.place_order_invoked or self.cancel_order_invoked:
+            raise ValueError("paper-reconcile must not invoke order APIs")
+        if self.market_order_requested:
+            raise ValueError("market orders are not allowed")
+        if self.futures_contracts_enabled or self.direct_futures_data_enabled:
+            raise ValueError("direct futures must remain disabled")
+        if self.options_contracts_enabled:
+            raise ValueError("options must remain disabled")
+        if not self.no_order_guarantee:
+            raise ValueError("no_order_guarantee must remain true")
+        if self.open_order_count != len(self.open_orders):
+            raise ValueError("open_order_count must match open_orders length")
+        return self
+
+
+class AlphaTestSummaryRequest(SerializableModel):
+    """Offline summary request for a paper alpha test campaign."""
+
+    alpha_shadow_report_path: str = "reports/latest_alpha_shadow_run.json"
+    paper_smoke_report_path: str = "reports/latest_paper_order_smoke.json"
+    alpha_paper_report_path: str = "reports/latest_alpha_paper_run.json"
+    paper_reconcile_report_path: str = "reports/latest_paper_reconcile.json"
+    max_report_age_hours: int = 24
+
+    @field_validator(
+        "alpha_shadow_report_path",
+        "paper_smoke_report_path",
+        "alpha_paper_report_path",
+        "paper_reconcile_report_path",
+    )
+    @classmethod
+    def validate_report_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("alpha-test-summary report paths must not be empty")
+        return normalized
+
+    @field_validator("max_report_age_hours")
+    @classmethod
+    def validate_report_age(cls, value: int) -> int:
+        if value <= 0 or value > 168:
+            raise ValueError("max_report_age_hours must be greater than 0 and no more than 168")
+        return value
+
+
+class AlphaTestSummaryReport(SerializableModel):
+    """Offline no-secret summary of one paper alpha campaign."""
+
+    title: str = "IBKR Alpha Test Summary"
+    report_type: str = "alpha_test_summary"
+    command: str = "alpha-test-summary"
+    ok: bool
+    request: AlphaTestSummaryRequest
+    commit_sha: str | None = None
+    source_report_paths: dict[str, str] = Field(default_factory=dict)
+    source_report_statuses: dict[str, str] = Field(default_factory=dict)
+    source_report_commits: dict[str, str | None] = Field(default_factory=dict)
+    source_report_timestamps: dict[str, datetime | None] = Field(default_factory=dict)
+    alpha_shadow_verified: bool = False
+    paper_smoke_verified: bool = False
+    alpha_paper_verified: bool = False
+    paper_reconcile_verified: bool = False
+    account_ids_masked: list[str] = Field(default_factory=list)
+    account_summary_verified: bool = False
+    open_order_count: int | None = None
+    latest_order_ids: list[int] = Field(default_factory=list)
+    latest_perm_ids: list[int] = Field(default_factory=list)
+    paper_smoke_order_status: str | None = None
+    paper_smoke_fill_quantity: Decimal | None = None
+    paper_smoke_canceled: bool | None = None
+    alpha_paper_order_status: str | None = None
+    alpha_paper_fill_quantity: Decimal | None = None
+    alpha_paper_canceled: bool | None = None
+    next_eligible_for_alpha_window: bool = False
+    next_eligibility_reason: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    live_orders_enabled: bool = False
+    live_route_possible: bool = False
+    order_routing_enabled: bool = False
+    order_api_invoked: bool = False
+    futures_contracts_enabled: bool = False
+    direct_futures_data_enabled: bool = False
+    commodity_scope: str = (
+        "Commodity-linked proxies remain research-only. Direct futures, options, "
+        "rollover, margin, and commodity execution are out of scope."
+    )
+    safety_statement: str = (
+        "This summary is offline-only and reads ignored local reports. It does not "
+        "contact IBKR or invoke order APIs."
+    )
+    final_status: AlphaTestSummaryStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_alpha_summary_safety(self) -> AlphaTestSummaryReport:
+        if self.live_orders_enabled:
+            raise ValueError("live_orders_enabled must remain false")
+        if self.live_route_possible:
+            raise ValueError("live_route_possible must remain false")
+        if self.order_routing_enabled:
+            raise ValueError("alpha-test-summary must not enable order routing")
+        if self.order_api_invoked:
+            raise ValueError("alpha-test-summary must not invoke order APIs")
+        if self.futures_contracts_enabled or self.direct_futures_data_enabled:
+            raise ValueError("direct futures must remain disabled")
+        if self.next_eligible_for_alpha_window and self.errors:
+            raise ValueError("summary with errors cannot be next-window eligible")
+        if self.next_eligible_for_alpha_window and self.open_order_count not in {0, None}:
+            raise ValueError("open orders block next alpha-window eligibility")
         return self
 
 
