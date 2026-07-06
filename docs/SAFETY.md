@@ -252,6 +252,15 @@ gaps, missing heartbeat evidence, source order flags, or order API evidence. It
 does not contact IBKR, submit orders, route execution, enable paper orders,
 calculate P&L, or expand commodity execution.
 
+`ibkr-data-diagnostics` is an offline-only strict SPY shadow precheck for
+market-hours daemon attempts. It reads ignored local `broker-probe`,
+`history-snapshot`, optional `market-probe`, and `history-readiness` reports,
+requires same-commit broker/account evidence, checks the strict `1 D`,
+`5 mins`, `TRADES`, `use_rth=1` snapshot settings, verifies at least `50` SPY
+bars, and fails closed when the latest bar is older than `15` minutes. It never
+contacts IBKR, submits orders, cancels orders, enables paper orders, enables
+live orders, or expands commodity execution.
+
 Commodity scope remains research-only after paper execution hardening. `GLD`
 and `USO` can be research candidates, `DBA` stays excluded from execution until
 liquidity gates pass, and direct futures remain out of scope until an explicit

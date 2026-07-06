@@ -32,6 +32,7 @@ from trader.data.historical_loader import (
     build_history_index_report,
     load_historical_snapshots,
 )
+from trader.data.ibkr_data_diagnostics import build_ibkr_data_diagnostics_report
 from trader.data.quality_gate import build_data_quality_gate_report
 from trader.data.snapshots import deterministic_history, deterministic_quotes, mock_positions
 from trader.data.universe import parse_symbols
@@ -72,6 +73,8 @@ from trader.models import (
     HistoricalReadinessReport,
     HistoricalSnapshotLoadRequest,
     HistoricalSnapshotReport,
+    IBKRDataDiagnosticsReport,
+    IBKRDataDiagnosticsRequest,
     InertStrategyRunnerReport,
     InertStrategyRunnerRequest,
     MarketDataDiagnosticReport,
@@ -316,6 +319,79 @@ def history_readiness(
     console.print("Order routing: disabled.")
     console.print("No order APIs invoked.")
     _print_history_readiness_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("ibkr-data-diagnostics")
+def ibkr_data_diagnostics(
+    symbol: Annotated[
+        str,
+        typer.Option("--symbol", help="Symbol to diagnose. Only SPY is allowed."),
+    ] = "SPY",
+    broker_probe_report: Annotated[
+        Path,
+        typer.Option("--broker-probe-report", help="Ignored local broker-probe JSON path."),
+    ] = Path("reports/latest_broker_probe.json"),
+    history_snapshot_report: Annotated[
+        Path,
+        typer.Option(
+            "--history-snapshot-report",
+            help="Ignored local history-snapshot JSON path.",
+        ),
+    ] = Path("reports/latest_history_snapshot.json"),
+    history_readiness_report: Annotated[
+        Path,
+        typer.Option(
+            "--history-readiness-report",
+            help="Ignored local history-readiness JSON path.",
+        ),
+    ] = Path("reports/latest_history_readiness.json"),
+    market_probe_report: Annotated[
+        Path | None,
+        typer.Option(
+            "--market-probe-report",
+            help="Optional ignored local market-probe JSON path.",
+        ),
+    ] = Path("reports/latest_market_probe.json"),
+    min_bars: Annotated[
+        int,
+        typer.Option("--min-bars", help="Minimum bars required for strict shadow."),
+    ] = 50,
+    stale_after_minutes: Annotated[
+        int,
+        typer.Option(
+            "--stale-after-minutes",
+            help="Maximum latest-bar age for strict shadow.",
+        ),
+    ] = 15,
+) -> None:
+    """Diagnose strict SPY data freshness from ignored local reports only."""
+
+    request = IBKRDataDiagnosticsRequest(
+        symbol=symbol,
+        broker_probe_report_path=broker_probe_report.as_posix(),
+        history_snapshot_report_path=history_snapshot_report.as_posix(),
+        history_readiness_report_path=history_readiness_report.as_posix(),
+        market_probe_report_path=(
+            market_probe_report.as_posix() if market_probe_report is not None else None
+        ),
+        min_bars=min_bars,
+        stale_after_minutes=stale_after_minutes,
+    )
+    report = build_ibkr_data_diagnostics_report(request)
+    json_path, md_path = Journal().write_cycle(
+        "ibkr_data_diagnostics",
+        _report_dict(report),
+    )
+
+    console.print("[bold]IBKR data freshness diagnostics[/bold]")
+    console.print("Offline report comparison only; no broker contact.")
+    console.print("Order routing: disabled.")
+    console.print("Submitted orders: false.")
+    _print_ibkr_data_diagnostics_result(report)
     console.print(f"JSON report: {json_path}")
     console.print(f"Markdown report: {md_path}")
     if not report.ok:
@@ -2510,6 +2586,7 @@ def _report_dict(
         | HistoricalLoaderReport
         | HistoricalReadinessReport
         | HistoricalSnapshotReport
+        | IBKRDataDiagnosticsReport
         | InertStrategyRunnerReport
         | MarketDataDiagnosticReport
         | AlphaTestSummaryReport
@@ -4057,6 +4134,53 @@ def _print_history_readiness_result(report: HistoricalReadinessReport) -> None:
             console.print(f"- {escape(warning)}")
     if report.errors:
         console.print("[red]Readiness errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_ibkr_data_diagnostics_result(report: IBKRDataDiagnosticsReport) -> None:
+    table = Table(title="Strict SPY Shadow Precheck")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Symbol", report.symbol)
+    table.add_row("Broker probe OK", str(report.broker_probe_ok))
+    table.add_row("Broker connected", str(report.broker_connected))
+    table.add_row("Account verified", str(report.broker_account_verified))
+    table.add_row("History snapshot OK", str(report.history_snapshot_ok))
+    table.add_row("History readiness OK", str(report.history_readiness_ok))
+    table.add_row("Bars", f"{report.bar_count} / {report.min_bars}")
+    table.add_row("Bar count passed", str(report.bar_count_passed))
+    table.add_row("First bar", report.first_bar_timestamp or "n/a")
+    table.add_row("Latest bar", report.latest_bar_timestamp or "n/a")
+    latest_age = (
+        f"{report.latest_bar_age_minutes:.2f} minutes"
+        if report.latest_bar_age_minutes is not None
+        else "n/a"
+    )
+    table.add_row("Latest bar age", latest_age)
+    table.add_row("Freshness gate", f"<= {report.stale_after_minutes} minutes")
+    table.add_row("Freshness passed", str(report.freshness_passed))
+    table.add_row("Market-data type requested", report.market_data_type_requested or "n/a")
+    table.add_row("Market-data type received", report.market_data_type_received or "n/a")
+    table.add_row("Market-data hint", report.market_data_type_hint)
+    table.add_row("Strict precheck passed", str(report.strict_shadow_precheck_passed))
+    table.add_row("Next action", report.next_recommended_action)
+    table.add_row("Submitted orders", str(report.submitted_orders).lower())
+    table.add_row("Order API invoked", str(report.order_api_invoked).lower())
+    table.add_row("Broker contacted", str(report.broker_contacted).lower())
+    table.add_row("Final status", _enum_value(report.final_status))
+    console.print(table)
+
+    if report.operator_hints:
+        console.print("[bold]Operator hints[/bold]")
+        for hint in report.operator_hints:
+            console.print(f"- {escape(hint)}")
+    if report.warnings:
+        console.print("[yellow]Diagnostics warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Diagnostics errors[/red]")
         for error in report.errors:
             console.print(f"- {escape(error)}")
 

@@ -122,6 +122,7 @@ python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
 python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
 python -m trader.cli history-readiness --latest
+python -m trader.cli ibkr-data-diagnostics --min-bars 50 --stale-after-minutes 15
 python -m trader.cli history-index
 python -m trader.cli history-load --symbols SPY,AAPL
 python -m trader.cli data-quality-gate --symbols SPY,AAPL,GLD,USO,DBA --bar-size "5 mins" --what-to-show TRADES
@@ -372,6 +373,16 @@ paper smoke reports, `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`,
 `ALLOW_LIVE_ORDERS=false`, localhost, paper port `7497` or `4002`, and
 `IBKR_CLIENT_ID=21`.
 
+`ibkr-data-diagnostics` is an offline strict SPY freshness gate for
+market-hours shadow testing. Run it after a fresh `broker-probe` and
+`history-snapshot --symbols SPY --duration "1 D" --bar-size "5 mins"
+--what-to-show TRADES --use-rth 1`. It reads ignored local reports only,
+requires same-commit broker/account evidence, confirms at least `50` SPY bars,
+checks the latest 5-minute bar age against `15` minutes, and writes
+JSON/Markdown diagnostics. It never contacts IBKR and reports
+`submitted_orders=false`, `paper_orders_enabled=false`, and
+`order_api_invoked=false`.
+
 `alpha-shadow-daemon` is the first controlled autonomous mode. It repeats the
 existing read-only SPY shadow path for a bounded number of cycles, writes
 heartbeat evidence under ignored local `state/`, and halts failed on stale
@@ -379,7 +390,7 @@ source bars or safety violations. Keep IBKR Read-Only API enabled and
 `ALLOW_PAPER_ORDERS=false`; the daemon never invokes broker order APIs:
 
 ```bash
-python -m trader.cli alpha-shadow-daemon --campaign-id campaign-YYYYMMDD-spy-shadow-daemon-001 --max-cycles 5 --interval-seconds 300
+python -m trader.cli alpha-shadow-daemon --campaign-id campaign-YYYYMMDD-spy-shadow-daemon-001 --max-cycles 5 --interval-seconds 300 --stale-after-minutes 15
 ```
 
 Create the configured kill-switch file, default
@@ -410,6 +421,8 @@ signals, simulate orders or fills, perform portfolio accounting, or compute P&L.
 ## References
 
 - IBKR TWS API setup and paper/live ports: https://www.interactivebrokers.com/campus/trading-lessons/installing-configuring-tws-for-the-api/
+- IBKR historical data retrieval: https://www.interactivebrokers.com/campus/ibkr-quant-news/how-to-retrieve-equity-data-through-the-python-api/
+- IBKR market-data type behavior: https://interactivebrokers.github.io/tws-api/market_data_type.html
 - IBKR order submission and transmit behavior: https://interactivebrokers.github.io/tws-api/order_submission.html
 - IBKR placing-order callbacks: https://www.interactivebrokers.com/campus/trading-lessons/python-placing-orders/
 - IBKR order types and paper-trading notes: https://www.interactivebrokers.com/campus/ibkr-api-page/order-types/
