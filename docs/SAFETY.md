@@ -242,6 +242,16 @@ evidence. It does not submit, modify, or cancel orders, does not invoke broker
 order APIs, does not enable live trading, does not calculate P&L, and does not
 enable commodity execution.
 
+Milestone 27 adds `alpha-shadow-daemon-summary`, an offline-only drift and
+graduation gate for repeated daemon sessions. It reads ignored local daemon
+reports, requires fresh same-commit evidence when configured, checks heartbeat
+presence, stale-data flags, broker/account verification counts, and order-safety
+flags, then reports whether the session set is ready for SPY paper-daemon design.
+It fails closed on missing reports, commit mismatch, stale data, broker/account
+gaps, missing heartbeat evidence, source order flags, or order API evidence. It
+does not contact IBKR, submit orders, route execution, enable paper orders,
+calculate P&L, or expand commodity execution.
+
 Commodity scope remains research-only after paper execution hardening. `GLD`
 and `USO` can be research candidates, `DBA` stays excluded from execution until
 liquidity gates pass, and direct futures remain out of scope until an explicit

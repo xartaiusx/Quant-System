@@ -125,12 +125,13 @@
 - `alpha-campaign-run` orchestrates the existing staged SPY paper-alpha workflow in `shadow` or `paper` mode, writes a top-level campaign report, and keeps order APIs confined to the existing paper execution boundary.
 - `paper-ledger-update` reads ignored summary and reconciliation reports offline, validates current-commit same-campaign broker truth, and upserts one masked local JSONL campaign row under ignored `state/`.
 - `alpha-shadow-daemon` runs bounded autonomous read-only SPY shadow cycles, writes ignored heartbeat evidence, detects stale source bars, honors a kill-switch file, and keeps order APIs disabled.
+- `alpha-shadow-daemon-summary` reads ignored local daemon reports offline, compares commit/campaign and heartbeat evidence, fails closed on stale data or broker/account gaps, and reports whether repeated shadow sessions are ready for SPY paper-daemon design.
 
 ## Next Recommended Steps
 
-1. Run bounded `alpha-shadow-daemon --max-cycles 5` sessions against IB Gateway/TWS paper with Read-Only API enabled and review clean-cycle, stale-data, heartbeat, and broker/account evidence.
-2. Run `paper-reconcile`, `alpha-test-summary`, and `paper-ledger-update` after every paper-order window before marking the next alpha window eligible.
-3. Add daemon-session summarization and drift comparison across multiple shadow-daemon reports before any broader paper execution daemon.
+1. Run bounded `alpha-shadow-daemon --max-cycles 5` sessions against IB Gateway/TWS paper with Read-Only API enabled until repeated sessions are clean.
+2. Run `alpha-shadow-daemon-summary --min-clean-sessions 5` and require `graduation_ready=true` before designing a SPY-only paper execution daemon.
+3. Run `paper-reconcile`, `alpha-test-summary`, and `paper-ledger-update` after every paper-order window before marking the next alpha window eligible.
 4. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
 5. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
 6. Require ledger-matched broker truth before any broader paper execution daemon.
