@@ -151,12 +151,16 @@ def build_ibkr_data_diagnostics_report(
                 f"{selected_request.stale_after_minutes} minutes"
             )
 
+    market_probe_findings = _market_probe_findings(market_report)
+    if market_probe_findings.permission_blocker:
+        errors.append("market-probe indicates live SPY API market data subscription is missing")
     market_requested, market_received = _market_data_context(market_report)
     market_hint = _market_data_hint(
         latest_bar_age_minutes=bar_context.latest_bar_age_minutes,
         stale_after_minutes=selected_request.stale_after_minutes,
         market_data_type_requested=market_requested,
         market_data_type_received=market_received,
+        permission_blocker=market_probe_findings.permission_blocker,
     )
     strict_shadow_ready = (
         broker_probe_ok
@@ -200,6 +204,12 @@ def build_ibkr_data_diagnostics_report(
         market_data_type_requested=market_requested,
         market_data_type_received=market_received,
         market_data_type_hint=market_hint,
+        market_probe_ok=market_probe_findings.ok,
+        market_probe_final_status=market_probe_findings.final_status,
+        market_probe_errors=market_probe_findings.errors,
+        market_probe_warnings=market_probe_findings.warnings,
+        market_data_permission_blocker=market_probe_findings.permission_blocker,
+        market_data_permission_hint=market_probe_findings.permission_hint,
         strict_shadow_precheck_passed=strict_shadow_ready,
         next_recommended_action=_next_action(strict_shadow_ready, errors),
         operator_hints=operator_hints,
@@ -228,6 +238,25 @@ class _BarContext:
         if self.latest_bar_age_seconds is None:
             return None
         return self.latest_bar_age_seconds / 60
+
+
+class _MarketProbeFindings:
+    def __init__(
+        self,
+        *,
+        ok: bool | None,
+        final_status: str | None,
+        errors: list[str],
+        warnings: list[str],
+        permission_blocker: bool,
+        permission_hint: str | None,
+    ) -> None:
+        self.ok = ok
+        self.final_status = final_status
+        self.errors = errors
+        self.warnings = warnings
+        self.permission_blocker = permission_blocker
+        self.permission_hint = permission_hint
 
 
 def _bar_context(
@@ -334,6 +363,47 @@ def _market_data_context(
     return requested, received
 
 
+def _market_probe_findings(
+    market_report: MarketDataDiagnosticReport | None,
+) -> _MarketProbeFindings:
+    if market_report is None:
+        return _MarketProbeFindings(
+            ok=None,
+            final_status=None,
+            errors=[],
+            warnings=[],
+            permission_blocker=False,
+            permission_hint=None,
+        )
+    errors = [_format_broker_error(error) for error in market_report.errors]
+    permission_blocker = any(
+        error.code == 10089
+        or "requires additional subscription" in error.message.lower()
+        for error in market_report.errors
+    )
+    permission_hint = (
+        "live_market_data_subscription_missing_for_spy_api"
+        if permission_blocker
+        else None
+    )
+    return _MarketProbeFindings(
+        ok=market_report.ok,
+        final_status=market_report.final_status,
+        errors=errors,
+        warnings=list(market_report.warnings),
+        permission_blocker=permission_blocker,
+        permission_hint=permission_hint,
+    )
+
+
+def _format_broker_error(error: Any) -> str:
+    code = getattr(error, "code", None)
+    message = getattr(error, "message", str(error))
+    if code is None:
+        return str(message)
+    return f"IBKR {code}: {message}"
+
+
 def _request_setting_errors(
     request: IBKRDataDiagnosticsRequest,
     snapshot_report: HistoricalSnapshotReport,
@@ -370,7 +440,10 @@ def _market_data_hint(
     stale_after_minutes: int,
     market_data_type_requested: str | None,
     market_data_type_received: str | None,
+    permission_blocker: bool,
 ) -> str:
+    if permission_blocker:
+        return "live_market_data_subscription_missing_for_strict_shadow"
     if latest_bar_age_minutes is None:
         return "latest_bar_timestamp_missing"
     if latest_bar_age_minutes <= stale_after_minutes:

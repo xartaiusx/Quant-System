@@ -4163,6 +4163,10 @@ def _print_ibkr_data_diagnostics_result(report: IBKRDataDiagnosticsReport) -> No
     table.add_row("Market-data type requested", report.market_data_type_requested or "n/a")
     table.add_row("Market-data type received", report.market_data_type_received or "n/a")
     table.add_row("Market-data hint", report.market_data_type_hint)
+    table.add_row("Market probe OK", str(report.market_probe_ok))
+    table.add_row("Market probe status", report.market_probe_final_status or "n/a")
+    table.add_row("Market-data permission blocker", str(report.market_data_permission_blocker))
+    table.add_row("Market-data permission hint", report.market_data_permission_hint or "n/a")
     table.add_row("Strict precheck passed", str(report.strict_shadow_precheck_passed))
     table.add_row("Next action", report.next_recommended_action)
     table.add_row("Submitted orders", str(report.submitted_orders).lower())
@@ -4179,9 +4183,17 @@ def _print_ibkr_data_diagnostics_result(report: IBKRDataDiagnosticsReport) -> No
         console.print("[yellow]Diagnostics warnings[/yellow]")
         for warning in report.warnings:
             console.print(f"- {escape(warning)}")
+    if report.market_probe_warnings:
+        console.print("[yellow]Market-probe warnings[/yellow]")
+        for warning in report.market_probe_warnings:
+            console.print(f"- {escape(warning)}")
     if report.errors:
         console.print("[red]Diagnostics errors[/red]")
         for error in report.errors:
+            console.print(f"- {escape(error)}")
+    if report.market_probe_errors:
+        console.print("[red]Market-probe errors[/red]")
+        for error in report.market_probe_errors:
             console.print(f"- {escape(error)}")
 
 

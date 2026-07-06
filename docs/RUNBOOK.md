@@ -440,6 +440,20 @@ reported blocker first. A latest-bar age near the common delayed-data range is
 treated as a data-permission or delayed-data diagnostic, not a reason to loosen
 the autonomous readiness gate.
 
+If diagnostics reports delayed-data-like lag, run a read-only live
+market-data probe and rerun diagnostics:
+
+```bash
+export IBKR_CLIENT_ID=63
+python -m trader.cli market-probe --symbols SPY --data-type live --historical --timeout 30
+python -m trader.cli ibkr-data-diagnostics --min-bars 50 --stale-after-minutes 15
+```
+
+IBKR error `10089` means the API market-data request requires an additional
+subscription and delayed data is available instead. Treat that as a strict
+shadow blocker until live SPY API market-data permissions are available; do not
+start the daemon on delayed data under this policy.
+
 When the strict precheck passes:
 
 ```bash

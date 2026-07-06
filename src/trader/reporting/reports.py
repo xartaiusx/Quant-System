@@ -476,6 +476,8 @@ def ibkr_data_diagnostics_markdown(payload: Mapping[str, Any]) -> str:
     warnings = payload.get("warnings", [])
     errors = payload.get("errors", [])
     operator_hints = payload.get("operator_hints", [])
+    market_probe_warnings = payload.get("market_probe_warnings", [])
+    market_probe_errors = payload.get("market_probe_errors", [])
 
     lines = [
         f"# {payload.get('title', 'IBKR Data Freshness Diagnostics')}",
@@ -518,6 +520,11 @@ def ibkr_data_diagnostics_markdown(payload: Mapping[str, Any]) -> str:
         f"- Market-data type requested: `{payload.get('market_data_type_requested') or 'n/a'}`",
         f"- Market-data type received: `{payload.get('market_data_type_received') or 'n/a'}`",
         f"- Market-data hint: `{payload.get('market_data_type_hint', 'unknown')}`",
+        f"- Market probe OK: `{payload.get('market_probe_ok')}`",
+        f"- Market probe final status: `{payload.get('market_probe_final_status') or 'n/a'}`",
+        "- Market-data permission blocker: "
+        f"`{payload.get('market_data_permission_blocker', False)}`",
+        f"- Market-data permission hint: `{payload.get('market_data_permission_hint') or 'n/a'}`",
         "",
         "## Safety",
         "",
@@ -547,6 +554,18 @@ def ibkr_data_diagnostics_markdown(payload: Mapping[str, Any]) -> str:
     lines.extend(["", "## Operator Hints", ""])
     if operator_hints:
         lines.extend(f"- {hint}" for hint in operator_hints)
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Market-Probe Warnings", ""])
+    if market_probe_warnings:
+        lines.extend(f"- {warning}" for warning in market_probe_warnings)
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Market-Probe Errors", ""])
+    if market_probe_errors:
+        lines.extend(f"- {error}" for error in market_probe_errors)
     else:
         lines.append("- None")
 

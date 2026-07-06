@@ -3884,6 +3884,12 @@ class IBKRDataDiagnosticsReport(SerializableModel):
     market_data_type_requested: str | None = None
     market_data_type_received: str | None = None
     market_data_type_hint: str
+    market_probe_ok: bool | None = None
+    market_probe_final_status: str | None = None
+    market_probe_errors: list[str] = Field(default_factory=list)
+    market_probe_warnings: list[str] = Field(default_factory=list)
+    market_data_permission_blocker: bool = False
+    market_data_permission_hint: str | None = None
     strict_shadow_precheck_passed: bool = False
     next_recommended_action: str
     operator_hints: list[str] = Field(default_factory=list)
