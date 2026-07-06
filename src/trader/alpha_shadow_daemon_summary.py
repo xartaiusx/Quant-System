@@ -150,7 +150,9 @@ def _matching_report_paths(report_glob: str) -> list[Path]:
     return [
         path
         for path in sorted(Path(match) for match in glob(report_glob))
-        if path.is_file() and not path.name.startswith("latest_")
+        if path.is_file()
+        and not path.name.startswith("latest_")
+        and not path.name.startswith("alpha_shadow_daemon_summary_")
     ]
 
 
