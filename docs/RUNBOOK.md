@@ -426,6 +426,23 @@ Expected behavior:
 - reports `submitted_orders=false`, `paper_orders_enabled=false`,
   `order_routing_enabled=false`, and `order_api_invoked=false`
 
+Summarize repeated daemon sessions offline before designing any paper execution
+daemon:
+
+```bash
+python -m trader.cli alpha-shadow-daemon-summary --report-glob='reports/alpha_shadow_daemon_*.json' --min-clean-sessions 5 --max-report-age-hours 168 --require-same-commit true
+```
+
+Expected behavior:
+
+- reads ignored local daemon reports only and does not contact IBKR
+- fails closed on missing reports, commit mismatch, stale data,
+  broker/account gaps, missing heartbeat evidence, or order-safety flags
+- reports `graduation_ready=true` only when the clean-session threshold is met
+  with same-commit broker/account and heartbeat evidence
+- keeps `submitted_orders=false`, `paper_orders_enabled=false`,
+  `order_routing_enabled=false`, and `order_api_invoked=false`
+
 ## Read-Only Market-Data Diagnostics
 
 ```bash

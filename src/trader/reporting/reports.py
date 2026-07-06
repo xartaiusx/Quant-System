@@ -49,6 +49,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return alpha_shadow_run_markdown(payload)
     if payload.get("report_type") == "alpha_shadow_daemon":
         return alpha_shadow_daemon_markdown(payload)
+    if payload.get("report_type") == "alpha_shadow_daemon_summary":
+        return alpha_shadow_daemon_summary_markdown(payload)
     if payload.get("report_type") == "paper_order_smoke":
         return paper_order_smoke_markdown(payload)
     if payload.get("report_type") == "alpha_paper_run":
@@ -1657,6 +1659,101 @@ def alpha_shadow_daemon_markdown(payload: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def alpha_shadow_daemon_summary_markdown(payload: Mapping[str, Any]) -> str:
+    """Render the offline alpha-shadow-daemon session summary."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    source_reports = payload.get("source_reports", [])
+    next_reasons = payload.get("next_eligibility_reason", [])
+
+    lines = [
+        f"# {payload.get('title', 'IBKR Alpha Shadow Daemon Session Summary')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'alpha-shadow-daemon-summary')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Commit SHA: `{payload.get('commit_sha', 'unknown')}`",
+        f"- Sessions: `{payload.get('session_count', 0)}`",
+        f"- Clean sessions: `{payload.get('clean_session_count', 0)}`",
+        f"- Minimum clean sessions: `{_request_value(payload, 'min_clean_sessions', 5)}`",
+        f"- Total cycles: `{payload.get('total_cycles', 0)}`",
+        f"- Total clean cycles: `{payload.get('total_clean_cycles', 0)}`",
+        f"- Stale sessions: `{payload.get('stale_session_count', 0)}`",
+        f"- Stale cycles: `{payload.get('stale_cycle_count', 0)}`",
+        f"- Broker-connected cycles: `{payload.get('broker_connected_cycles', 0)}`",
+        "- Account-summary verified cycles: "
+        f"`{payload.get('account_summary_verified_cycles', 0)}`",
+        f"- Missing heartbeats: `{payload.get('missing_heartbeat_count', 0)}`",
+        f"- Heartbeat mismatches: `{payload.get('heartbeat_mismatch_count', 0)}`",
+        f"- Safety violations: `{payload.get('safety_violation_count', 0)}`",
+        f"- Graduation ready: `{payload.get('graduation_ready', False)}`",
+        f"- Submitted orders: `{payload.get('submitted_orders', True)}`",
+        f"- Paper orders enabled: `{payload.get('paper_orders_enabled', True)}`",
+        f"- Live orders enabled: `{payload.get('live_orders_enabled', True)}`",
+        f"- Read-Only API expected: `{payload.get('read_only_api_expected', False)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        "",
+        "## Safety",
+        "",
+        str(payload.get("safety_statement", "Daemon summary safety scope unavailable.")),
+        "",
+        str(payload.get("commodity_scope", "Commodity scope unavailable.")),
+        "",
+        "## Source Reports",
+        "",
+    ]
+    if isinstance(source_reports, list) and source_reports:
+        for source in source_reports:
+            if not isinstance(source, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"`{source.get('source_report_path', 'unknown')}` "
+                f"campaign=`{source.get('campaign_id', 'n/a')}` "
+                f"status=`{source.get('final_status', 'unknown')}` "
+                f"cycles=`{source.get('cycle_count', 0)}` "
+                f"clean=`{source.get('clean_cycle_count', 0)}` "
+                f"broker=`{source.get('broker_connected_cycles', 0)}` "
+                f"account=`{source.get('account_summary_verified_cycles', 0)}` "
+                f"stale=`{source.get('stale_data_detected', False)}` "
+                f"heartbeat=`{source.get('heartbeat_present', False)}` "
+                f"safety_flag=`{_source_safety_flag(source)}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Commit And Campaign Drift", ""])
+    commit_shas = payload.get("commit_shas", [])
+    campaign_ids = payload.get("campaign_ids", [])
+    lines.append(f"- Source commits: `{_join_or_none(commit_shas)}`")
+    lines.append(f"- Source campaigns: `{_join_or_none(campaign_ids)}`")
+
+    lines.extend(["", "## Next Eligibility", ""])
+    if isinstance(next_reasons, list) and next_reasons:
+        lines.extend(f"- {reason}" for reason in next_reasons)
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Warning Fingerprints", ""])
+    warning_fingerprints = payload.get("warning_fingerprints", [])
+    if isinstance(warning_fingerprints, list) and warning_fingerprints:
+        lines.extend(f"- {warning}" for warning in warning_fingerprints)
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Error Fingerprints", ""])
+    error_fingerprints = payload.get("error_fingerprints", [])
+    if isinstance(error_fingerprints, list) and error_fingerprints:
+        lines.extend(f"- {error}" for error in error_fingerprints)
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
 def paper_order_smoke_markdown(payload: Mapping[str, Any]) -> str:
     """Render the gated paper-order smoke report."""
 
@@ -2237,6 +2334,29 @@ def paper_ledger_update_markdown(payload: Mapping[str, Any]) -> str:
 
     lines.extend(_warnings_and_errors(warnings, errors))
     return "\n".join(lines) + "\n"
+
+
+def _request_value(payload: Mapping[str, Any], key: str, default: Any) -> Any:
+    request = payload.get("request", {})
+    if not isinstance(request, Mapping):
+        return default
+    return request.get(key, default)
+
+
+def _source_safety_flag(source: Mapping[str, Any]) -> bool:
+    return bool(
+        source.get("submitted_orders", False)
+        or source.get("paper_orders_enabled", False)
+        or source.get("live_orders_enabled", False)
+        or source.get("order_routing_enabled", False)
+        or source.get("order_api_invoked", False)
+    )
+
+
+def _join_or_none(values: Any) -> str:
+    if not isinstance(values, list) or not values:
+        return "none"
+    return ", ".join(str(value) for value in values)
 
 
 def _warnings_and_errors(warnings: list[Any], errors: list[Any]) -> list[str]:

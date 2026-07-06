@@ -17,6 +17,7 @@ from trader.alpha_campaign import READ_ONLY_OFF_CONFIRMATION, run_alpha_campaign
 from trader.alpha_paper import ALPHA_PAPER_CONFIRMATION, run_alpha_paper_run
 from trader.alpha_shadow import run_alpha_shadow_run
 from trader.alpha_shadow_daemon import run_alpha_shadow_daemon
+from trader.alpha_shadow_daemon_summary import run_alpha_shadow_daemon_summary
 from trader.alpha_summary import run_alpha_test_summary
 from trader.backtest.data_adapter import build_backtest_feed, build_backtest_feed_report
 from trader.backtest.engine import build_backtest_run_report
@@ -43,7 +44,10 @@ from trader.models import (
     AlphaPaperRunReport,
     AlphaPaperRunRequest,
     AlphaShadowDaemonReport,
+    AlphaShadowDaemonReportEvidence,
     AlphaShadowDaemonRequest,
+    AlphaShadowDaemonSummaryReport,
+    AlphaShadowDaemonSummaryRequest,
     AlphaShadowRunReport,
     AlphaShadowRunRequest,
     AlphaTestSummaryReport,
@@ -1692,6 +1696,64 @@ def alpha_shadow_daemon(
         raise typer.Exit(code=1)
 
 
+@app.command("alpha-shadow-daemon-summary")
+def alpha_shadow_daemon_summary(
+    report_glob: Annotated[
+        str,
+        typer.Option(
+            "--report-glob",
+            help="Glob for ignored alpha-shadow-daemon JSON reports.",
+        ),
+    ] = "reports/alpha_shadow_daemon_*.json",
+    min_clean_sessions: Annotated[
+        int,
+        typer.Option(
+            "--min-clean-sessions",
+            help="Clean daemon sessions required before paper-daemon design.",
+        ),
+    ] = 5,
+    max_report_age_hours: Annotated[
+        int,
+        typer.Option("--max-report-age-hours", help="Maximum source report age in hours."),
+    ] = 168,
+    require_same_commit: Annotated[
+        str,
+        typer.Option(
+            "--require-same-commit",
+            help="Require every source report to match the current commit: true or false.",
+        ),
+    ] = "true",
+) -> None:
+    """Summarize read-only alpha-shadow-daemon sessions without contacting IBKR."""
+
+    request = AlphaShadowDaemonSummaryRequest(
+        report_glob=report_glob,
+        min_clean_sessions=min_clean_sessions,
+        max_report_age_hours=max_report_age_hours,
+        require_same_commit=_parse_bool_option(
+            require_same_commit,
+            "--require-same-commit",
+        ),
+    )
+    report = run_alpha_shadow_daemon_summary(request)
+    json_path, md_path = Journal().write_cycle(
+        "alpha_shadow_daemon_summary",
+        _report_dict(report),
+    )
+
+    console.print("[bold]Alpha shadow daemon session summary[/bold]")
+    console.print("Offline report comparison only; no broker contact.")
+    console.print("Order routing: disabled.")
+    console.print("Paper execution: disabled.")
+    console.print("Submitted orders: false.")
+    console.print("Read-Only API expected: true.")
+    _print_alpha_shadow_daemon_summary_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("paper-order-smoke")
 def paper_order_smoke(
     campaign_id: Annotated[
@@ -2436,6 +2498,7 @@ def _report_dict(
         | AlphaCampaignRunReport
         | AlphaPaperRunReport
         | AlphaShadowDaemonReport
+        | AlphaShadowDaemonSummaryReport
         | AlphaShadowRunReport
         | BacktestDataAdapterReport
         | BacktestRunReport
@@ -3084,6 +3147,90 @@ def _print_alpha_shadow_daemon_result(report: AlphaShadowDaemonReport) -> None:
         console.print("[red]Alpha shadow daemon errors[/red]")
         for error in report.errors:
             console.print(f"- {escape(error)}")
+
+
+def _print_alpha_shadow_daemon_summary_result(
+    report: AlphaShadowDaemonSummaryReport,
+) -> None:
+    table = Table(title="Alpha Shadow Daemon Summary")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Final status", _enum_value(report.final_status))
+    table.add_row("Commit SHA", report.commit_sha or "unknown")
+    table.add_row("Sessions", str(report.session_count))
+    table.add_row("Clean sessions", str(report.clean_session_count))
+    table.add_row("Min clean sessions", str(report.request.min_clean_sessions))
+    table.add_row("Total cycles", str(report.total_cycles))
+    table.add_row("Total clean cycles", str(report.total_clean_cycles))
+    table.add_row("Stale sessions", str(report.stale_session_count))
+    table.add_row("Stale cycles", str(report.stale_cycle_count))
+    table.add_row("Broker-connected cycles", str(report.broker_connected_cycles))
+    table.add_row(
+        "Account-verified cycles",
+        str(report.account_summary_verified_cycles),
+    )
+    table.add_row("Missing heartbeats", str(report.missing_heartbeat_count))
+    table.add_row("Heartbeat mismatches", str(report.heartbeat_mismatch_count))
+    table.add_row("Safety violations", str(report.safety_violation_count))
+    table.add_row("Graduation ready", str(report.graduation_ready).lower())
+    table.add_row("Submitted orders", str(report.submitted_orders).lower())
+    table.add_row("Paper orders enabled", str(report.paper_orders_enabled).lower())
+    table.add_row("Read-Only API expected", str(report.read_only_api_expected).lower())
+    table.add_row("Order API invoked", str(report.order_api_invoked).lower())
+    console.print(table)
+
+    if report.source_reports:
+        source_table = Table(title="Source Daemon Reports")
+        source_table.add_column("Path")
+        source_table.add_column("Campaign")
+        source_table.add_column("Status")
+        source_table.add_column("Cycles")
+        source_table.add_column("Clean")
+        source_table.add_column("Broker")
+        source_table.add_column("Account")
+        source_table.add_column("Heartbeat")
+        source_table.add_column("Safety")
+        for source in report.source_reports:
+            source_table.add_row(
+                source.source_report_path,
+                source.campaign_id or "n/a",
+                source.final_status,
+                str(source.cycle_count),
+                str(source.clean_cycle_count),
+                str(source.broker_connected_cycles),
+                str(source.account_summary_verified_cycles),
+                str(source.heartbeat_present).lower(),
+                str(_source_summary_safety_flag(source)).lower(),
+            )
+        console.print(source_table)
+    if report.commit_shas:
+        console.print("Source commits: " + ", ".join(escape(item) for item in report.commit_shas))
+    if report.campaign_ids:
+        console.print(
+            "Source campaigns: " + ", ".join(escape(item) for item in report.campaign_ids)
+        )
+    if report.next_eligibility_reason:
+        console.print("[bold]Next eligibility[/bold]")
+        for reason in report.next_eligibility_reason:
+            console.print(f"- {escape(reason)}")
+    if report.warnings:
+        console.print("[yellow]Daemon summary warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Daemon summary errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _source_summary_safety_flag(source: AlphaShadowDaemonReportEvidence) -> bool:
+    return bool(
+        source.submitted_orders
+        or source.paper_orders_enabled
+        or source.live_orders_enabled
+        or source.order_routing_enabled
+        or source.order_api_invoked
+    )
 
 
 def _print_paper_order_smoke_result(report: PaperOrderSmokeReport) -> None:

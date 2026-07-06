@@ -208,6 +208,14 @@ class AlphaShadowDaemonStatus(StrEnum):
     FAILED = "failed"
 
 
+class AlphaShadowDaemonSummaryStatus(StrEnum):
+    """Offline daemon-session summary states."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    FAILED = "failed"
+
+
 class PaperOrderSmokeRunStatus(StrEnum):
     """Gated IBKR paper-order smoke run states."""
 
@@ -2758,6 +2766,167 @@ class AlphaShadowDaemonReport(SerializableModel):
             raise ValueError("cycle_count must match cycles length")
         if self.ok and self.errors:
             raise ValueError("ok daemon reports must not include errors")
+        return self
+
+
+class AlphaShadowDaemonSummaryRequest(SerializableModel):
+    """Offline daemon-session summary request."""
+
+    report_glob: str = "reports/alpha_shadow_daemon_*.json"
+    min_clean_sessions: int = 5
+    max_report_age_hours: int = 168
+    require_same_commit: bool = True
+
+    @field_validator("report_glob")
+    @classmethod
+    def validate_report_glob(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("report_glob must not be empty")
+        return normalized
+
+    @field_validator("min_clean_sessions", "max_report_age_hours")
+    @classmethod
+    def validate_positive_ints(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("daemon summary integer settings must be positive")
+        return value
+
+
+class AlphaShadowDaemonReportEvidence(SerializableModel):
+    """Evidence extracted from one ignored local alpha-shadow-daemon report."""
+
+    source_report_path: str
+    campaign_id: str | None = None
+    commit_sha: str | None = None
+    timestamp: datetime | None = None
+    final_status: str = "unknown"
+    ok: bool = False
+    cycle_count: int = 0
+    clean_cycle_count: int = 0
+    stale_data_detected: bool = False
+    stale_cycle_count: int = 0
+    broker_connected_cycles: int = 0
+    account_summary_verified_cycles: int = 0
+    heartbeat_path: str | None = None
+    heartbeat_present: bool = False
+    heartbeat_campaign_id: str | None = None
+    heartbeat_campaign_matches: bool | None = None
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    live_orders_enabled: bool = False
+    order_routing_enabled: bool = False
+    order_api_invoked: bool = False
+    broker_contact_read_only: bool = True
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "cycle_count",
+        "clean_cycle_count",
+        "stale_cycle_count",
+        "broker_connected_cycles",
+        "account_summary_verified_cycles",
+    )
+    @classmethod
+    def validate_non_negative_counts(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("daemon summary evidence counts must be non-negative")
+        return value
+
+
+class AlphaShadowDaemonSummaryReport(SerializableModel):
+    """Offline multi-session summary for alpha-shadow-daemon graduation evidence."""
+
+    title: str = "IBKR Alpha Shadow Daemon Session Summary"
+    report_type: str = "alpha_shadow_daemon_summary"
+    command: str = "alpha-shadow-daemon-summary"
+    ok: bool
+    request: AlphaShadowDaemonSummaryRequest
+    commit_sha: str | None = None
+    source_report_paths: list[str] = Field(default_factory=list)
+    source_reports: list[AlphaShadowDaemonReportEvidence] = Field(default_factory=list)
+    session_count: int = 0
+    total_cycles: int = 0
+    total_clean_cycles: int = 0
+    clean_session_count: int = 0
+    stale_session_count: int = 0
+    stale_cycle_count: int = 0
+    broker_connected_cycles: int = 0
+    account_summary_verified_cycles: int = 0
+    broker_connected_sessions: int = 0
+    account_summary_verified_sessions: int = 0
+    missing_heartbeat_count: int = 0
+    heartbeat_mismatch_count: int = 0
+    safety_violation_count: int = 0
+    commit_shas: list[str] = Field(default_factory=list)
+    campaign_ids: list[str] = Field(default_factory=list)
+    warning_fingerprints: list[str] = Field(default_factory=list)
+    error_fingerprints: list[str] = Field(default_factory=list)
+    graduation_ready: bool = False
+    next_eligibility_reason: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    live_orders_enabled: bool = False
+    read_only_api_expected: bool = True
+    order_routing_enabled: bool = False
+    order_api_invoked: bool = False
+    broker_contact_read_only: bool = True
+    paper_execution_enabled: bool = False
+    generated_orders: bool = False
+    order_intents_generated: bool = False
+    pnl_calculated: bool = False
+    portfolio_accounting: bool = False
+    futures_contracts_enabled: bool = False
+    direct_futures_data_enabled: bool = False
+    options_contracts_enabled: bool = False
+    no_order_guarantee: bool = True
+    safety_statement: str = (
+        "alpha-shadow-daemon-summary is offline-only. It compares ignored local "
+        "read-only daemon reports, checks heartbeat and safety evidence, and never "
+        "contacts IBKR or invokes broker order APIs."
+    )
+    commodity_scope: str = (
+        "Commodity-linked proxies remain research-only. Direct futures, options, "
+        "rollover, margin, and commodity execution are out of scope."
+    )
+    final_status: AlphaShadowDaemonSummaryStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_summary_safety(self) -> AlphaShadowDaemonSummaryReport:
+        if self.submitted_orders:
+            raise ValueError("alpha-shadow-daemon-summary must not submit orders")
+        if self.paper_orders_enabled:
+            raise ValueError("paper_orders_enabled must remain false for daemon summary")
+        if self.live_orders_enabled:
+            raise ValueError("live_orders_enabled must remain false")
+        if not self.read_only_api_expected:
+            raise ValueError("read_only_api_expected must remain true")
+        if self.order_routing_enabled or self.order_api_invoked:
+            raise ValueError("alpha-shadow-daemon-summary must not invoke order routing")
+        if not self.broker_contact_read_only:
+            raise ValueError("broker contact must remain read-only")
+        if self.paper_execution_enabled:
+            raise ValueError("paper execution must remain disabled")
+        if self.generated_orders or self.order_intents_generated:
+            raise ValueError("alpha-shadow-daemon-summary must not generate orders")
+        if self.pnl_calculated or self.portfolio_accounting:
+            raise ValueError("alpha-shadow-daemon-summary must not calculate P&L")
+        if (
+            self.futures_contracts_enabled
+            or self.direct_futures_data_enabled
+            or self.options_contracts_enabled
+        ):
+            raise ValueError("derivatives execution must remain disabled")
+        if not self.no_order_guarantee:
+            raise ValueError("no_order_guarantee must remain true")
+        if self.session_count != len(self.source_reports):
+            raise ValueError("session_count must match source_reports length")
+        if self.ok and self.errors:
+            raise ValueError("ok daemon summaries must not include errors")
         return self
 
 

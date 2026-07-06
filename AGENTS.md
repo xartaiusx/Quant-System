@@ -33,6 +33,7 @@ The current project is infrastructure only. It must support research, signal gen
 - Data-quality gate commands must remain broker-free and local-file-only. They may fail or warn on snapshot quality, but they must not contact IBKR, evaluate signals, generate order intents, simulate fills, compute P&L, or enable direct futures.
 - Evaluator comparison commands must remain broker-free and diagnostic-only. They may compare approved analytical condition counts across parameter candidates, but they must not rank trade recommendations, optimize P&L, generate trading signals, create order intents, simulate fills, route orders, or contact brokers.
 - `paper-order-smoke` is the only current production command allowed to call IBKR paper order APIs. It must require `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`, `ALLOW_LIVE_ORDERS=false`, `IBKR_HOST=127.0.0.1`, `IBKR_PORT=7497`, `IBKR_CLIENT_ID=21`, explicit confirmation, SPY only, quantity `1`, STK/SMART/USD, `LMT`, `DAY`, max notional `$1,000`, and no live route. Keep the existing `PaperExecutor` refusing submissions for all normal router paths.
+- `alpha-shadow-daemon-summary` must remain offline-only. It may read ignored local `alpha_shadow_daemon` reports and heartbeat files, but it must not contact IBKR, enable paper orders, invoke order APIs, generate order intents, calculate P&L, or expand commodity execution.
 - Do not commit `.env`, secrets, account numbers, API credentials, tokens, or sensitive logs.
 - Missing or invalid config must fail closed.
 
@@ -135,6 +136,7 @@ Run read-only alpha shadow orchestration:
 ```bash
 python -m trader.cli alpha-shadow-run
 scripts/run-alpha-shadow-run.sh
+python -m trader.cli alpha-shadow-daemon-summary --report-glob='reports/alpha_shadow_daemon_*.json' --min-clean-sessions 5 --max-report-age-hours 168 --require-same-commit true
 ```
 
 Run the gated paper-order smoke rehearsal only after a passing alpha shadow run:

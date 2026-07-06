@@ -390,6 +390,16 @@ clean-cycle count, heartbeat path, and whether the configured clean-session
 threshold is met. Paper execution daemons remain out of scope until repeated
 shadow sessions and ledger-backed broker truth are stable.
 
+`alpha-shadow-daemon-summary` is the offline drift gate for those sessions. It
+reads ignored local `alpha_shadow_daemon` reports, checks report age,
+same-commit evidence, heartbeat presence, stale-data flags, broker/account
+verification counts, and order-safety flags, then writes JSON/Markdown summary
+evidence. It does not contact IBKR and keeps `submitted_orders=false`:
+
+```bash
+python -m trader.cli alpha-shadow-daemon-summary --report-glob='reports/alpha_shadow_daemon_*.json' --min-clean-sessions 5 --max-report-age-hours 168 --require-same-commit true
+```
+
 The offline fixture stress suite uses temporary synthetic historical snapshots
 to validate loader, feed, engine, strategy-contract, strategy-runner, and
 signal-contract/signal-runner/signal-evaluate behavior against partial, gapped,

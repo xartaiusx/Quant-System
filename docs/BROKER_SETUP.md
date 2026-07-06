@@ -102,6 +102,7 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - `alpha-test-summary` is offline-only and aggregates ignored local run reports into a no-secret paper campaign summary.
 - `paper-ledger-update` is offline-only and writes one masked campaign row to ignored local `state/paper_ledger.jsonl` after reconciliation and summary evidence pass.
 - `alpha-shadow-daemon` repeats the read-only SPY shadow path for bounded cycles, writes ignored heartbeat evidence, honors a kill-switch file, and keeps order routing disabled.
+- `alpha-shadow-daemon-summary` is offline-only and compares ignored daemon reports for same-commit, heartbeat, broker/account, stale-data, and safety evidence before any paper-daemon design.
 - Paper execution remains blocked by the refusing paper executor.
 - Live trading remains impossible.
 
@@ -148,6 +149,7 @@ python -m trader.cli paper-ledger-update
 python -m trader.cli alpha-campaign-run --mode shadow --campaign-id campaign-YYYYMMDD-spy-001
 python -m trader.cli alpha-campaign-run --mode paper --campaign-id campaign-YYYYMMDD-spy-001 --read-only-off-confirm READ_ONLY_OFF_FOR_ALPHA_PAPER
 python -m trader.cli alpha-shadow-daemon --campaign-id campaign-YYYYMMDD-spy-shadow-daemon-001 --max-cycles 5 --interval-seconds 300
+python -m trader.cli alpha-shadow-daemon-summary --report-glob='reports/alpha_shadow_daemon_*.json' --min-clean-sessions 5 --max-report-age-hours 168 --require-same-commit true
 ```
 
 `account --connect` and `positions --connect` are read-only. If the broker is unavailable, they clearly fall back to mock data instead of pretending mock data came from TWS or Gateway.
