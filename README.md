@@ -378,8 +378,9 @@ market-hours shadow testing. Run it after a fresh `broker-probe` and
 `history-snapshot --symbols SPY --duration "1 D" --bar-size "5 mins"
 --what-to-show TRADES --use-rth 1`. It reads ignored local reports only,
 requires same-commit broker/account evidence, confirms at least `50` SPY bars,
-checks the latest 5-minute bar age against `15` minutes, and writes
-JSON/Markdown diagnostics. It never contacts IBKR and reports
+checks the latest 5-minute bar age against `15` minutes, surfaces live
+market-data subscription errors from the latest `market-probe` report, and
+writes JSON/Markdown diagnostics. It never contacts IBKR and reports
 `submitted_orders=false`, `paper_orders_enabled=false`, and
 `order_api_invoked=false`.
 

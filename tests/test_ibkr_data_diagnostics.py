@@ -11,6 +11,7 @@ import pytest
 import trader.data.ibkr_data_diagnostics as diagnostics
 from trader.models import (
     BrokerDiagnosticReport,
+    BrokerErrorEvent,
     HistoricalReadinessReport,
     HistoricalReadinessStatus,
     HistoricalReadinessSummary,
@@ -21,6 +22,8 @@ from trader.models import (
     IBKRDataDiagnosticsRequest,
     IBKRDataDiagnosticsStatus,
     ManagedAccountInfo,
+    MarketDataDiagnosticReport,
+    MarketDataRequestType,
 )
 from trader.reporting.reports import markdown_summary
 
@@ -130,8 +133,42 @@ def test_request_mismatch_fails_closed(tmp_path: Path) -> None:
     assert any("duration" in error for error in report.errors)
 
 
+def test_live_market_data_permission_blocker_fails_closed(tmp_path: Path) -> None:
+    paths = write_source_reports(
+        tmp_path,
+        latest_bar_age_minutes=10,
+        bar_count=58,
+        include_market_probe=True,
+    )
+
+    report = diagnostics.build_ibkr_data_diagnostics_report(request(paths), now=NOW)
+
+    assert report.ok is False
+    assert report.strict_shadow_precheck_passed is False
+    assert report.freshness_passed is True
+    assert report.market_probe_ok is False
+    assert report.market_probe_final_status == "partial"
+    assert report.market_data_type_requested == "live"
+    assert report.market_data_permission_blocker is True
+    assert (
+        report.market_data_permission_hint
+        == "live_market_data_subscription_missing_for_spy_api"
+    )
+    assert (
+        report.market_data_type_hint
+        == "live_market_data_subscription_missing_for_strict_shadow"
+    )
+    assert any("IBKR 10089" in error for error in report.market_probe_errors)
+    assert any("market-probe indicates" in error for error in report.errors)
+
+
 def test_markdown_renders_safety_and_blocker(tmp_path: Path) -> None:
-    paths = write_source_reports(tmp_path, latest_bar_age_minutes=18.37, bar_count=58)
+    paths = write_source_reports(
+        tmp_path,
+        latest_bar_age_minutes=18.37,
+        bar_count=58,
+        include_market_probe=True,
+    )
     report = diagnostics.build_ibkr_data_diagnostics_report(request(paths), now=NOW)
 
     rendered = markdown_summary(report.model_dump(mode="json"))
@@ -140,6 +177,8 @@ def test_markdown_renders_safety_and_blocker(tmp_path: Path) -> None:
     assert "Order API invoked: `False`" in rendered
     assert "Broker contacted by diagnostics: `False`" in rendered
     assert "keep_shadow_daemon_blocked_and_investigate_ibkr_data_lag" in rendered
+    assert "Market-data permission blocker: `True`" in rendered
+    assert "IBKR 10089" in rendered
     assert "latest bar age" in rendered
 
 
@@ -148,7 +187,9 @@ def request(paths: dict[str, Path]) -> IBKRDataDiagnosticsRequest:
         broker_probe_report_path=paths["broker"].as_posix(),
         history_snapshot_report_path=paths["snapshot"].as_posix(),
         history_readiness_report_path=paths["readiness"].as_posix(),
-        market_probe_report_path=None,
+        market_probe_report_path=(
+            paths["market"].as_posix() if "market" in paths else None
+        ),
     )
 
 
@@ -159,6 +200,7 @@ def write_source_reports(
     bar_count: int,
     broker_managed_accounts: bool = True,
     duration: str = "1 D",
+    include_market_probe: bool = False,
 ) -> dict[str, Path]:
     snapshot_path = tmp_path / "spy-snapshot.jsonl"
     bars = snapshot_rows(bar_count=bar_count, latest_bar_age_minutes=latest_bar_age_minutes)
@@ -167,6 +209,7 @@ def write_source_reports(
     broker_path = tmp_path / "broker.json"
     snapshot_report_path = tmp_path / "snapshot.json"
     readiness_path = tmp_path / "readiness.json"
+    market_path = tmp_path / "market.json"
 
     write_report(
         broker_path,
@@ -188,11 +231,15 @@ def write_source_reports(
             duration=duration,
         ),
     )
-    return {
+    paths = {
         "broker": broker_path,
         "snapshot": snapshot_report_path,
         "readiness": readiness_path,
     }
+    if include_market_probe:
+        write_report(market_path, market_probe_report())
+        paths["market"] = market_path
+    return paths
 
 
 def snapshot_rows(*, bar_count: int, latest_bar_age_minutes: float) -> list[dict[str, str]]:
@@ -335,6 +382,38 @@ def readiness_report(
         snapshot_paths=[snapshot_path.as_posix()],
         summaries=[summary],
         final_status="ready",
+        timestamp=NOW,
+    )
+
+
+def market_probe_report() -> MarketDataDiagnosticReport:
+    return MarketDataDiagnosticReport(
+        ok=False,
+        mode="paper",
+        host="127.0.0.1",
+        port=4002,
+        client_id=603,
+        broker_kind="ib_gateway",
+        connected=True,
+        ibapi_available=True,
+        connection_attempted=True,
+        symbols_requested=["SPY"],
+        market_data_type_requested=MarketDataRequestType.LIVE,
+        market_data_type_requested_code=1,
+        include_historical=True,
+        errors=[
+            BrokerErrorEvent(
+                code=10089,
+                req_id=10002,
+                message=(
+                    "Requested market data requires additional subscription for API. "
+                    "Delayed market data is available.SPY ARCA/TOP/ALL"
+                ),
+                timestamp=NOW,
+            )
+        ],
+        warnings=["live data unavailable; retry with --data-type delayed"],
+        final_status="partial",
         timestamp=NOW,
     )
 

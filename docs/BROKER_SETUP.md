@@ -126,6 +126,7 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - Live market data requires IBKR permissions/subscriptions. Delayed data is acceptable for early diagnostics and is the default.
 - Historical data availability depends on IBKR data permissions, instrument availability, and pacing limits.
 - Strict SPY shadow-daemon attempts require enough current `5 mins` bars and a latest-bar age at or below the configured gate. If `ibkr-data-diagnostics` flags a lag near delayed-data timing, keep the daemon blocked and diagnose permissions or market-data type before changing the gate.
+- IBKR error `10089` on `market-probe --data-type live` indicates live API market data requires an additional subscription. Under the strict policy, delayed data remains useful for diagnostics but is not sufficient for autonomous shadow readiness.
 - Missing bid/ask values can occur outside market hours or when permissions are unavailable; the report records this as diagnostics rather than pretending mock data is broker data.
 - IB Gateway paper uses port `4002`; live Gateway port `4001` remains rejected.
 
