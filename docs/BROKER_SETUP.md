@@ -103,6 +103,7 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - `paper-ledger-update` is offline-only and writes one masked campaign row to ignored local `state/paper_ledger.jsonl` after reconciliation and summary evidence pass.
 - `alpha-shadow-daemon` repeats the read-only SPY shadow path for bounded cycles, writes ignored heartbeat evidence, honors a kill-switch file, and keeps order routing disabled.
 - `alpha-shadow-daemon-summary` is offline-only and compares ignored daemon reports for same-commit, heartbeat, broker/account, stale-data, and safety evidence before any paper-daemon design.
+- `ibkr-data-diagnostics` is offline-only and reads the latest ignored broker/history reports to verify strict SPY bar count and freshness before a market-hours shadow daemon attempt.
 - Paper execution remains blocked by the refusing paper executor.
 - Live trading remains impossible.
 
@@ -124,6 +125,7 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - IBKR farm-status warnings such as `2104`, `2106`, `2107`, and `2158` are informational for this probe. They do not mean current-time connectivity failed.
 - Live market data requires IBKR permissions/subscriptions. Delayed data is acceptable for early diagnostics and is the default.
 - Historical data availability depends on IBKR data permissions, instrument availability, and pacing limits.
+- Strict SPY shadow-daemon attempts require enough current `5 mins` bars and a latest-bar age at or below the configured gate. If `ibkr-data-diagnostics` flags a lag near delayed-data timing, keep the daemon blocked and diagnose permissions or market-data type before changing the gate.
 - Missing bid/ask values can occur outside market hours or when permissions are unavailable; the report records this as diagnostics rather than pretending mock data is broker data.
 - IB Gateway paper uses port `4002`; live Gateway port `4001` remains rejected.
 
@@ -141,6 +143,7 @@ python -m trader.cli positions --connect
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
 python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
+python -m trader.cli ibkr-data-diagnostics --min-bars 50 --stale-after-minutes 15
 python -m trader.cli paper-readiness-run
 python -m trader.cli paper-readiness-run --broker-stage-pause 2
 python -m trader.cli paper-reconcile --timeout 30
@@ -148,7 +151,7 @@ python -m trader.cli alpha-test-summary
 python -m trader.cli paper-ledger-update
 python -m trader.cli alpha-campaign-run --mode shadow --campaign-id campaign-YYYYMMDD-spy-001
 python -m trader.cli alpha-campaign-run --mode paper --campaign-id campaign-YYYYMMDD-spy-001 --read-only-off-confirm READ_ONLY_OFF_FOR_ALPHA_PAPER
-python -m trader.cli alpha-shadow-daemon --campaign-id campaign-YYYYMMDD-spy-shadow-daemon-001 --max-cycles 5 --interval-seconds 300
+python -m trader.cli alpha-shadow-daemon --campaign-id campaign-YYYYMMDD-spy-shadow-daemon-001 --max-cycles 5 --interval-seconds 300 --stale-after-minutes 15
 python -m trader.cli alpha-shadow-daemon-summary --report-glob='reports/alpha_shadow_daemon_*.json' --min-clean-sessions 5 --max-report-age-hours 168 --require-same-commit true
 ```
 

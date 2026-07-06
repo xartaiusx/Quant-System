@@ -126,12 +126,14 @@
 - `paper-ledger-update` reads ignored summary and reconciliation reports offline, validates current-commit same-campaign broker truth, and upserts one masked local JSONL campaign row under ignored `state/`.
 - `alpha-shadow-daemon` runs bounded autonomous read-only SPY shadow cycles, writes ignored heartbeat evidence, detects stale source bars, honors a kill-switch file, and keeps order APIs disabled.
 - `alpha-shadow-daemon-summary` reads ignored local daemon reports offline, compares commit/campaign and heartbeat evidence, fails closed on stale data or broker/account gaps, and reports whether repeated shadow sessions are ready for SPY paper-daemon design.
+- `ibkr-data-diagnostics` reads ignored local reports offline, verifies strict SPY `1 D` / `5 mins` / `TRADES` / `use_rth=1` data freshness and broker/account evidence, and keeps daemon startup blocked when latest-bar age exceeds the configured strict gate.
 
 ## Next Recommended Steps
 
-1. Run bounded `alpha-shadow-daemon --max-cycles 5` sessions against IB Gateway/TWS paper with Read-Only API enabled until repeated sessions are clean.
-2. Run `alpha-shadow-daemon-summary --min-clean-sessions 5` and require `graduation_ready=true` before designing a SPY-only paper execution daemon.
-3. Run `paper-reconcile`, `alpha-test-summary`, and `paper-ledger-update` after every paper-order window before marking the next alpha window eligible.
-4. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
-5. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
-6. Require ledger-matched broker truth before any broader paper execution daemon.
+1. During regular market hours, run fresh `broker-probe`, SPY `history-snapshot`, and `ibkr-data-diagnostics --min-bars 50 --stale-after-minutes 15` before every bounded shadow-daemon attempt.
+2. Run bounded `alpha-shadow-daemon --max-cycles 5 --stale-after-minutes 15` sessions only after diagnostics reports `strict_shadow_precheck_passed=true`.
+3. Run `alpha-shadow-daemon-summary --min-clean-sessions 5` and require `graduation_ready=true` before designing a SPY-only paper execution daemon.
+4. Run `paper-reconcile`, `alpha-test-summary`, and `paper-ledger-update` after every paper-order window before marking the next alpha window eligible.
+5. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
+6. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
+7. Require ledger-matched broker truth before any broader paper execution daemon.

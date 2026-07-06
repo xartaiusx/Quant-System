@@ -408,8 +408,43 @@ export IBKR_CLIENT_ID=61
 export MAX_TRADE_NOTIONAL=1000
 export MAX_OPEN_POSITIONS=1
 export CAMPAIGN_ID=campaign-YYYYMMDD-spy-shadow-daemon-001
+```
 
-python -m trader.cli alpha-shadow-daemon --campaign-id "$CAMPAIGN_ID" --max-cycles 5 --interval-seconds 300 --stale-after-minutes 1440
+Strict market-hours readiness uses fresh sequential broker evidence before the
+daemon starts. Use a fresh client ID for each broker-contact command:
+
+```bash
+export IBKR_CLIENT_ID=61
+python -m trader.cli broker-probe --timeout 30
+
+export IBKR_CLIENT_ID=62
+python -m trader.cli history-snapshot --symbols SPY --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1 --timeout 45
+
+python -m trader.cli ibkr-data-diagnostics --min-bars 50 --stale-after-minutes 15
+```
+
+Start the daemon only when diagnostics reports:
+
+- broker probe OK
+- broker connected
+- account verified
+- bar count at least `50`
+- latest SPY 5-minute bar age at or below `15` minutes
+- `strict_shadow_precheck_passed=true`
+- `submitted_orders=false`
+- `order_api_invoked=false`
+
+If broker/account evidence or freshness fails, do not start the daemon. Keep
+Read-Only API enabled, keep `ALLOW_PAPER_ORDERS=false`, and investigate the
+reported blocker first. A latest-bar age near the common delayed-data range is
+treated as a data-permission or delayed-data diagnostic, not a reason to loosen
+the autonomous readiness gate.
+
+When the strict precheck passes:
+
+```bash
+
+python -m trader.cli alpha-shadow-daemon --campaign-id "$CAMPAIGN_ID" --max-cycles 5 --interval-seconds 300 --stale-after-minutes 15
 ```
 
 Expected behavior:

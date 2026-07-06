@@ -19,6 +19,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return history_snapshot_markdown(payload)
     if payload.get("report_type") == "history_readiness":
         return history_readiness_markdown(payload)
+    if payload.get("report_type") == "ibkr_data_diagnostics":
+        return ibkr_data_diagnostics_markdown(payload)
     if payload.get("report_type") == "history_index":
         return history_index_markdown(payload)
     if payload.get("report_type") == "history_load":
@@ -463,6 +465,92 @@ def history_readiness_markdown(payload: Mapping[str, Any]) -> str:
     else:
         lines.append("- None")
 
+    return "\n".join(lines) + "\n"
+
+
+def ibkr_data_diagnostics_markdown(payload: Mapping[str, Any]) -> str:
+    """Render an offline strict SPY IBKR data-diagnostics report."""
+
+    request = payload.get("request", {})
+    source_paths = payload.get("source_report_paths", {})
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    operator_hints = payload.get("operator_hints", [])
+
+    lines = [
+        f"# {payload.get('title', 'IBKR Data Freshness Diagnostics')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Command: `{payload.get('command', 'ibkr-data-diagnostics')}`",
+        f"- Commit SHA: `{payload.get('commit_sha') or 'unknown'}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Symbol: `{payload.get('symbol', 'SPY')}`",
+        f"- Strict precheck passed: `{payload.get('strict_shadow_precheck_passed', False)}`",
+        f"- Next action: `{payload.get('next_recommended_action', 'unknown')}`",
+        "",
+        "## Strict Inputs",
+        "",
+        f"- Minimum bars: `{payload.get('min_bars', request.get('min_bars', 'unknown'))}`",
+        "- Stale after minutes: "
+        f"`{payload.get('stale_after_minutes', request.get('stale_after_minutes', 'unknown'))}`",
+        f"- Expected duration: `{request.get('expected_duration', 'unknown')}`",
+        f"- Expected bar size: `{request.get('expected_bar_size', 'unknown')}`",
+        f"- Expected what-to-show: `{request.get('expected_what_to_show', 'unknown')}`",
+        f"- Expected use RTH: `{request.get('expected_use_rth', 'unknown')}`",
+        "",
+        "## Broker Evidence",
+        "",
+        f"- Broker probe OK: `{payload.get('broker_probe_ok', False)}`",
+        f"- Broker connected: `{payload.get('broker_connected', False)}`",
+        f"- Account verified: `{payload.get('broker_account_verified', False)}`",
+        f"- Broker failure stage: `{payload.get('broker_failure_stage') or 'none'}`",
+        "",
+        "## SPY Data Evidence",
+        "",
+        f"- History snapshot OK: `{payload.get('history_snapshot_ok', False)}`",
+        f"- History readiness OK: `{payload.get('history_readiness_ok', False)}`",
+        f"- Bar count: `{payload.get('bar_count', 0)}`",
+        f"- Bar count passed: `{payload.get('bar_count_passed', False)}`",
+        f"- First bar: `{payload.get('first_bar_timestamp') or 'n/a'}`",
+        f"- Latest bar: `{payload.get('latest_bar_timestamp') or 'n/a'}`",
+        f"- Latest bar age minutes: `{payload.get('latest_bar_age_minutes')}`",
+        f"- Freshness passed: `{payload.get('freshness_passed', False)}`",
+        f"- Market-data type requested: `{payload.get('market_data_type_requested') or 'n/a'}`",
+        f"- Market-data type received: `{payload.get('market_data_type_received') or 'n/a'}`",
+        f"- Market-data hint: `{payload.get('market_data_type_hint', 'unknown')}`",
+        "",
+        "## Safety",
+        "",
+        f"- Submitted orders: `{payload.get('submitted_orders', False)}`",
+        f"- Paper orders enabled: `{payload.get('paper_orders_enabled', False)}`",
+        f"- Live orders enabled: `{payload.get('live_orders_enabled', False)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', False)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', False)}`",
+        f"- Broker contacted by diagnostics: `{payload.get('broker_contacted', False)}`",
+        f"- Read-Only API expected: `{payload.get('read_only_api_expected', True)}`",
+        "",
+        str(
+            payload.get(
+                "safety_statement",
+                "This diagnostics report is offline-only and no orders were routed.",
+            )
+        ),
+        "",
+        "## Source Reports",
+        "",
+    ]
+    if isinstance(source_paths, Mapping) and source_paths:
+        lines.extend(f"- {name}: `{path}`" for name, path in source_paths.items())
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Operator Hints", ""])
+    if operator_hints:
+        lines.extend(f"- {hint}" for hint in operator_hints)
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(warnings, errors))
     return "\n".join(lines) + "\n"
 
 

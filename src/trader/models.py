@@ -102,6 +102,14 @@ class MarketDataRequestType(StrEnum):
     DELAYED_FROZEN = "delayed_frozen"
 
 
+class IBKRDataDiagnosticsStatus(StrEnum):
+    """Offline IBKR data diagnostics readiness states."""
+
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    FAILED = "failed"
+
+
 class CommodityProxyCategory(StrEnum):
     """Commodity-linked research proxy groups."""
 
@@ -3777,6 +3785,150 @@ class PaperLedgerUpdateReport(SerializableModel):
             raise ValueError("options must remain disabled")
         if self.ledger_entry_written and self.ledger_entry is None:
             raise ValueError("written ledger reports must include a ledger entry")
+        return self
+
+
+class IBKRDataDiagnosticsRequest(SerializableModel):
+    """Offline request to diagnose IBKR data freshness from ignored local reports."""
+
+    symbol: str = "SPY"
+    broker_probe_report_path: str = "reports/latest_broker_probe.json"
+    history_snapshot_report_path: str = "reports/latest_history_snapshot.json"
+    history_readiness_report_path: str = "reports/latest_history_readiness.json"
+    market_probe_report_path: str | None = "reports/latest_market_probe.json"
+    min_bars: int = 50
+    stale_after_minutes: int = 15
+    expected_duration: str = "1 D"
+    expected_bar_size: str = "5 mins"
+    expected_what_to_show: str = "TRADES"
+    expected_use_rth: int = 1
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        symbol = value.strip().upper()
+        if symbol != "SPY":
+            raise ValueError("ibkr-data-diagnostics is SPY-only in this milestone")
+        return symbol
+
+    @field_validator(
+        "broker_probe_report_path",
+        "history_snapshot_report_path",
+        "history_readiness_report_path",
+        "expected_duration",
+        "expected_bar_size",
+        "expected_what_to_show",
+    )
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("ibkr data diagnostics text fields must not be empty")
+        return normalized
+
+    @field_validator("market_probe_report_path")
+    @classmethod
+    def validate_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("expected_what_to_show")
+    @classmethod
+    def normalize_what_to_show(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("min_bars", "stale_after_minutes")
+    @classmethod
+    def validate_positive_ints(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("ibkr data diagnostics thresholds must be positive")
+        return value
+
+    @field_validator("expected_use_rth")
+    @classmethod
+    def validate_use_rth(cls, value: int) -> int:
+        if value not in {0, 1}:
+            raise ValueError("expected_use_rth must be 0 or 1")
+        return value
+
+
+class IBKRDataDiagnosticsReport(SerializableModel):
+    """No-secret offline diagnostics for IBKR data freshness and shadow readiness."""
+
+    title: str = "IBKR Data Freshness Diagnostics"
+    report_type: str = "ibkr_data_diagnostics"
+    command: str = "ibkr-data-diagnostics"
+    ok: bool
+    request: IBKRDataDiagnosticsRequest
+    commit_sha: str | None = None
+    source_report_paths: dict[str, str] = Field(default_factory=dict)
+    symbol: str = "SPY"
+    broker_probe_ok: bool = False
+    broker_connected: bool = False
+    broker_account_verified: bool = False
+    broker_failure_stage: str | None = None
+    history_snapshot_ok: bool = False
+    history_readiness_ok: bool = False
+    snapshot_timestamp: datetime | None = None
+    bar_count: int = 0
+    min_bars: int = 50
+    bar_count_passed: bool = False
+    first_bar_timestamp: str | None = None
+    latest_bar_timestamp: str | None = None
+    latest_bar_age_seconds: float | None = None
+    latest_bar_age_minutes: float | None = None
+    stale_after_minutes: int = 15
+    freshness_passed: bool = False
+    market_data_type_requested: str | None = None
+    market_data_type_received: str | None = None
+    market_data_type_hint: str
+    strict_shadow_precheck_passed: bool = False
+    next_recommended_action: str
+    operator_hints: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    live_orders_enabled: bool = False
+    live_route_possible: bool = False
+    order_routing_enabled: bool = False
+    order_api_invoked: bool = False
+    broker_contacted: bool = False
+    read_only_api_expected: bool = True
+    futures_contracts_enabled: bool = False
+    direct_futures_data_enabled: bool = False
+    options_contracts_enabled: bool = False
+    no_order_guarantee: bool = True
+    safety_statement: str = (
+        "ibkr-data-diagnostics is offline-only. It reads ignored local broker "
+        "and historical reports to diagnose data lag and never contacts IBKR or "
+        "invokes order APIs."
+    )
+    final_status: IBKRDataDiagnosticsStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_diagnostics_safety(self) -> IBKRDataDiagnosticsReport:
+        if self.submitted_orders:
+            raise ValueError("ibkr-data-diagnostics must not submit orders")
+        if self.paper_orders_enabled or self.live_orders_enabled or self.live_route_possible:
+            raise ValueError("ibkr-data-diagnostics must not enable order routes")
+        if self.order_routing_enabled or self.order_api_invoked:
+            raise ValueError("ibkr-data-diagnostics must not invoke order routing")
+        if self.broker_contacted:
+            raise ValueError("ibkr-data-diagnostics must remain offline")
+        if not self.read_only_api_expected:
+            raise ValueError("read_only_api_expected must remain true")
+        if self.futures_contracts_enabled or self.direct_futures_data_enabled:
+            raise ValueError("direct futures must remain disabled")
+        if self.options_contracts_enabled:
+            raise ValueError("options must remain disabled")
+        if not self.no_order_guarantee:
+            raise ValueError("no_order_guarantee must remain true")
+        if self.ok and self.errors:
+            raise ValueError("ok ibkr data diagnostics reports must not include errors")
         return self
 
 
