@@ -110,6 +110,13 @@ class IBKRDataDiagnosticsStatus(StrEnum):
     FAILED = "failed"
 
 
+class ShadowDataPolicy(StrEnum):
+    """Data policy used for SPY shadow readiness evidence."""
+
+    STRICT_LIVE = "strict_live"
+    DELAYED_ENGINEERING = "delayed_engineering"
+
+
 class CommodityProxyCategory(StrEnum):
     """Commodity-linked research proxy groups."""
 
@@ -2706,6 +2713,10 @@ class AlphaShadowDaemonReport(SerializableModel):
     cycle_count: int = 0
     clean_cycle_count: int = 0
     graduation_ready: bool = False
+    market_data_policy: ShadowDataPolicy = ShadowDataPolicy.STRICT_LIVE
+    delayed_data_mode: bool = False
+    graduation_eligible: bool = True
+    non_graduating_reason: str | None = None
     heartbeat_path: str
     kill_switch_path: str
     halted_by_kill_switch: bool = False
@@ -2774,6 +2785,13 @@ class AlphaShadowDaemonReport(SerializableModel):
             raise ValueError("cycle_count must match cycles length")
         if self.ok and self.errors:
             raise ValueError("ok daemon reports must not include errors")
+        if (
+            self.delayed_data_mode
+            and self.market_data_policy != ShadowDataPolicy.DELAYED_ENGINEERING
+        ):
+            raise ValueError("delayed_data_mode requires delayed_engineering policy")
+        if not self.graduation_eligible and self.graduation_ready:
+            raise ValueError("non-graduating daemon reports must not be graduation ready")
         return self
 
 
@@ -2812,6 +2830,10 @@ class AlphaShadowDaemonReportEvidence(SerializableModel):
     ok: bool = False
     cycle_count: int = 0
     clean_cycle_count: int = 0
+    market_data_policy: str = ShadowDataPolicy.STRICT_LIVE.value
+    delayed_data_mode: bool = False
+    graduation_eligible: bool = True
+    non_graduating_reason: str | None = None
     stale_data_detected: bool = False
     stale_cycle_count: int = 0
     broker_connected_cycles: int = 0
@@ -3792,6 +3814,7 @@ class IBKRDataDiagnosticsRequest(SerializableModel):
     """Offline request to diagnose IBKR data freshness from ignored local reports."""
 
     symbol: str = "SPY"
+    data_policy: ShadowDataPolicy = ShadowDataPolicy.STRICT_LIVE
     broker_probe_report_path: str = "reports/latest_broker_probe.json"
     history_snapshot_report_path: str = "reports/latest_history_snapshot.json"
     history_readiness_report_path: str = "reports/latest_history_readiness.json"
@@ -3865,6 +3888,11 @@ class IBKRDataDiagnosticsReport(SerializableModel):
     commit_sha: str | None = None
     source_report_paths: dict[str, str] = Field(default_factory=dict)
     symbol: str = "SPY"
+    data_policy: ShadowDataPolicy = ShadowDataPolicy.STRICT_LIVE
+    delayed_data_mode: bool = False
+    delayed_shadow_precheck_passed: bool = False
+    graduation_eligible: bool = True
+    non_graduating_reason: str | None = None
     broker_probe_ok: bool = False
     broker_connected: bool = False
     broker_account_verified: bool = False
@@ -3935,6 +3963,12 @@ class IBKRDataDiagnosticsReport(SerializableModel):
             raise ValueError("no_order_guarantee must remain true")
         if self.ok and self.errors:
             raise ValueError("ok ibkr data diagnostics reports must not include errors")
+        if self.delayed_data_mode and self.data_policy != ShadowDataPolicy.DELAYED_ENGINEERING:
+            raise ValueError("delayed diagnostics must use delayed_engineering policy")
+        if self.delayed_data_mode and self.strict_shadow_precheck_passed:
+            raise ValueError("delayed diagnostics must not pass strict shadow readiness")
+        if not self.graduation_eligible and self.strict_shadow_precheck_passed:
+            raise ValueError("non-graduating diagnostics must not pass strict readiness")
         return self
 
 

@@ -12,6 +12,7 @@ from trader.models import (
     AlphaShadowDaemonStatus,
     AlphaShadowDaemonSummaryRequest,
     AlphaShadowDaemonSummaryStatus,
+    ShadowDataPolicy,
 )
 from trader.reporting.reports import markdown_summary
 
@@ -50,6 +51,7 @@ def daemon_report(
     broker_connected: bool = True,
     account_verified: bool = True,
     write_heartbeat: bool = True,
+    delayed: bool = False,
 ) -> AlphaShadowDaemonReport:
     heartbeat_path = tmp_path / "state" / f"{campaign_id}_heartbeat.json"
     if write_heartbeat:
@@ -87,6 +89,18 @@ def daemon_report(
         cycles=[cycle],
         cycle_count=1,
         clean_cycle_count=0 if stale else 1,
+        market_data_policy=(
+            ShadowDataPolicy.DELAYED_ENGINEERING
+            if delayed
+            else ShadowDataPolicy.STRICT_LIVE
+        ),
+        delayed_data_mode=delayed,
+        graduation_eligible=not delayed,
+        non_graduating_reason=(
+            "delayed_data_engineering_mode_cannot_graduate_to_paper_execution"
+            if delayed
+            else None
+        ),
         graduation_ready=False,
         heartbeat_path=heartbeat_path.as_posix(),
         kill_switch_path=(tmp_path / "state" / "kill").as_posix(),
@@ -231,6 +245,30 @@ def test_alpha_shadow_daemon_summary_fails_on_order_flag(
     assert report.ok is False
     assert report.safety_violation_count == 1
     assert any("safety flag" in error for error in report.errors)
+
+
+def test_alpha_shadow_daemon_summary_rejects_delayed_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    patch_current_commit(monkeypatch)
+    write_daemon_report(
+        tmp_path,
+        0,
+        daemon_report(tmp_path, campaign_id="campaign-delayed", delayed=True),
+    )
+
+    report = run_alpha_shadow_daemon_summary(
+        summary_request(tmp_path, min_clean_sessions=1),
+        now=now(),
+    )
+
+    assert report.ok is False
+    assert report.graduation_ready is False
+    assert report.clean_session_count == 0
+    assert report.source_reports[0].delayed_data_mode is True
+    assert report.source_reports[0].graduation_eligible is False
+    assert any("non-graduating shadow evidence" in error for error in report.errors)
 
 
 def test_alpha_shadow_daemon_summary_fails_on_broker_account_gap(

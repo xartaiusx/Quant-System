@@ -6,7 +6,7 @@ import json
 import subprocess
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +19,7 @@ from trader.models import (
     AlphaShadowDaemonStatus,
     AlphaShadowRunReport,
     AlphaShadowRunRequest,
+    ShadowDataPolicy,
     new_campaign_id,
     utc_now,
 )
@@ -90,6 +91,56 @@ def run_alpha_shadow_daemon(
         errors=errors,
         halted_by_kill_switch=halted_by_kill_switch,
         final_status=final_status,
+    )
+
+
+def run_delayed_alpha_shadow_daemon(
+    config: TraderConfig,
+    request: AlphaShadowDaemonRequest | None = None,
+    *,
+    journal: Journal | None = None,
+    alpha_shadow_runner: AlphaShadowRunner = run_alpha_shadow_run,
+    sleep_fn: SleepFn = time.sleep,
+    now_fn: NowFn = utc_now,
+) -> AlphaShadowDaemonReport:
+    """Run delayed-data engineering shadow cycles that can never graduate."""
+
+    selected_request = request or AlphaShadowDaemonRequest(stale_after_minutes=30)
+    report = run_alpha_shadow_daemon(
+        config,
+        selected_request,
+        journal=journal,
+        alpha_shadow_runner=alpha_shadow_runner,
+        sleep_fn=sleep_fn,
+        now_fn=now_fn,
+    )
+    warnings = _unique(
+        [
+            *report.warnings,
+            "Delayed-data shadow mode is engineering-only and non-graduating.",
+            "Delayed-data shadow evidence must not unlock SPY paper execution.",
+        ]
+    )
+    return report.model_copy(
+        update={
+            "title": "Delayed-data IBKR Alpha Shadow Daemon",
+            "report_type": "alpha_shadow_daemon_delayed",
+            "command": "alpha-shadow-daemon-delayed",
+            "market_data_policy": ShadowDataPolicy.DELAYED_ENGINEERING,
+            "delayed_data_mode": True,
+            "graduation_eligible": False,
+            "graduation_ready": False,
+            "non_graduating_reason": (
+                "delayed_data_engineering_mode_cannot_graduate_to_paper_execution"
+            ),
+            "warnings": warnings,
+            "safety_statement": (
+                "alpha-shadow-daemon-delayed runs controlled read-only SPY shadow "
+                "cycles for engineering practice only. It expects IBKR Read-Only API "
+                "to stay enabled, requires ALLOW_PAPER_ORDERS=false, labels reports "
+                "as delayed-data evidence, and never invokes broker order APIs."
+            ),
+        }
     )
 
 
@@ -298,11 +349,24 @@ def _parse_timestamp(value: object) -> datetime | None:
         return value if value.tzinfo else value.replace(tzinfo=UTC)
     if not isinstance(value, str) or not value.strip():
         return None
+    normalized = " ".join(value.split())
+    for fmt in ("%Y%m%d %H:%M:%S", "%Y%m%d"):
+        try:
+            parsed = datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+        return parsed.replace(tzinfo=_local_tzinfo()).astimezone(UTC)
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    if parsed.tzinfo:
+        return parsed.astimezone(UTC)
+    return parsed.replace(tzinfo=_local_tzinfo()).astimezone(UTC)
+
+
+def _local_tzinfo() -> tzinfo:
+    return datetime.now().astimezone().tzinfo or UTC
 
 
 def _config_errors(config: TraderConfig) -> list[str]:

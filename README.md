@@ -384,6 +384,14 @@ writes JSON/Markdown diagnostics. It never contacts IBKR and reports
 `submitted_orders=false`, `paper_orders_enabled=false`, and
 `order_api_invoked=false`.
 
+`ibkr-delayed-data-diagnostics` is the separate non-graduating lane for accounts
+that do not yet have live SPY API market data. Run it only after a delayed
+`market-probe --symbols SPY --data-type delayed --historical` and a fresh SPY
+`history-snapshot`. It uses the same broker/account and bar-count evidence, but
+defaults to a wider `30` minute freshness gate, reports
+`delayed_shadow_precheck_passed`, keeps `strict_shadow_precheck_passed=false`,
+and marks reports `graduation_eligible=false`.
+
 `alpha-shadow-daemon` is the first controlled autonomous mode. It repeats the
 existing read-only SPY shadow path for a bounded number of cycles, writes
 heartbeat evidence under ignored local `state/`, and halts failed on stale
@@ -393,6 +401,15 @@ source bars or safety violations. Keep IBKR Read-Only API enabled and
 ```bash
 python -m trader.cli alpha-shadow-daemon --campaign-id campaign-YYYYMMDD-spy-shadow-daemon-001 --max-cycles 5 --interval-seconds 300 --stale-after-minutes 15
 ```
+
+Use `alpha-shadow-daemon-delayed` only for delayed-data engineering practice:
+
+```bash
+python -m trader.cli alpha-shadow-daemon-delayed --campaign-id campaign-YYYYMMDD-spy-shadow-delayed-001 --max-cycles 5 --interval-seconds 300 --stale-after-minutes 30
+```
+
+Delayed daemon reports are explicitly non-graduating and are rejected by the
+normal daemon summary as paper-execution readiness evidence.
 
 Create the configured kill-switch file, default
 `state/alpha_shadow_daemon.kill`, to stop before the next cycle. The daemon

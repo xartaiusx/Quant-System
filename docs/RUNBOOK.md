@@ -454,6 +454,32 @@ subscription and delayed data is available instead. Treat that as a strict
 shadow blocker until live SPY API market-data permissions are available; do not
 start the daemon on delayed data under this policy.
 
+Until the account is funded and live SPY API market data is subscribed, use the
+separate delayed engineering lane. This lane is read-only, non-graduating, and
+must not unlock paper execution:
+
+```bash
+export IBKR_CLIENT_ID=64
+python -m trader.cli market-probe --symbols SPY --data-type delayed --historical --timeout 30
+
+export IBKR_CLIENT_ID=65
+python -m trader.cli history-snapshot --symbols SPY --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1 --timeout 45
+
+python -m trader.cli ibkr-delayed-data-diagnostics --min-bars 50 --stale-after-minutes 30
+```
+
+Start only the delayed daemon when diagnostics reports
+`delayed_shadow_precheck_passed=true`; delayed reports must show
+`graduation_eligible=false`, `strict_shadow_precheck_passed=false`, and
+`non_graduating_reason=delayed_data_engineering_mode_cannot_graduate_to_paper_execution`:
+
+```bash
+python -m trader.cli alpha-shadow-daemon-delayed --campaign-id "$CAMPAIGN_ID" --max-cycles 5 --interval-seconds 300 --stale-after-minutes 30
+```
+
+Normal `alpha-shadow-daemon-summary` intentionally rejects delayed reports as
+non-graduating evidence. Keep delayed reports for engineering drift review only.
+
 When the strict precheck passes:
 
 ```bash

@@ -24,6 +24,7 @@ from trader.models import (
     ManagedAccountInfo,
     MarketDataDiagnosticReport,
     MarketDataRequestType,
+    ShadowDataPolicy,
 )
 from trader.reporting.reports import markdown_summary
 
@@ -162,6 +163,60 @@ def test_live_market_data_permission_blocker_fails_closed(tmp_path: Path) -> Non
     assert any("market-probe indicates" in error for error in report.errors)
 
 
+def test_delayed_engineering_precheck_passes_non_graduating(tmp_path: Path) -> None:
+    paths = write_source_reports(
+        tmp_path,
+        latest_bar_age_minutes=18.37,
+        bar_count=58,
+        include_delayed_market_probe=True,
+    )
+
+    report = diagnostics.build_ibkr_data_diagnostics_report(
+        request(
+            paths,
+            data_policy=ShadowDataPolicy.DELAYED_ENGINEERING,
+            stale_after_minutes=30,
+        ),
+        now=NOW,
+    )
+
+    assert report.ok is True
+    assert report.final_status == IBKRDataDiagnosticsStatus.COMPLETED_WITH_WARNINGS
+    assert report.data_policy == ShadowDataPolicy.DELAYED_ENGINEERING
+    assert report.delayed_data_mode is True
+    assert report.strict_shadow_precheck_passed is False
+    assert report.delayed_shadow_precheck_passed is True
+    assert report.freshness_passed is True
+    assert report.graduation_eligible is False
+    assert (
+        report.non_graduating_reason
+        == "delayed_data_engineering_mode_cannot_graduate_to_paper_execution"
+    )
+    assert (
+        report.next_recommended_action
+        == "run_alpha_shadow_daemon_delayed_non_graduating"
+    )
+    assert report.market_data_type_requested == "delayed"
+    assert "non-graduating" in " ".join(report.warnings)
+
+
+def test_delayed_engineering_requires_delayed_market_probe(tmp_path: Path) -> None:
+    paths = write_source_reports(tmp_path, latest_bar_age_minutes=18.37, bar_count=58)
+
+    report = diagnostics.build_ibkr_data_diagnostics_report(
+        request(
+            paths,
+            data_policy=ShadowDataPolicy.DELAYED_ENGINEERING,
+            stale_after_minutes=30,
+        ),
+        now=NOW,
+    )
+
+    assert report.ok is False
+    assert report.delayed_shadow_precheck_passed is False
+    assert any("delayed market-probe" in error for error in report.errors)
+
+
 def test_markdown_renders_safety_and_blocker(tmp_path: Path) -> None:
     paths = write_source_reports(
         tmp_path,
@@ -182,15 +237,17 @@ def test_markdown_renders_safety_and_blocker(tmp_path: Path) -> None:
     assert "latest bar age" in rendered
 
 
-def request(paths: dict[str, Path]) -> IBKRDataDiagnosticsRequest:
-    return IBKRDataDiagnosticsRequest(
-        broker_probe_report_path=paths["broker"].as_posix(),
-        history_snapshot_report_path=paths["snapshot"].as_posix(),
-        history_readiness_report_path=paths["readiness"].as_posix(),
-        market_probe_report_path=(
+def request(paths: dict[str, Path], **overrides: Any) -> IBKRDataDiagnosticsRequest:
+    values: dict[str, Any] = {
+        "broker_probe_report_path": paths["broker"].as_posix(),
+        "history_snapshot_report_path": paths["snapshot"].as_posix(),
+        "history_readiness_report_path": paths["readiness"].as_posix(),
+        "market_probe_report_path": (
             paths["market"].as_posix() if "market" in paths else None
         ),
-    )
+    }
+    values.update(overrides)
+    return IBKRDataDiagnosticsRequest(**values)
 
 
 def write_source_reports(
@@ -201,6 +258,7 @@ def write_source_reports(
     broker_managed_accounts: bool = True,
     duration: str = "1 D",
     include_market_probe: bool = False,
+    include_delayed_market_probe: bool = False,
 ) -> dict[str, Path]:
     snapshot_path = tmp_path / "spy-snapshot.jsonl"
     bars = snapshot_rows(bar_count=bar_count, latest_bar_age_minutes=latest_bar_age_minutes)
@@ -238,6 +296,9 @@ def write_source_reports(
     }
     if include_market_probe:
         write_report(market_path, market_probe_report())
+        paths["market"] = market_path
+    if include_delayed_market_probe:
+        write_report(market_path, delayed_market_probe_report())
         paths["market"] = market_path
     return paths
 
@@ -414,6 +475,26 @@ def market_probe_report() -> MarketDataDiagnosticReport:
         ],
         warnings=["live data unavailable; retry with --data-type delayed"],
         final_status="partial",
+        timestamp=NOW,
+    )
+
+
+def delayed_market_probe_report() -> MarketDataDiagnosticReport:
+    return MarketDataDiagnosticReport(
+        ok=True,
+        mode="paper",
+        host="127.0.0.1",
+        port=4002,
+        client_id=604,
+        broker_kind="ib_gateway",
+        connected=True,
+        ibapi_available=True,
+        connection_attempted=True,
+        symbols_requested=["SPY"],
+        market_data_type_requested=MarketDataRequestType.DELAYED,
+        market_data_type_requested_code=3,
+        include_historical=True,
+        final_status="connected",
         timestamp=NOW,
     )
 

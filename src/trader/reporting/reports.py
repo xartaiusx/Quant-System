@@ -49,7 +49,7 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return paper_readiness_run_markdown(payload)
     if payload.get("report_type") == "alpha_shadow_run":
         return alpha_shadow_run_markdown(payload)
-    if payload.get("report_type") == "alpha_shadow_daemon":
+    if payload.get("report_type") in {"alpha_shadow_daemon", "alpha_shadow_daemon_delayed"}:
         return alpha_shadow_daemon_markdown(payload)
     if payload.get("report_type") == "alpha_shadow_daemon_summary":
         return alpha_shadow_daemon_summary_markdown(payload)
@@ -487,7 +487,14 @@ def ibkr_data_diagnostics_markdown(payload: Mapping[str, Any]) -> str:
         f"- Commit SHA: `{payload.get('commit_sha') or 'unknown'}`",
         f"- Final status: `{payload.get('final_status', 'unknown')}`",
         f"- Symbol: `{payload.get('symbol', 'SPY')}`",
+        f"- Data policy: `{payload.get('data_policy', 'strict_live')}`",
+        f"- Delayed data mode: `{payload.get('delayed_data_mode', False)}`",
+        f"- Graduation eligible: `{payload.get('graduation_eligible', True)}`",
+        "- Non-graduating reason: "
+        f"`{payload.get('non_graduating_reason') or 'n/a'}`",
         f"- Strict precheck passed: `{payload.get('strict_shadow_precheck_passed', False)}`",
+        "- Delayed precheck passed: "
+        f"`{payload.get('delayed_shadow_precheck_passed', False)}`",
         f"- Next action: `{payload.get('next_recommended_action', 'unknown')}`",
         "",
         "## Strict Inputs",
@@ -1703,7 +1710,12 @@ def alpha_shadow_daemon_markdown(payload: Mapping[str, Any]) -> str:
         f"- Commit SHA: `{payload.get('commit_sha', 'unknown')}`",
         f"- Cycles: `{payload.get('cycle_count', 0)}`",
         f"- Clean cycles: `{payload.get('clean_cycle_count', 0)}`",
+        f"- Data policy: `{payload.get('market_data_policy', 'strict_live')}`",
+        f"- Delayed data mode: `{payload.get('delayed_data_mode', False)}`",
+        f"- Graduation eligible: `{payload.get('graduation_eligible', True)}`",
         f"- Graduation ready: `{payload.get('graduation_ready', False)}`",
+        "- Non-graduating reason: "
+        f"`{payload.get('non_graduating_reason') or 'n/a'}`",
         f"- Broker-connected cycles: `{payload.get('broker_connected_cycles', 0)}`",
         "- Account-summary verified cycles: "
         f"`{payload.get('account_summary_verified_cycles', 0)}`",
@@ -1820,6 +1832,8 @@ def alpha_shadow_daemon_summary_markdown(payload: Mapping[str, Any]) -> str:
                 f"`{source.get('source_report_path', 'unknown')}` "
                 f"campaign=`{source.get('campaign_id', 'n/a')}` "
                 f"status=`{source.get('final_status', 'unknown')}` "
+                f"policy=`{source.get('market_data_policy', 'strict_live')}` "
+                f"eligible=`{source.get('graduation_eligible', True)}` "
                 f"cycles=`{source.get('cycle_count', 0)}` "
                 f"clean=`{source.get('clean_cycle_count', 0)}` "
                 f"broker=`{source.get('broker_connected_cycles', 0)}` "

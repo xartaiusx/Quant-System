@@ -127,6 +127,7 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - Historical data availability depends on IBKR data permissions, instrument availability, and pacing limits.
 - Strict SPY shadow-daemon attempts require enough current `5 mins` bars and a latest-bar age at or below the configured gate. If `ibkr-data-diagnostics` flags a lag near delayed-data timing, keep the daemon blocked and diagnose permissions or market-data type before changing the gate.
 - IBKR error `10089` on `market-probe --data-type live` indicates live API market data requires an additional subscription. Under the strict policy, delayed data remains useful for diagnostics but is not sufficient for autonomous shadow readiness.
+- `ibkr-delayed-data-diagnostics` and `alpha-shadow-daemon-delayed` support read-only engineering practice with delayed data. They must report delayed mode, `graduation_eligible=false`, no order APIs, and no paper-execution eligibility.
 - Missing bid/ask values can occur outside market hours or when permissions are unavailable; the report records this as diagnostics rather than pretending mock data is broker data.
 - IB Gateway paper uses port `4002`; live Gateway port `4001` remains rejected.
 
@@ -145,6 +146,7 @@ python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
 python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
 python -m trader.cli ibkr-data-diagnostics --min-bars 50 --stale-after-minutes 15
+python -m trader.cli ibkr-delayed-data-diagnostics --min-bars 50 --stale-after-minutes 30
 python -m trader.cli paper-readiness-run
 python -m trader.cli paper-readiness-run --broker-stage-pause 2
 python -m trader.cli paper-reconcile --timeout 30
@@ -153,6 +155,7 @@ python -m trader.cli paper-ledger-update
 python -m trader.cli alpha-campaign-run --mode shadow --campaign-id campaign-YYYYMMDD-spy-001
 python -m trader.cli alpha-campaign-run --mode paper --campaign-id campaign-YYYYMMDD-spy-001 --read-only-off-confirm READ_ONLY_OFF_FOR_ALPHA_PAPER
 python -m trader.cli alpha-shadow-daemon --campaign-id campaign-YYYYMMDD-spy-shadow-daemon-001 --max-cycles 5 --interval-seconds 300 --stale-after-minutes 15
+python -m trader.cli alpha-shadow-daemon-delayed --campaign-id campaign-YYYYMMDD-spy-shadow-delayed-001 --max-cycles 5 --interval-seconds 300 --stale-after-minutes 30
 python -m trader.cli alpha-shadow-daemon-summary --report-glob='reports/alpha_shadow_daemon_*.json' --min-clean-sessions 5 --max-report-age-hours 168 --require-same-commit true
 ```
 

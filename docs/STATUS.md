@@ -127,14 +127,16 @@
 - `alpha-shadow-daemon` runs bounded autonomous read-only SPY shadow cycles, writes ignored heartbeat evidence, detects stale source bars, honors a kill-switch file, and keeps order APIs disabled.
 - `alpha-shadow-daemon-summary` reads ignored local daemon reports offline, compares commit/campaign and heartbeat evidence, fails closed on stale data or broker/account gaps, and reports whether repeated shadow sessions are ready for SPY paper-daemon design.
 - `ibkr-data-diagnostics` reads ignored local reports offline, verifies strict SPY `1 D` / `5 mins` / `TRADES` / `use_rth=1` data freshness and broker/account evidence, surfaces live market-data permission errors from `market-probe`, and keeps daemon startup blocked when latest-bar age exceeds the configured strict gate or live SPY API market data is unavailable.
+- `ibkr-delayed-data-diagnostics` and `alpha-shadow-daemon-delayed` provide a read-only delayed-data engineering lane while live SPY API data is unavailable. Their reports are explicitly non-graduating and must not unlock paper-daemon design or paper execution.
 
 ## Next Recommended Steps
 
 1. During regular market hours, run fresh `broker-probe`, SPY `history-snapshot`, and `ibkr-data-diagnostics --min-bars 50 --stale-after-minutes 15` before every bounded shadow-daemon attempt.
 2. If diagnostics shows delayed-data-like lag, run `market-probe --symbols SPY --data-type live --historical --timeout 30` and treat IBKR `10089` as a live-data permission blocker.
-3. Run bounded `alpha-shadow-daemon --max-cycles 5 --stale-after-minutes 15` sessions only after diagnostics reports `strict_shadow_precheck_passed=true`.
-4. Run `alpha-shadow-daemon-summary --min-clean-sessions 5` and require `graduation_ready=true` before designing a SPY-only paper execution daemon.
-5. Run `paper-reconcile`, `alpha-test-summary`, and `paper-ledger-update` after every paper-order window before marking the next alpha window eligible.
-6. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
-7. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
-8. Require ledger-matched broker truth before any broader paper execution daemon.
+3. Until live data is available, run `market-probe --symbols SPY --data-type delayed --historical --timeout 30`, `ibkr-delayed-data-diagnostics --stale-after-minutes 30`, and only then `alpha-shadow-daemon-delayed` for engineering practice.
+4. Run bounded `alpha-shadow-daemon --max-cycles 5 --stale-after-minutes 15` sessions only after diagnostics reports `strict_shadow_precheck_passed=true`.
+5. Run `alpha-shadow-daemon-summary --min-clean-sessions 5` and require `graduation_ready=true` before designing a SPY-only paper execution daemon.
+6. Run `paper-reconcile`, `alpha-test-summary`, and `paper-ledger-update` after every paper-order window before marking the next alpha window eligible.
+7. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
+8. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
+9. Require ledger-matched broker truth before any broader paper execution daemon.

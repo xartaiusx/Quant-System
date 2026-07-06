@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from trader.alpha_shadow_daemon import run_alpha_shadow_daemon
+from trader.alpha_shadow_daemon import (
+    run_alpha_shadow_daemon,
+    run_delayed_alpha_shadow_daemon,
+)
 from trader.config import BrokerKind, TraderConfig, TradingMode
 from trader.models import (
     AlphaShadowDaemonRequest,
@@ -12,6 +15,7 @@ from trader.models import (
     AlphaShadowRunReport,
     AlphaShadowRunRequest,
     AlphaShadowRunStatus,
+    ShadowDataPolicy,
 )
 from trader.reporting.journal import Journal
 from trader.reporting.reports import markdown_summary
@@ -168,6 +172,36 @@ def test_alpha_shadow_daemon_fails_on_stale_source_data(tmp_path: Path) -> None:
     assert "stale source data" in " ".join(report.errors)
 
 
+def test_alpha_shadow_daemon_parses_ibkr_raw_bar_time_as_local(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "trader.alpha_shadow_daemon._local_tzinfo",
+        lambda: timezone(timedelta(hours=-7)),
+    )
+
+    def fake_shadow(
+        _config: TraderConfig,
+        shadow_request: AlphaShadowRunRequest,
+    ) -> AlphaShadowRunReport:
+        return shadow_report(shadow_request).model_copy(
+            update={"source_bar_timestamp_by_symbol": {"SPY": "20260706 12:20:00"}}
+        )
+
+    report = run_alpha_shadow_daemon(
+        config(),
+        request(tmp_path, max_cycles=1, stale_after_minutes=30),
+        journal=Journal(tmp_path / "reports"),
+        alpha_shadow_runner=fake_shadow,
+        now_fn=lambda: datetime(2026, 7, 6, 19, 38, tzinfo=UTC),
+    )
+
+    assert report.ok is True
+    assert report.stale_data_detected is False
+    assert report.clean_cycle_count == 1
+
+
 def test_alpha_shadow_daemon_rejects_paper_order_config(tmp_path: Path) -> None:
     report = run_alpha_shadow_daemon(
         config(allow_paper_orders=True),
@@ -202,3 +236,61 @@ def test_alpha_shadow_daemon_markdown_rendering(tmp_path: Path) -> None:
     assert "alpha-shadow-daemon" in markdown
     assert "Graduation ready: `True`" in markdown
     assert "Order API invoked: `False`" in markdown
+
+
+def test_delayed_alpha_shadow_daemon_is_non_graduating(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("trader.alpha_shadow_daemon._current_commit_sha", lambda: "abc123")
+
+    def fake_shadow(
+        _config: TraderConfig,
+        shadow_request: AlphaShadowRunRequest,
+    ) -> AlphaShadowRunReport:
+        return shadow_report(shadow_request, timestamp=now() - timedelta(minutes=18))
+
+    report = run_delayed_alpha_shadow_daemon(
+        config(),
+        request(tmp_path, max_cycles=1, stale_after_minutes=30),
+        journal=Journal(tmp_path / "reports"),
+        alpha_shadow_runner=fake_shadow,
+        now_fn=now,
+    )
+
+    assert report.ok is True
+    assert report.command == "alpha-shadow-daemon-delayed"
+    assert report.report_type == "alpha_shadow_daemon_delayed"
+    assert report.market_data_policy == ShadowDataPolicy.DELAYED_ENGINEERING
+    assert report.delayed_data_mode is True
+    assert report.graduation_eligible is False
+    assert report.graduation_ready is False
+    assert report.clean_cycle_count == 1
+    assert report.submitted_orders is False
+    assert report.paper_orders_enabled is False
+    assert report.order_api_invoked is False
+    assert "non-graduating" in " ".join(report.warnings)
+
+
+def test_delayed_alpha_shadow_daemon_markdown_blocks_graduation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.alpha_shadow_daemon._current_commit_sha", lambda: "abc123")
+
+    def fake_shadow(
+        _config: TraderConfig,
+        shadow_request: AlphaShadowRunRequest,
+    ) -> AlphaShadowRunReport:
+        return shadow_report(shadow_request, timestamp=now() - timedelta(minutes=18))
+
+    report = run_delayed_alpha_shadow_daemon(
+        config(),
+        request(tmp_path, max_cycles=1, stale_after_minutes=30),
+        journal=Journal(tmp_path / "reports"),
+        alpha_shadow_runner=fake_shadow,
+        now_fn=now,
+    )
+    markdown = markdown_summary(report.model_dump(mode="json"))
+
+    assert "Delayed-data IBKR Alpha Shadow Daemon" in markdown
+    assert "Data policy: `delayed_engineering`" in markdown
+    assert "Graduation eligible: `False`" in markdown
+    assert "Graduation ready: `False`" in markdown
