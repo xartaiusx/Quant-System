@@ -258,6 +258,22 @@ def test_alpha_shadow_daemon_summary_fails_on_broker_account_gap(
     assert any("account-summary evidence" in error for error in report.errors)
 
 
+def test_alpha_shadow_daemon_summary_ignores_summary_outputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    patch_current_commit(monkeypatch)
+    write_clean_reports(tmp_path)
+    summary_output = tmp_path / "reports" / "alpha_shadow_daemon_summary_20260706.json"
+    summary_output.write_text(json.dumps({"report_type": "alpha_shadow_daemon_summary"}))
+
+    report = run_alpha_shadow_daemon_summary(summary_request(tmp_path), now=now())
+
+    assert report.ok is True
+    assert report.session_count == 5
+    assert summary_output.as_posix() not in report.source_report_paths
+
+
 def test_alpha_shadow_daemon_summary_serializes_and_renders_markdown(
     tmp_path: Path,
     monkeypatch,
