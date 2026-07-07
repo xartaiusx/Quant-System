@@ -16,7 +16,10 @@ from rich.table import Table
 from trader.alpha_campaign import READ_ONLY_OFF_CONFIRMATION, run_alpha_campaign_run
 from trader.alpha_paper import ALPHA_PAPER_CONFIRMATION, run_alpha_paper_run
 from trader.alpha_shadow import run_alpha_shadow_run
-from trader.alpha_shadow_daemon import run_alpha_shadow_daemon
+from trader.alpha_shadow_daemon import (
+    run_alpha_shadow_daemon,
+    run_delayed_alpha_shadow_daemon,
+)
 from trader.alpha_shadow_daemon_summary import run_alpha_shadow_daemon_summary
 from trader.alpha_summary import run_alpha_test_summary
 from trader.backtest.data_adapter import build_backtest_feed, build_backtest_feed_report
@@ -89,6 +92,7 @@ from trader.models import (
     PaperReconcileReport,
     PaperReconcileRequest,
     RiskDecision,
+    ShadowDataPolicy,
     SignalContractReport,
     SignalContractValidationRequest,
     StrategyContractReport,
@@ -389,6 +393,79 @@ def ibkr_data_diagnostics(
 
     console.print("[bold]IBKR data freshness diagnostics[/bold]")
     console.print("Offline report comparison only; no broker contact.")
+    console.print("Order routing: disabled.")
+    console.print("Submitted orders: false.")
+    _print_ibkr_data_diagnostics_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("ibkr-delayed-data-diagnostics")
+def ibkr_delayed_data_diagnostics(
+    symbol: Annotated[
+        str,
+        typer.Option("--symbol", help="Symbol to diagnose. Only SPY is allowed."),
+    ] = "SPY",
+    broker_probe_report: Annotated[
+        Path,
+        typer.Option("--broker-probe-report", help="Ignored local broker-probe JSON path."),
+    ] = Path("reports/latest_broker_probe.json"),
+    history_snapshot_report: Annotated[
+        Path,
+        typer.Option(
+            "--history-snapshot-report",
+            help="Ignored local history-snapshot JSON path.",
+        ),
+    ] = Path("reports/latest_history_snapshot.json"),
+    history_readiness_report: Annotated[
+        Path,
+        typer.Option(
+            "--history-readiness-report",
+            help="Ignored local history-readiness JSON path.",
+        ),
+    ] = Path("reports/latest_history_readiness.json"),
+    market_probe_report: Annotated[
+        Path,
+        typer.Option(
+            "--market-probe-report",
+            help="Ignored delayed market-probe JSON path.",
+        ),
+    ] = Path("reports/latest_market_probe.json"),
+    min_bars: Annotated[
+        int,
+        typer.Option("--min-bars", help="Minimum bars required for delayed shadow."),
+    ] = 50,
+    stale_after_minutes: Annotated[
+        int,
+        typer.Option(
+            "--stale-after-minutes",
+            help="Maximum latest-bar age for delayed engineering shadow.",
+        ),
+    ] = 30,
+) -> None:
+    """Diagnose SPY delayed-data engineering readiness without graduation."""
+
+    request = IBKRDataDiagnosticsRequest(
+        symbol=symbol,
+        data_policy=ShadowDataPolicy.DELAYED_ENGINEERING,
+        broker_probe_report_path=broker_probe_report.as_posix(),
+        history_snapshot_report_path=history_snapshot_report.as_posix(),
+        history_readiness_report_path=history_readiness_report.as_posix(),
+        market_probe_report_path=market_probe_report.as_posix(),
+        min_bars=min_bars,
+        stale_after_minutes=stale_after_minutes,
+    )
+    report = build_ibkr_data_diagnostics_report(request)
+    json_path, md_path = Journal().write_cycle(
+        "ibkr_delayed_data_diagnostics",
+        _report_dict(report),
+    )
+
+    console.print("[bold]IBKR delayed-data engineering diagnostics[/bold]")
+    console.print("Offline report comparison only; no broker contact.")
+    console.print("Delayed evidence is non-graduating and cannot unlock paper execution.")
     console.print("Order routing: disabled.")
     console.print("Submitted orders: false.")
     _print_ibkr_data_diagnostics_result(report)
@@ -1760,6 +1837,128 @@ def alpha_shadow_daemon(
 
     console.print("[bold]Read-only alpha shadow daemon[/bold]")
     console.print("Broker contact: read-only account and historical-data requests only.")
+    console.print("Order routing: disabled.")
+    console.print("Paper execution: disabled.")
+    console.print("Submitted orders: false.")
+    console.print("Read-Only API expected: true.")
+    console.print("Kill switch: create the configured kill-switch file to halt safely.")
+    _print_alpha_shadow_daemon_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("alpha-shadow-daemon-delayed")
+def alpha_shadow_daemon_delayed(
+    campaign_id: Annotated[
+        str | None,
+        typer.Option(
+            "--campaign-id",
+            help="Optional no-secret delayed daemon campaign correlation ID.",
+        ),
+    ] = None,
+    symbol: Annotated[
+        str,
+        typer.Option("--symbol", help="Daemon symbol. Only SPY is allowed."),
+    ] = "SPY",
+    session: Annotated[
+        str,
+        typer.Option("--session", help="Session profile. Only regular is allowed."),
+    ] = "regular",
+    interval_seconds: Annotated[
+        int,
+        typer.Option("--interval-seconds", help="Seconds between delayed shadow cycles."),
+    ] = 300,
+    max_cycles: Annotated[
+        int,
+        typer.Option("--max-cycles", help="Maximum controlled delayed shadow cycles."),
+    ] = 1,
+    stale_after_minutes: Annotated[
+        int,
+        typer.Option(
+            "--stale-after-minutes",
+            help="Maximum source-bar age for delayed engineering shadow.",
+        ),
+    ] = 30,
+    kill_switch_path: Annotated[
+        Path,
+        typer.Option("--kill-switch-path", help="File path that halts the daemon safely."),
+    ] = Path("state/alpha_shadow_daemon_delayed.kill"),
+    heartbeat_path: Annotated[
+        Path,
+        typer.Option("--heartbeat-path", help="Ignored local daemon heartbeat JSON path."),
+    ] = Path("state/alpha_shadow_daemon_delayed_heartbeat.json"),
+    duration: Annotated[
+        str,
+        typer.Option("--duration", help="Historical snapshot duration."),
+    ] = "1 D",
+    bar_size: Annotated[
+        str,
+        typer.Option("--bar-size", help="Historical snapshot bar size."),
+    ] = "5 mins",
+    what_to_show: Annotated[
+        str,
+        typer.Option("--what-to-show", help="Historical data type."),
+    ] = "TRADES",
+    use_rth: Annotated[
+        int,
+        typer.Option("--use-rth", help="Use regular trading hours: 1 or 0."),
+    ] = 1,
+    broker_timeout: Annotated[
+        float,
+        typer.Option("--broker-timeout", help="Broker request timeout seconds."),
+    ] = 15,
+    history_timeout: Annotated[
+        float,
+        typer.Option("--history-timeout", help="Historical request timeout seconds."),
+    ] = 30,
+    broker_stage_pause: Annotated[
+        float,
+        typer.Option(
+            "--broker-stage-pause",
+            help="Pause seconds between broker-contact stages.",
+        ),
+    ] = 1,
+    base_path: Annotated[
+        Path,
+        typer.Option("--base-path", help="Historical data base path."),
+    ] = Path("data/historical"),
+) -> None:
+    """Run read-only delayed-data SPY shadow cycles for engineering only."""
+
+    config = _load_config_or_exit()
+    request = AlphaShadowDaemonRequest(
+        campaign_id=campaign_id,
+        symbol=symbol,
+        session=session,
+        interval_seconds=interval_seconds,
+        max_cycles=max_cycles,
+        stale_after_minutes=stale_after_minutes,
+        graduation_clean_sessions_required=1,
+        kill_switch_path=kill_switch_path.as_posix(),
+        heartbeat_path=heartbeat_path.as_posix(),
+        duration=duration,
+        bar_size=bar_size,
+        what_to_show=what_to_show,
+        use_rth=_validate_use_rth_option(use_rth),
+        broker_timeout_seconds=_validate_timeout_option(broker_timeout) or 15,
+        history_timeout_seconds=_validate_timeout_option(history_timeout) or 30,
+        broker_stage_pause_seconds=_validate_non_negative_seconds_option(
+            broker_stage_pause,
+            30,
+        ),
+        base_data_path=base_path.as_posix(),
+    )
+    report = run_delayed_alpha_shadow_daemon(config, request)
+    json_path, md_path = Journal().write_cycle(
+        "alpha_shadow_daemon_delayed",
+        _report_dict(report),
+    )
+
+    console.print("[bold]Delayed-data alpha shadow daemon[/bold]")
+    console.print("Broker contact: read-only account and historical-data requests only.")
+    console.print("Delayed evidence is engineering-only and non-graduating.")
     console.print("Order routing: disabled.")
     console.print("Paper execution: disabled.")
     console.print("Submitted orders: false.")
@@ -3179,7 +3378,11 @@ def _print_alpha_shadow_daemon_result(report: AlphaShadowDaemonReport) -> None:
     table.add_row("Campaign ID", report.campaign_id or "n/a")
     table.add_row("Cycles", str(report.cycle_count))
     table.add_row("Clean cycles", str(report.clean_cycle_count))
+    table.add_row("Data policy", _enum_value(report.market_data_policy))
+    table.add_row("Delayed data mode", str(report.delayed_data_mode).lower())
+    table.add_row("Graduation eligible", str(report.graduation_eligible).lower())
     table.add_row("Graduation ready", str(report.graduation_ready).lower())
+    table.add_row("Non-graduating reason", report.non_graduating_reason or "n/a")
     table.add_row("Broker-connected cycles", str(report.broker_connected_cycles))
     table.add_row(
         "Account-verified cycles",
@@ -3261,6 +3464,8 @@ def _print_alpha_shadow_daemon_summary_result(
         source_table.add_column("Path")
         source_table.add_column("Campaign")
         source_table.add_column("Status")
+        source_table.add_column("Policy")
+        source_table.add_column("Eligible")
         source_table.add_column("Cycles")
         source_table.add_column("Clean")
         source_table.add_column("Broker")
@@ -3272,6 +3477,8 @@ def _print_alpha_shadow_daemon_summary_result(
                 source.source_report_path,
                 source.campaign_id or "n/a",
                 source.final_status,
+                source.market_data_policy,
+                str(source.graduation_eligible).lower(),
                 str(source.cycle_count),
                 str(source.clean_cycle_count),
                 str(source.broker_connected_cycles),
@@ -4143,6 +4350,10 @@ def _print_ibkr_data_diagnostics_result(report: IBKRDataDiagnosticsReport) -> No
     table.add_column("Check")
     table.add_column("Value")
     table.add_row("Symbol", report.symbol)
+    table.add_row("Data policy", _enum_value(report.data_policy))
+    table.add_row("Delayed data mode", str(report.delayed_data_mode))
+    table.add_row("Graduation eligible", str(report.graduation_eligible))
+    table.add_row("Non-graduating reason", report.non_graduating_reason or "n/a")
     table.add_row("Broker probe OK", str(report.broker_probe_ok))
     table.add_row("Broker connected", str(report.broker_connected))
     table.add_row("Account verified", str(report.broker_account_verified))
@@ -4168,6 +4379,7 @@ def _print_ibkr_data_diagnostics_result(report: IBKRDataDiagnosticsReport) -> No
     table.add_row("Market-data permission blocker", str(report.market_data_permission_blocker))
     table.add_row("Market-data permission hint", report.market_data_permission_hint or "n/a")
     table.add_row("Strict precheck passed", str(report.strict_shadow_precheck_passed))
+    table.add_row("Delayed precheck passed", str(report.delayed_shadow_precheck_passed))
     table.add_row("Next action", report.next_recommended_action)
     table.add_row("Submitted orders", str(report.submitted_orders).lower())
     table.add_row("Order API invoked", str(report.order_api_invoked).lower())

@@ -506,7 +506,7 @@ def _shadow_quotes(
         bar = result.dataset.bars[-1]
         quote = _quote_from_bar(bar)
         quotes[quote.symbol] = quote
-        source_timestamps[quote.symbol] = bar.timestamp.isoformat()
+        source_timestamps[quote.symbol] = bar.raw_timestamp or bar.timestamp.isoformat()
     return quotes, source_timestamps
 
 

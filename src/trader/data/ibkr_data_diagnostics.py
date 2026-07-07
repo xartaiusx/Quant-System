@@ -19,6 +19,7 @@ from trader.models import (
     IBKRDataDiagnosticsRequest,
     IBKRDataDiagnosticsStatus,
     MarketDataDiagnosticReport,
+    ShadowDataPolicy,
     utc_now,
 )
 
@@ -35,6 +36,7 @@ def build_ibkr_data_diagnostics_report(
     selected_request = request or IBKRDataDiagnosticsRequest()
     current_time = now or utc_now()
     current_commit = _current_commit_sha()
+    delayed_mode = selected_request.data_policy == ShadowDataPolicy.DELAYED_ENGINEERING
     source_paths = {
         "broker_probe_report": selected_request.broker_probe_report_path,
         "history_snapshot_report": selected_request.history_snapshot_report_path,
@@ -152,18 +154,35 @@ def build_ibkr_data_diagnostics_report(
             )
 
     market_probe_findings = _market_probe_findings(market_report)
-    if market_probe_findings.permission_blocker:
-        errors.append("market-probe indicates live SPY API market data subscription is missing")
     market_requested, market_received = _market_data_context(market_report)
+    delayed_market_probe_passed = _delayed_market_probe_passed(
+        market_report=market_report,
+        market_requested=market_requested,
+        market_received=market_received,
+        market_probe_findings=market_probe_findings,
+    )
+    if market_probe_findings.permission_blocker and not delayed_mode:
+        errors.append("market-probe indicates live SPY API market data subscription is missing")
+    if delayed_mode:
+        errors.extend(
+            _delayed_market_probe_errors(
+                market_report=market_report,
+                market_requested=market_requested,
+                market_received=market_received,
+                market_probe_findings=market_probe_findings,
+            )
+        )
     market_hint = _market_data_hint(
         latest_bar_age_minutes=bar_context.latest_bar_age_minutes,
         stale_after_minutes=selected_request.stale_after_minutes,
         market_data_type_requested=market_requested,
         market_data_type_received=market_received,
         permission_blocker=market_probe_findings.permission_blocker,
+        delayed_mode=delayed_mode,
     )
     strict_shadow_ready = (
-        broker_probe_ok
+        not delayed_mode
+        and broker_probe_ok
         and broker_connected
         and broker_account_verified
         and snapshot_ok
@@ -172,12 +191,31 @@ def build_ibkr_data_diagnostics_report(
         and freshness_passed
         and not errors
     )
+    delayed_shadow_ready = (
+        delayed_mode
+        and broker_probe_ok
+        and broker_connected
+        and broker_account_verified
+        and snapshot_ok
+        and readiness_ok
+        and bar_count_passed
+        and freshness_passed
+        and delayed_market_probe_passed
+        and not errors
+    )
     operator_hints = _operator_hints(
         broker_account_verified=broker_account_verified,
         bar_count_passed=bar_count_passed,
         freshness_passed=freshness_passed,
         latest_bar_age_minutes=bar_context.latest_bar_age_minutes,
+        delayed_mode=delayed_mode,
+        delayed_shadow_ready=delayed_shadow_ready,
     )
+    if delayed_mode:
+        warnings.append(
+            "Delayed engineering mode is non-graduating and must not be used "
+            "to unlock paper execution."
+        )
     final_status = _final_status(errors=errors, warnings=warnings)
     return IBKRDataDiagnosticsReport(
         ok=final_status != IBKRDataDiagnosticsStatus.FAILED,
@@ -185,6 +223,15 @@ def build_ibkr_data_diagnostics_report(
         commit_sha=current_commit,
         source_report_paths=source_paths,
         symbol=selected_request.symbol,
+        data_policy=selected_request.data_policy,
+        delayed_data_mode=delayed_mode,
+        delayed_shadow_precheck_passed=delayed_shadow_ready,
+        graduation_eligible=not delayed_mode,
+        non_graduating_reason=(
+            "delayed_data_engineering_mode_cannot_graduate_to_paper_execution"
+            if delayed_mode
+            else None
+        ),
         broker_probe_ok=broker_probe_ok,
         broker_connected=broker_connected,
         broker_account_verified=broker_account_verified,
@@ -211,7 +258,12 @@ def build_ibkr_data_diagnostics_report(
         market_data_permission_blocker=market_probe_findings.permission_blocker,
         market_data_permission_hint=market_probe_findings.permission_hint,
         strict_shadow_precheck_passed=strict_shadow_ready,
-        next_recommended_action=_next_action(strict_shadow_ready, errors),
+        next_recommended_action=_next_action(
+            strict_shadow_ready,
+            delayed_shadow_ready,
+            delayed_mode,
+            errors,
+        ),
         operator_hints=operator_hints,
         warnings=list(dict.fromkeys(warnings)),
         errors=list(dict.fromkeys(errors)),
@@ -396,6 +448,47 @@ def _market_probe_findings(
     )
 
 
+def _delayed_market_probe_passed(
+    *,
+    market_report: MarketDataDiagnosticReport | None,
+    market_requested: str | None,
+    market_received: str | None,
+    market_probe_findings: _MarketProbeFindings,
+) -> bool:
+    if market_report is None or not market_probe_findings.ok:
+        return False
+    if market_probe_findings.permission_blocker:
+        return False
+    delayed_types = {"delayed", "delayed_frozen"}
+    return market_requested in delayed_types or market_received in delayed_types
+
+
+def _delayed_market_probe_errors(
+    *,
+    market_report: MarketDataDiagnosticReport | None,
+    market_requested: str | None,
+    market_received: str | None,
+    market_probe_findings: _MarketProbeFindings,
+) -> list[str]:
+    if market_report is None:
+        return [
+            "delayed engineering diagnostics require a delayed market-probe report"
+        ]
+    errors: list[str] = []
+    if market_probe_findings.permission_blocker:
+        errors.append(
+            "delayed engineering diagnostics must not use a live-data permission blocker"
+        )
+    if not market_probe_findings.ok:
+        errors.append("delayed market-probe report did not pass")
+    delayed_types = {"delayed", "delayed_frozen"}
+    if market_requested not in delayed_types and market_received not in delayed_types:
+        errors.append(
+            "delayed engineering diagnostics require market-probe --data-type delayed"
+        )
+    return errors
+
+
 def _format_broker_error(error: Any) -> str:
     code = getattr(error, "code", None)
     message = getattr(error, "message", str(error))
@@ -441,9 +534,15 @@ def _market_data_hint(
     market_data_type_requested: str | None,
     market_data_type_received: str | None,
     permission_blocker: bool,
+    delayed_mode: bool,
 ) -> str:
     if permission_blocker:
         return "live_market_data_subscription_missing_for_strict_shadow"
+    if delayed_mode and (
+        market_data_type_requested in {"delayed", "delayed_frozen"}
+        or market_data_type_received in {"delayed", "delayed_frozen"}
+    ):
+        return "delayed_market_data_labeled_for_engineering_shadow"
     if latest_bar_age_minutes is None:
         return "latest_bar_timestamp_missing"
     if latest_bar_age_minutes <= stale_after_minutes:
@@ -461,8 +560,15 @@ def _operator_hints(
     bar_count_passed: bool,
     freshness_passed: bool,
     latest_bar_age_minutes: float | None,
+    delayed_mode: bool,
+    delayed_shadow_ready: bool,
 ) -> list[str]:
     hints: list[str] = []
+    if delayed_shadow_ready:
+        return [
+            "Delayed engineering precheck passed; run delayed shadow cycles only.",
+            "Delayed evidence is non-graduating and must not unlock paper execution.",
+        ]
     if not broker_account_verified:
         hints.append(
             "Rerun broker-probe with a fresh client ID or longer timeout before daemon work."
@@ -480,14 +586,28 @@ def _operator_hints(
                 "confirm live US equities data permissions if strict real-time shadow "
                 "readiness is required."
             )
+    if delayed_mode:
+        hints.append(
+            "Use market-probe --data-type delayed and a wider stale gate for "
+            "engineering-only delayed shadow runs."
+        )
     if not hints:
         hints.append("Strict precheck passed; alpha-shadow-daemon may run read-only.")
     return hints
 
 
-def _next_action(strict_shadow_ready: bool, errors: list[str]) -> str:
+def _next_action(
+    strict_shadow_ready: bool,
+    delayed_shadow_ready: bool,
+    delayed_mode: bool,
+    errors: list[str],
+) -> str:
     if strict_shadow_ready:
         return "run_alpha_shadow_daemon"
+    if delayed_shadow_ready:
+        return "run_alpha_shadow_daemon_delayed_non_graduating"
+    if delayed_mode:
+        return "keep_delayed_shadow_blocked_until_diagnostics_pass"
     if any("latest bar age" in error for error in errors):
         return "keep_shadow_daemon_blocked_and_investigate_ibkr_data_lag"
     if any("broker-probe" in error or "managed-account" in error for error in errors):

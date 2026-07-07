@@ -262,6 +262,14 @@ IBKR live-market-data subscription errors such as `10089` as strict shadow
 blockers. It never contacts IBKR, submits orders, cancels orders, enables paper
 orders, enables live orders, or expands commodity execution.
 
+`ibkr-delayed-data-diagnostics` and `alpha-shadow-daemon-delayed` are
+engineering-only alternatives for unfunded or unsubscribed accounts. They must
+label reports as delayed-data mode, use wider freshness gates explicitly, keep
+Read-Only API expectations and `ALLOW_PAPER_ORDERS=false`, set
+`graduation_eligible=false`, and keep `strict_shadow_precheck_passed=false`.
+Delayed reports must not count toward `alpha-shadow-daemon-summary`
+graduation, paper-daemon design, or paper execution eligibility.
+
 Commodity scope remains research-only after paper execution hardening. `GLD`
 and `USO` can be research candidates, `DBA` stays excluded from execution until
 liquidity gates pass, and direct futures remain out of scope until an explicit

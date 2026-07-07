@@ -201,6 +201,11 @@ def _evidence_from_payload(
         ok=_bool_value(payload.get("ok")),
         cycle_count=cycle_count,
         clean_cycle_count=_int_value(payload.get("clean_cycle_count"), 0),
+        market_data_policy=_optional_str(payload.get("market_data_policy"))
+        or "strict_live",
+        delayed_data_mode=_bool_value(payload.get("delayed_data_mode")),
+        graduation_eligible=_bool_value(payload.get("graduation_eligible"), True),
+        non_graduating_reason=_optional_str(payload.get("non_graduating_reason")),
         stale_data_detected=_bool_value(payload.get("stale_data_detected"))
         or stale_cycle_count > 0,
         stale_cycle_count=stale_cycle_count,
@@ -251,6 +256,9 @@ def _source_report_errors(
         errors.append(f"{label} contains an order-routing or execution safety flag")
     if not report.broker_contact_read_only:
         errors.append(f"{label} does not prove read-only broker contact")
+    if not report.graduation_eligible or report.delayed_data_mode:
+        reason = report.non_graduating_reason or report.market_data_policy
+        errors.append(f"{label} is non-graduating shadow evidence: {reason}")
     if report.errors:
         errors.extend(f"{label} source error: {error}" for error in report.errors)
     errors.extend(
@@ -322,6 +330,8 @@ def _clean_session(report: AlphaShadowDaemonReportEvidence) -> bool:
         and report.broker_connected_cycles >= report.cycle_count
         and report.account_summary_verified_cycles >= report.cycle_count
         and report.heartbeat_present
+        and report.graduation_eligible
+        and not report.delayed_data_mode
         and not _safety_violation(report)
         and not report.errors
     )
