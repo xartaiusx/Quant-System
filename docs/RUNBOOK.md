@@ -11,11 +11,13 @@ python -m pip install -e ".[dev]"
 For real read-only broker probes:
 
 ```bash
-python -m pip install -e ".[dev,broker]"
 scripts/check-ibapi.sh
 ```
 
-If `ibapi` is unavailable from your package index, install the official IBKR TWS API Python client manually and rerun `scripts/check-ibapi.sh`.
+Download the current Stable or Latest TWS API from IBKR's official download,
+install its `source/pythonclient` directory into the active environment, and
+rerun the checker. On Windows, use `scripts/check-ibapi.ps1`. Do not install
+`ibapi` from PyPI.
 
 Optional local config:
 
@@ -43,17 +45,22 @@ scripts/check-ibapi.sh
 Expected missing-dependency result:
 
 ```text
-ibapi package: missing
-Next step: activate the repo venv and install the optional broker extra:
-  python -m pip install -e ".[dev,broker]"
-No packages were installed by this script.
+ibapi import: failed
+ibapi compatibility: failed
+Install the current Stable or Latest TWS API from IBKR's official download.
+Broker contacted: false
+Order APIs invoked: false
 ```
 
 Expected success result:
 
 ```text
 ibapi import: ok
-ibapi readiness: ok
+ibapi max server protocol: <163 or newer>
+required server protocol: 163
+ibapi compatibility: ok
+Broker contacted: false
+Order APIs invoked: false
 ```
 
 ## Preflight
@@ -1170,7 +1177,8 @@ python -m pip install -e .
 
 If `broker-probe` fails:
 
-- Install the optional broker dependency: `python -m pip install -e ".[dev,broker]"`.
+- Install the current Stable or Latest TWS API Python client from IBKR's
+  official download into the active virtual environment.
 - Run `scripts/check-ibapi.sh`.
 - Confirm TWS or IB Gateway is running and logged in.
 - In TWS, open `Global Configuration -> API -> Settings`.

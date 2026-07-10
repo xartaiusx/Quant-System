@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+import trader.broker.ibkr_client as ibkr_client
 import trader.cli as cli
 from trader.broker.ibkr_client import IBKRClient, _ReadOnlyIBKRApp
 from trader.config import ENV_TO_FIELD, ConfigError, load_config
@@ -38,6 +39,15 @@ from trader.models import (
     TradePlan,
     utc_now,
 )
+
+
+class FakeIBAPIContract:
+    """Attribute container used by broker-free unit tests."""
+
+
+@pytest.fixture(autouse=True)
+def use_fake_ibapi_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ibkr_client, "_IBAPI_CONTRACT", FakeIBAPIContract)
 
 
 class TimeoutFakeApp:

@@ -16,9 +16,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-broker = [
-  "ibapi>=9.81.1",
-]
 dev = [
   "pytest>=8,<9",
   "pytest-cov>=5,<6",

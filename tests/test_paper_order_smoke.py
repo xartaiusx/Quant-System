@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import trader.execution.paper_order_smoke as paper_order_smoke
 from trader.config import BrokerKind, TraderConfig, TradingMode
 from trader.execution.paper_order_smoke import (
     PAPER_SMOKE_CONFIRMATION,
@@ -26,6 +27,15 @@ from trader.models import (
     TradeAction,
 )
 from trader.reporting.reports import markdown_summary
+
+
+class FakeIBAPIOrder:
+    """Attribute container used by broker-free unit tests."""
+
+
+@pytest.fixture(autouse=True)
+def use_fake_ibapi_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(paper_order_smoke, "_IBAPI_ORDER", FakeIBAPIOrder)
 
 
 def config(**overrides: object) -> TraderConfig:

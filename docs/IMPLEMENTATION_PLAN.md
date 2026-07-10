@@ -96,14 +96,16 @@ Completion criteria:
 Baseline before edits:
 
 - Milestone 2 added a safe read-only broker probe with optional `ibapi` imports.
-- `pyproject.toml` already keeps `ibapi` in the optional `broker` extra rather than the default install.
+- The default install remains broker-free. The supported `ibapi` client is
+  installed separately from IBKR's official TWS API download.
 - Default `.venv/bin/python -m pip install -e ".[dev]"` remains the required baseline install path.
 - `ibapi` is not currently available in the local venv, so broker-probe stops before opening a socket.
 - Paper execution remains blocked and live trading remains rejected.
 
 Implementation plan:
 
-1. Keep the default install free of broker dependencies and keep the optional `broker` extra as the documented official `ibapi` path.
+1. Keep the default install free of broker dependencies and document the
+   official IBKR TWS API installer as the only supported `ibapi` path.
 2. Add explicit broker-probe report fields for `ibapi_import_error`, `connection_attempted`, `failure_stage`, boolean no-order guarantee, and order-routing-disabled status.
 3. Improve broker-probe CLI output so operators can quickly distinguish missing dependency, socket/connect problems, timeout, current-time success, masked managed accounts, and the no-order guarantee.
 4. Add helper scripts for checking `ibapi` and for running connection preflight plus broker-probe without installing anything automatically.
