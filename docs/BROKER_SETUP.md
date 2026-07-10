@@ -92,6 +92,8 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - Unit tests do not require TWS or IB Gateway.
 - `python -m trader.cli preflight` does not connect unless `--connect` is passed.
 - `python -m trader.cli broker-probe` connects, requests current time, requests managed accounts, masks account IDs, writes reports, and disconnects.
+- The adapter supports the `errorTime` callback argument added in API 10.33 and
+  the current `OrderCancel` and `commissionAndFeesReport` API shapes.
 - The `ibapi` package is optional.
 - If `ibapi` is unavailable, broker commands fail gracefully with setup guidance.
 - Missing `ibapi` reports `failure_stage=dependency_check` and `connection_attempted=false`.
@@ -129,6 +131,8 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - Read-only mode is acceptable and recommended for this milestone.
 - In Python `ibapi`, a falsy `connect()` return does not by itself prove failure; the probe waits for readiness callbacks and the current-time response.
 - IBKR farm-status warnings such as `2104`, `2106`, `2107`, and `2158` are informational for this probe. They do not mean current-time connectivity failed.
+- A callback `TypeError` mentioning six arguments indicates an outdated adapter;
+  current `main` accepts the timestamped API 10.33+ error signature.
 - Live market data requires IBKR permissions/subscriptions. Delayed data is acceptable for early diagnostics and is the default.
 - Historical data availability depends on IBKR data permissions, instrument availability, and pacing limits.
 - Strict SPY shadow-daemon attempts require enough current `5 mins` bars and a latest-bar age at or below the configured gate. If `ibkr-data-diagnostics` flags a lag near delayed-data timing, keep the daemon blocked and diagnose permissions or market-data type before changing the gate.
@@ -170,5 +174,6 @@ python -m trader.cli alpha-shadow-daemon-summary --report-glob='reports/alpha_sh
 ## References
 
 - IBKR TWS API supported download and installation guidance: https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/
+- IBKR TWS API callback and order API changes: https://www.interactivebrokers.com/campus/ibkr-api-page/tws-api-changelog-2/
 - IBKR TWS API setup and paper/live ports: https://www.interactivebrokers.com/campus/trading-lessons/installing-configuring-tws-for-the-api/
 - IBKR contracts API reference: https://www.interactivebrokers.com/campus/ibkr-api-page/contracts/

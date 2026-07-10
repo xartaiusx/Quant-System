@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Protocol, cast
 
+from trader.broker.ibapi_callbacks import normalize_ibkr_error_args
 from trader.config import LIVE_PORTS, TraderConfig, mask_account_id
 from trader.models import (
     BrokerConnectionStatus,
@@ -422,21 +423,28 @@ class _ReadOnlyIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
     def error(  # noqa: N802 - IBKR callback name
         self,
         reqId: int,
-        errorCode: int,
-        errorString: str,
-        advancedOrderRejectJson: str = "",
+        *args: object,
     ) -> None:
-        message = errorString
-        if advancedOrderRejectJson:
-            message = f"{message} ({advancedOrderRejectJson})"
-        event = BrokerErrorEvent(req_id=reqId, code=errorCode, message=message)
+        try:
+            normalized = normalize_ibkr_error_args(args)
+        except ValueError as exc:
+            with self._lock:
+                self.errors.append(BrokerErrorEvent(req_id=reqId, message=str(exc)))
+            self._release_pending_request_events(reqId)
+            return
+
+        error_code = normalized.error_code
+        message = normalized.error_string
+        if normalized.advanced_order_reject_json:
+            message = f"{message} ({normalized.advanced_order_reject_json})"
+        event = BrokerErrorEvent(req_id=reqId, code=error_code, message=message)
         with self._lock:
-            if errorCode in _INFORMATIONAL_ERROR_CODES:
-                self.warnings.append(f"IBKR {errorCode}: {message}")
-                self._mark_data_farm_ready(errorCode)
+            if error_code in _INFORMATIONAL_ERROR_CODES:
+                self.warnings.append(f"IBKR {error_code}: {message}")
+                self._mark_data_farm_ready(error_code)
             else:
                 self.errors.append(event)
-        if errorCode not in _INFORMATIONAL_ERROR_CODES:
+        if error_code not in _INFORMATIONAL_ERROR_CODES:
             self._release_pending_request_events(reqId)
 
     def _mark_data_farm_ready(self, error_code: int) -> None:

@@ -1190,6 +1190,9 @@ If `broker-probe` fails:
 - Remember that market data subscriptions are not required for current-time probing.
 - The Python `ibapi` `connect()` call may return `None` even when the API session is healthy; readiness is confirmed by callbacks such as `connectAck`, `nextValidId`, or a successful current-time response.
 - IBKR farm-status messages such as `2103`, `2104`, `2105`, `2106`, `2107`, `2108`, and `2158` are non-fatal for the current-time probe. Request-specific timeouts or permission errors still fail the affected market-data or historical-data stage.
+- If the API reader reports that `error()` received six arguments, update to a
+  revision that supports the API 10.33+ `errorTime` callback argument. Current
+  `main` also uses the modern `OrderCancel` and `commissionAndFeesReport` shapes.
 
 ## Safe Next Milestones
 

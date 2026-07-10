@@ -606,6 +606,15 @@ def test_ibkr_farm_status_codes_are_non_fatal_warnings() -> None:
     assert app.warnings == [f"IBKR {code}: farm status {code}" for code in (2103, 2105, 2107, 2108)]
 
 
+def test_ibkr_timestamped_error_callback_is_supported() -> None:
+    app = _ReadOnlyIBKRApp()
+
+    app.error(-1, 1_720_000_000_000, 2104, "Market data farm connection is OK", "")
+
+    assert app.warnings == ["IBKR 2104: Market data farm connection is OK"]
+    assert app.errors == []
+
+
 def test_ibkr_data_farm_ok_codes_set_readiness_events() -> None:
     app = _ReadOnlyIBKRApp()
 
