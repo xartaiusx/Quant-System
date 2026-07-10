@@ -770,6 +770,32 @@ offline local-file workflows. Common failures:
 - Failed feed: fix loader errors before replay.
 - Partial feed: review missing-bar diagnostics in the run report.
 
+## SPY Research Backtest
+
+```bash
+python -m trader.cli research-backtest --symbol SPY --short-window 5 --long-window 20
+python -m trader.cli research-backtest --symbol SPY --spread-bps 2 --slippage-bps 1 --minimum-commission 1.00
+```
+
+Expected behavior:
+
+- opens no broker socket and imports no broker or execution module
+- remains SPY-only, long-only, fixed positive integer quantity
+- evaluates crossover signals only after completed bar closes
+- simulates each strategy fill at the next bar open
+- applies explicit spread, slippage, and commission assumptions
+- records fills, closed trades, cash, position, equity, P&L, drawdown, turnover,
+  benchmark return, win rate, and exposure
+- writes `reports/research_backtest_<timestamp>.json` and `.md`
+- updates `reports/latest_research_backtest.json` and `.md`
+- reports `promotion_eligible=false`, `submitted_orders=false`, and
+  `order_api_invoked=false`
+
+This command is an in-sample simulation core. Do not use it to promote a signal
+or unlock paper automation. Review `docs/RESEARCH_BACKTEST_SPEC.md`; the next
+research gate is chronological walk-forward selection plus one sealed final
+holdout evaluation.
+
 ## Offline Strategy Contract
 
 ```bash

@@ -134,6 +134,7 @@ python -m trader.cli backtest-feed --symbols SPY,AAPL
 python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment intersection
 python -m trader.cli backtest-run --symbols SPY,AAPL
 python -m trader.cli backtest-run --symbols SPY,AAPL --alignment intersection
+python -m trader.cli research-backtest --symbol SPY --short-window 5 --long-window 20
 python -m trader.cli strategy-contract --symbols SPY,AAPL
 python -m trader.cli strategy-contract --symbols SPY,AAPL --alignment intersection
 python -m trader.cli strategy-runner --symbols SPY,AAPL
@@ -232,6 +233,13 @@ contact IBKR, evaluate strategies, simulate orders, or compute P&L.
 deterministically, records frame-level diagnostics, writes run reports, and does
 not contact IBKR, evaluate strategies, simulate orders, calculate fills, or
 compute P&L.
+
+`research-backtest` is the separate SPY-only research simulator. It evaluates a
+long-only moving-average crossover at completed bar closes, fills at the next
+bar open, models spread, slippage, and commissions, and records fills, closed
+trades, cash, positions, equity, P&L, drawdown, turnover, and exposure. It is
+offline-only and always reports `promotion_eligible=false` until walk-forward
+selection and a sealed out-of-sample evaluation are implemented.
 
 `strategy-contract` is an offline interface scaffold. It validates a no-op
 strategy contract against local feed frames, writes contract reports, and does

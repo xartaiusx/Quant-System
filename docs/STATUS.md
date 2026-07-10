@@ -30,6 +30,9 @@
 - Milestone 17 implemented: read-only paper readiness orchestration for first paper-client program testing.
 - Milestone 18 implemented: broker-free data-quality gate for local historical snapshots.
 - Milestone 19 implemented: broker-free analytical evaluator comparison diagnostics.
+- Broker-free SPY research backtest core implemented with next-bar fills,
+  configurable spread/slippage/commission costs, portfolio accounting, trade
+  logs, P&L, drawdown, turnover, benchmark return, and explicit non-promotion.
 - GitHub Actions CI added for tests, lint, typecheck, whitespace, and safety scans.
 - Optional `ibapi` dependency check script.
 - Offline `ibapi` protocol compatibility check for the current official IBKR
@@ -94,6 +97,8 @@
 - Data-quality gates contacting IBKR, evaluating signals, generating order intents, simulating fills, calculating P&L, enabling direct futures contracts, or routing execution.
 - Evaluator comparisons contacting IBKR, ranking trade recommendations, optimizing P&L, generating trading signals, creating order intents, simulating fills, enabling direct futures contracts, or routing execution.
 - Paper reconciliation submitting, modifying, or canceling orders while collecting account, position, open-order, and execution evidence.
+- Research-backtest promotion before chronological walk-forward selection and a
+  sealed final out-of-sample evaluation are implemented.
 
 ## Current Blockers
 
@@ -145,3 +150,6 @@
 7. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
 8. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
 9. Require ledger-matched broker truth before any broader paper execution daemon.
+10. Add walk-forward candidate selection and a sealed final holdout to
+    `research-backtest`; retain all tested parameter candidates and keep the
+    in-sample core non-promoting.

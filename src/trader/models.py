@@ -165,6 +165,13 @@ class BacktestRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class ResearchBacktestStatus(StrEnum):
+    """Broker-free research backtest completion states."""
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class InertStrategyRunnerStatus(StrEnum):
     """Offline inert strategy runner states for no-op diagnostics."""
 
@@ -1453,6 +1460,173 @@ class BacktestRunReport(SerializableModel):
     )
     final_status: str = "unknown"
     timestamp: datetime = Field(default_factory=utc_now)
+
+
+class ResearchBacktestRequest(SerializableModel):
+    """SPY-only broker-free research simulation request."""
+
+    symbol: str = "SPY"
+    short_window: int = Field(default=5, gt=0)
+    long_window: int = Field(default=20, gt=1)
+    quantity: int = Field(default=1, gt=0)
+    starting_cash: Decimal = Field(default=Decimal("100000"), gt=0)
+    spread_bps: Decimal = Field(default=Decimal("2"), ge=0)
+    slippage_bps: Decimal = Field(default=Decimal("1"), ge=0)
+    commission_per_share: Decimal = Field(default=Decimal("0.005"), ge=0)
+    minimum_commission: Decimal = Field(default=Decimal("1.00"), ge=0)
+    force_close_at_end: bool = True
+    requested_bar_size: str | None = "5 mins"
+    requested_what_to_show: str | None = "TRADES"
+    latest: bool = True
+    snapshot_timestamp: str | None = None
+    strict: bool = True
+    base_data_path: str = "data/historical"
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_spy_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized != "SPY":
+            raise ValueError("research backtest execution candidate must remain SPY")
+        return normalized
+
+    @field_validator("requested_bar_size", "requested_what_to_show", "snapshot_timestamp")
+    @classmethod
+    def normalize_optional_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("requested_what_to_show")
+    @classmethod
+    def normalize_what_to_show(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+    @model_validator(mode="after")
+    def validate_window_order(self) -> ResearchBacktestRequest:
+        if self.short_window >= self.long_window:
+            raise ValueError("short_window must be less than long_window")
+        return self
+
+
+class ResearchBacktestFill(SerializableModel):
+    """One deterministic simulated fill produced from an offline bar."""
+
+    symbol: str
+    action: TradeAction
+    quantity: int
+    signal_timestamp: datetime
+    fill_timestamp: datetime
+    signal_frame_index: int
+    fill_frame_index: int
+    reference_price: Decimal
+    fill_price: Decimal
+    commission: Decimal
+    spread_cost: Decimal
+    slippage_cost: Decimal
+    traded_notional: Decimal
+    cash_after: Decimal
+    position_after: int
+    reason: str
+
+
+class ResearchBacktestTrade(SerializableModel):
+    """One closed long-only SPY research trade."""
+
+    symbol: str
+    quantity: int
+    entry_timestamp: datetime
+    exit_timestamp: datetime
+    entry_price: Decimal
+    exit_price: Decimal
+    entry_commission: Decimal
+    exit_commission: Decimal
+    gross_pnl: Decimal
+    net_pnl: Decimal
+    holding_bars: int
+    profitable: bool
+    exit_reason: str
+
+
+class ResearchBacktestEquityPoint(SerializableModel):
+    """Mark-to-market portfolio state after one offline bar."""
+
+    timestamp: datetime
+    frame_index: int
+    cash: Decimal
+    position_quantity: int
+    mark_price: Decimal
+    position_value: Decimal
+    equity: Decimal
+    drawdown_pct: Decimal
+
+
+class ResearchBacktestMetrics(SerializableModel):
+    """Cost-aware accounting metrics for one research simulation."""
+
+    starting_cash: Decimal
+    ending_cash: Decimal
+    ending_equity: Decimal
+    gross_pnl_before_costs: Decimal
+    net_pnl: Decimal
+    total_return_pct: Decimal
+    benchmark_return_pct: Decimal
+    max_drawdown_pct: Decimal
+    turnover_ratio: Decimal
+    total_traded_notional: Decimal
+    total_commissions: Decimal
+    total_spread_cost: Decimal
+    total_slippage_cost: Decimal
+    signal_count: int
+    fill_count: int
+    closed_trade_count: int
+    winning_trade_count: int
+    win_rate_pct: Decimal
+    exposure_pct: Decimal
+
+
+class ResearchBacktestReport(SerializableModel):
+    """Full broker-free research simulation report."""
+
+    title: str = "SPY Broker-free Research Backtest"
+    report_type: str = "research_backtest"
+    command: str = "research-backtest"
+    ok: bool
+    request: ResearchBacktestRequest
+    feed_summary: BacktestDataFeedSummary | None = None
+    fills: list[ResearchBacktestFill] = Field(default_factory=list)
+    trades: list[ResearchBacktestTrade] = Field(default_factory=list)
+    equity_curve: list[ResearchBacktestEquityPoint] = Field(default_factory=list)
+    metrics: ResearchBacktestMetrics | None = None
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    final_status: ResearchBacktestStatus = ResearchBacktestStatus.FAILED
+    strategy_name: str = "moving_average_crossover_research"
+    evaluation_scope: str = "in_sample_core"
+    promotion_eligible: bool = False
+    non_promotion_reason: str = "walk_forward_and_sealed_oos_not_completed"
+    lookahead_prevention: str = "signals_on_bar_close_fills_at_next_bar_open"
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    strategy_evaluated: bool = True
+    orders_simulated: bool = True
+    fills_simulated: bool = True
+    portfolio_accounting: bool = True
+    pnl_calculated: bool = True
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_safety_flags(self) -> ResearchBacktestReport:
+        if self.broker_contacted or self.order_routing_enabled:
+            raise ValueError("research backtest must remain broker-free")
+        if self.submitted_orders or self.order_api_invoked:
+            raise ValueError("research backtest must not invoke order APIs")
+        if self.promotion_eligible:
+            raise ValueError("in-sample research core cannot be promotion eligible")
+        return self
 
 
 class StrategyParameterSpec(SerializableModel):
