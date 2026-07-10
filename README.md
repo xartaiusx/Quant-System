@@ -83,15 +83,18 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
-Optional future broker adapter dependency:
-Required only for real TWS / IB Gateway read-only probes:
+The broker client is required only for real TWS / IB Gateway probes. Download
+the current Stable or Latest TWS API from IBKR's official download page, install
+its `source/pythonclient` directory into the active virtual environment, then run:
 
 ```bash
-python -m pip install -e ".[dev,broker]"
 scripts/check-ibapi.sh
 ```
 
-The default dev install intentionally does not require `ibapi`. The broker extra uses the official `ibapi` Python package when it is available from your package index. If that package is unavailable in your environment, install the official IBKR TWS API Python client manually, then rerun `scripts/check-ibapi.sh`.
+On Windows, use `scripts/check-ibapi.ps1`. The check is offline and requires
+client protocol support at least `163`; it never connects to IBKR or invokes
+order APIs. The repo intentionally does not install `ibapi` from PyPI because
+IBKR does not host, endorse, or support that distribution channel.
 
 Copy the example config only when you need local overrides:
 
@@ -438,6 +441,7 @@ signals, simulate orders or fills, perform portfolio accounting, or compute P&L.
 
 ## References
 
+- IBKR TWS API supported download and installation guidance: https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/
 - IBKR TWS API setup and paper/live ports: https://www.interactivebrokers.com/campus/trading-lessons/installing-configuring-tws-for-the-api/
 - IBKR historical data retrieval: https://www.interactivebrokers.com/campus/ibkr-quant-news/how-to-retrieve-equity-data-through-the-python-api/
 - IBKR market-data type behavior: https://interactivebrokers.github.io/tws-api/market_data_type.html

@@ -32,6 +32,8 @@
 - Milestone 19 implemented: broker-free analytical evaluator comparison diagnostics.
 - GitHub Actions CI added for tests, lint, typecheck, whitespace, and safety scans.
 - Optional `ibapi` dependency check script.
+- Offline `ibapi` protocol compatibility check for the current official IBKR
+  client, with a minimum supported server protocol of `163`.
 - Deterministic mock data.
 - Momentum and mean-reversion strategy modules.
 - Portfolio construction.
@@ -101,6 +103,9 @@
 ## Current Local Validation
 
 - `ibapi` is installed and importable in this checkout's `.venv`.
+- The currently installed legacy `ibapi 9.81.1-1` supports protocol `157` and
+  fails the new compatibility check; install the current official IBKR API
+  before strict-live shadow graduation or paper-order testing.
 - IB Gateway paper on `127.0.0.1:4002` accepted a read-only broker probe.
 - Latest successful broker-probe returned current server time, masked managed-account output, `order_routing_enabled=false`, and `no_order_guarantee=true`.
 - Before market-data diagnostics in a new environment, rerun a successful read-only current-time broker probe.
