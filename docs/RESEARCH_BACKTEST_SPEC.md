@@ -7,8 +7,8 @@ ignored local historical snapshots and never imports broker or execution
 modules, opens an IBKR socket, invokes order APIs, or submits an order.
 
 This milestone is an accounting and simulation foundation, not evidence that a
-strategy is profitable. Every report is non-promoting until walk-forward model
-selection and a sealed final out-of-sample evaluation are implemented.
+strategy is profitable. `research-walk-forward` supplies the next validation
+layer, but neither command promotes a strategy automatically.
 
 ## Signal And Timing
 
@@ -68,10 +68,9 @@ submitted_orders=false
 order_api_invoked=false
 ```
 
-The next research milestone must add chronological walk-forward parameter
-selection, retain every candidate trial, and evaluate the selected configuration
-exactly once on a sealed final holdout. Paper-daemon design remains blocked by
-the separate strict-live shadow-session graduation gate.
+Chronological selection and final-holdout rules are specified in
+`docs/RESEARCH_VALIDATION_SPEC.md`. Paper-daemon design remains blocked by
+independent research review and the separate strict-live shadow-session gate.
 
 ## References
 

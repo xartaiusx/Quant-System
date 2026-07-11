@@ -135,6 +135,7 @@ python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment intersection
 python -m trader.cli backtest-run --symbols SPY,AAPL
 python -m trader.cli backtest-run --symbols SPY,AAPL --alignment intersection
 python -m trader.cli research-backtest --symbol SPY --short-window 5 --long-window 20
+python -m trader.cli research-walk-forward --symbol SPY --window-pairs 5:20,10:30,20:50
 python -m trader.cli strategy-contract --symbols SPY,AAPL
 python -m trader.cli strategy-contract --symbols SPY,AAPL --alignment intersection
 python -m trader.cli strategy-runner --symbols SPY,AAPL
@@ -238,8 +239,17 @@ compute P&L.
 long-only moving-average crossover at completed bar closes, fills at the next
 bar open, models spread, slippage, and commissions, and records fills, closed
 trades, cash, positions, equity, P&L, drawdown, turnover, and exposure. It is
-offline-only and always reports `promotion_eligible=false` until walk-forward
-selection and a sealed out-of-sample evaluation are implemented.
+offline-only and always reports `promotion_eligible=false`. Use the separate
+walk-forward command for chronological validation rather than selecting from a
+single in-sample result.
+
+`research-walk-forward` adds anchored chronological development folds and one
+final holdout. Each fold chooses only from its training segment, validates the
+choice on the next non-overlapping segment, retains every training candidate,
+then selects once on the full development partition before evaluating the
+fingerprinted holdout exactly once per report. The report remains
+`promotion_eligible=false`: software cannot prevent an operator from rerunning
+or informally tuning against a consumed holdout.
 
 `strategy-contract` is an offline interface scaffold. It validates a no-op
 strategy contract against local feed frames, writes contract reports, and does

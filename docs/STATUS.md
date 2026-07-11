@@ -33,6 +33,10 @@
 - Broker-free SPY research backtest core implemented with next-bar fills,
   configurable spread/slippage/commission costs, portfolio accounting, trade
   logs, P&L, drawdown, turnover, benchmark return, and explicit non-promotion.
+- Chronological SPY walk-forward research implemented with anchored folds,
+  complete training-candidate retention, next-period validation, deterministic
+  return/drawdown selection, partition fingerprints, and one final holdout
+  evaluation per report. Operator-rerun prevention is explicitly not claimed.
 - GitHub Actions CI added for tests, lint, typecheck, whitespace, and safety scans.
 - Optional `ibapi` dependency check script.
 - Offline `ibapi` protocol compatibility check for the current official IBKR
@@ -97,8 +101,8 @@
 - Data-quality gates contacting IBKR, evaluating signals, generating order intents, simulating fills, calculating P&L, enabling direct futures contracts, or routing execution.
 - Evaluator comparisons contacting IBKR, ranking trade recommendations, optimizing P&L, generating trading signals, creating order intents, simulating fills, enabling direct futures contracts, or routing execution.
 - Paper reconciliation submitting, modifying, or canceling orders while collecting account, position, open-order, and execution evidence.
-- Research-backtest promotion before chronological walk-forward selection and a
-  sealed final out-of-sample evaluation are implemented.
+- Research-backtest or walk-forward reports automatically promoting a signal;
+  independent research review and strict-live shadow graduation remain required.
 
 ## Current Blockers
 
@@ -153,6 +157,6 @@
 7. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
 8. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
 9. Require ledger-matched broker truth before any broader paper execution daemon.
-10. Add walk-forward candidate selection and a sealed final holdout to
-    `research-backtest`; retain all tested parameter candidates and keep the
-    in-sample core non-promoting.
+10. Acquire a substantially longer, quality-gated SPY research history and run
+    the predeclared walk-forward experiment once. Treat its final holdout as
+    consumed, retain all local evidence, and do not tune against the result.
