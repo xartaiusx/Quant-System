@@ -792,9 +792,43 @@ Expected behavior:
   `order_api_invoked=false`
 
 This command is an in-sample simulation core. Do not use it to promote a signal
-or unlock paper automation. Review `docs/RESEARCH_BACKTEST_SPEC.md`; the next
-research gate is chronological walk-forward selection plus one sealed final
-holdout evaluation.
+or unlock paper automation. Review `docs/RESEARCH_BACKTEST_SPEC.md` and use the
+separate chronological validation command below.
+
+## SPY Walk-forward Research
+
+Use a dataset long enough to keep training, each next-period validation fold,
+and the final holdout non-overlapping. The defaults require at least `1,000`
+bars (`500 + 3*100 + 200`):
+
+```bash
+python -m trader.cli research-walk-forward \
+  --symbol SPY \
+  --window-pairs 5:20,10:30,20:50 \
+  --fold-count 3 \
+  --minimum-train-bars 500 \
+  --validation-bars 100 \
+  --holdout-bars 200 \
+  --minimum-closed-trades 1
+```
+
+Acceptance evidence:
+
+- every fold is anchored and trains only on bars before its validation segment
+- each fold retains every predeclared training candidate and selects without
+  using its next-period validation bars
+- indicator warmup bars may precede a validation segment, but cannot generate
+  fills or equity observations
+- the final holdout is fingerprinted before selection, excluded from the full
+  development selection, and evaluated once per report
+- dataset, development, holdout, and research-spec fingerprints are recorded
+- `broker_contacted=false`, `submitted_orders=false`,
+  `order_api_invoked=false`, and `promotion_eligible=false`
+
+Treat the holdout as consumed after the first recorded evaluation. The program
+cannot prevent deletion of evidence or operator reruns, so even a completed
+report requires independent research review and cannot unlock paper execution.
+See `docs/RESEARCH_VALIDATION_SPEC.md`.
 
 ## Offline Strategy Contract
 

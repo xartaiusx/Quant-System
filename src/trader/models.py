@@ -172,6 +172,13 @@ class ResearchBacktestStatus(StrEnum):
     FAILED = "failed"
 
 
+class ResearchWalkForwardStatus(StrEnum):
+    """Broker-free walk-forward research completion states."""
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class InertStrategyRunnerStatus(StrEnum):
     """Offline inert strategy runner states for no-op diagnostics."""
 
@@ -1616,6 +1623,8 @@ class ResearchBacktestReport(SerializableModel):
     fills_simulated: bool = True
     portfolio_accounting: bool = True
     pnl_calculated: bool = True
+    warmup_bar_count: int = 0
+    evaluation_bar_count: int = 0
     timestamp: datetime = Field(default_factory=utc_now)
 
     @model_validator(mode="after")
@@ -1626,6 +1635,201 @@ class ResearchBacktestReport(SerializableModel):
             raise ValueError("research backtest must not invoke order APIs")
         if self.promotion_eligible:
             raise ValueError("in-sample research core cannot be promotion eligible")
+        return self
+
+
+class ResearchWindowCandidate(SerializableModel):
+    """One predeclared moving-average parameter candidate."""
+
+    short_window: int = Field(gt=0)
+    long_window: int = Field(gt=1)
+
+    @model_validator(mode="after")
+    def validate_window_order(self) -> ResearchWindowCandidate:
+        if self.short_window >= self.long_window:
+            raise ValueError("short_window must be less than long_window")
+        return self
+
+
+class ResearchWalkForwardRequest(SerializableModel):
+    """Chronological SPY walk-forward and final-holdout request."""
+
+    symbol: str = "SPY"
+    candidates: list[ResearchWindowCandidate] = Field(
+        default_factory=lambda: [
+            ResearchWindowCandidate(short_window=5, long_window=20),
+            ResearchWindowCandidate(short_window=10, long_window=30),
+            ResearchWindowCandidate(short_window=20, long_window=50),
+        ]
+    )
+    fold_count: int = Field(default=3, ge=2)
+    minimum_train_bars: int = Field(default=500, gt=0)
+    validation_bars: int = Field(default=100, gt=1)
+    holdout_bars: int = Field(default=200, gt=1)
+    minimum_closed_trades: int = Field(default=1, ge=0)
+    drawdown_penalty: Decimal = Field(default=Decimal("1"), ge=0)
+    quantity: int = Field(default=1, gt=0)
+    starting_cash: Decimal = Field(default=Decimal("100000"), gt=0)
+    spread_bps: Decimal = Field(default=Decimal("2"), ge=0)
+    slippage_bps: Decimal = Field(default=Decimal("1"), ge=0)
+    commission_per_share: Decimal = Field(default=Decimal("0.005"), ge=0)
+    minimum_commission: Decimal = Field(default=Decimal("1.00"), ge=0)
+    requested_bar_size: str | None = "5 mins"
+    requested_what_to_show: str | None = "TRADES"
+    latest: bool = True
+    snapshot_timestamp: str | None = None
+    strict: bool = True
+    base_data_path: str = "data/historical"
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_spy_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized != "SPY":
+            raise ValueError("walk-forward research candidate must remain SPY")
+        return normalized
+
+    @field_validator("requested_bar_size", "requested_what_to_show", "snapshot_timestamp")
+    @classmethod
+    def normalize_optional_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("requested_what_to_show")
+    @classmethod
+    def normalize_what_to_show(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+    @field_validator("candidates")
+    @classmethod
+    def validate_candidates(
+        cls,
+        value: list[ResearchWindowCandidate],
+    ) -> list[ResearchWindowCandidate]:
+        if not value:
+            raise ValueError("at least one research candidate is required")
+        pairs = [(candidate.short_window, candidate.long_window) for candidate in value]
+        if len(pairs) != len(set(pairs)):
+            raise ValueError("research candidates must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_training_size(self) -> ResearchWalkForwardRequest:
+        longest_window = max(candidate.long_window for candidate in self.candidates)
+        if self.minimum_train_bars < longest_window + 2:
+            raise ValueError("minimum_train_bars must cover the longest candidate window")
+        return self
+
+
+class ResearchCandidateTrial(SerializableModel):
+    """Metrics retained for one candidate on one chronological segment."""
+
+    phase: str
+    fold_index: int | None = None
+    candidate: ResearchWindowCandidate
+    segment_start: datetime
+    segment_end: datetime
+    bar_count: int
+    eligible: bool = False
+    selection_score: Decimal | None = None
+    net_pnl: Decimal | None = None
+    total_return_pct: Decimal | None = None
+    max_drawdown_pct: Decimal | None = None
+    closed_trade_count: int = 0
+    fill_count: int = 0
+    final_status: ResearchBacktestStatus = ResearchBacktestStatus.FAILED
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class ResearchWalkForwardFold(SerializableModel):
+    """One anchored train/next-period validation fold."""
+
+    fold_index: int
+    train_start: datetime
+    train_end: datetime
+    train_bar_count: int
+    validation_start: datetime
+    validation_end: datetime
+    validation_bar_count: int
+    training_trials: list[ResearchCandidateTrial] = Field(default_factory=list)
+    selected_candidate: ResearchWindowCandidate | None = None
+    selected_training_score: Decimal | None = None
+    validation_trial: ResearchCandidateTrial | None = None
+    selection_used_validation_data: bool = False
+    ok: bool = False
+    errors: list[str] = Field(default_factory=list)
+
+
+class ResearchWalkForwardSummary(SerializableModel):
+    """Aggregate evidence from selected next-period fold validations."""
+
+    completed_fold_count: int = 0
+    selected_candidates: list[ResearchWindowCandidate] = Field(default_factory=list)
+    unique_selected_candidate_count: int = 0
+    compounded_validation_return_pct: Decimal | None = None
+    worst_validation_drawdown_pct: Decimal | None = None
+    total_validation_closed_trades: int = 0
+
+
+class ResearchWalkForwardReport(SerializableModel):
+    """Broker-free walk-forward selection and sealed-holdout report."""
+
+    title: str = "SPY Walk-forward And Sealed Holdout Research"
+    report_type: str = "research_walk_forward"
+    command: str = "research-walk-forward"
+    ok: bool
+    request: ResearchWalkForwardRequest
+    feed_summary: BacktestDataFeedSummary | None = None
+    dataset_fingerprint: str | None = None
+    development_fingerprint: str | None = None
+    holdout_fingerprint: str | None = None
+    candidate_spec_fingerprint: str | None = None
+    development_bar_count: int = 0
+    holdout_bar_count: int = 0
+    folds: list[ResearchWalkForwardFold] = Field(default_factory=list)
+    walk_forward_summary: ResearchWalkForwardSummary | None = None
+    full_development_trials: list[ResearchCandidateTrial] = Field(default_factory=list)
+    selected_candidate: ResearchWindowCandidate | None = None
+    selected_development_score: Decimal | None = None
+    holdout_trial: ResearchCandidateTrial | None = None
+    holdout_report: ResearchBacktestReport | None = None
+    walk_forward_completed: bool = False
+    holdout_partition_sealed_before_selection: bool = False
+    holdout_used_for_selection: bool = False
+    holdout_evaluation_count: int = 0
+    sealed_holdout_completed: bool = False
+    research_validation_completed: bool = False
+    promotion_eligible: bool = False
+    non_promotion_reason: str = (
+        "requires_independent_research_review_and_strict_live_shadow_graduation"
+    )
+    operator_rerun_prevention_enforced: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    final_status: ResearchWalkForwardStatus = ResearchWalkForwardStatus.FAILED
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_research_controls(self) -> ResearchWalkForwardReport:
+        if self.broker_contacted or self.order_routing_enabled:
+            raise ValueError("walk-forward research must remain broker-free")
+        if self.submitted_orders or self.order_api_invoked:
+            raise ValueError("walk-forward research must not invoke order APIs")
+        if self.holdout_used_for_selection:
+            raise ValueError("sealed holdout must never be used for selection")
+        if self.holdout_evaluation_count not in (0, 1):
+            raise ValueError("holdout may be evaluated at most once per report")
+        if self.sealed_holdout_completed and self.holdout_evaluation_count != 1:
+            raise ValueError("completed sealed holdout requires exactly one evaluation")
+        if self.promotion_eligible:
+            raise ValueError("research validation cannot promote execution automatically")
         return self
 
 
