@@ -72,6 +72,7 @@ jobs:
         run: |
           ! grep -R -n -E "trader\.broker|ibapi|trader\.execution|PaperExecutor" \
             src/trader/backtest/research.py \
+            src/trader/backtest/walk_forward.py \
             src/trader/strategy/signal_evaluation.py \
             src/trader/strategy/evaluator_comparison.py \
             src/trader/data/commodity_universe.py \
@@ -79,7 +80,8 @@ jobs:
       - name: Keep research backtest broker and order API free
         run: |
           ! grep -n -E "trader\.broker|ibapi|trader\.execution|placeOrder|cancelOrder|reqGlobalCancel" \
-            src/trader/backtest/research.py
+            src/trader/backtest/research.py \
+            src/trader/backtest/walk_forward.py
       - name: Check order flags stay rejected
         run: |
           ! grep -R -n -E "ALLOW_PAPER_ORDERS=true|ALLOW_LIVE_ORDERS=true" \

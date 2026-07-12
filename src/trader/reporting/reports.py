@@ -33,6 +33,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return backtest_run_markdown(payload)
     if payload.get("report_type") == "research_backtest":
         return research_backtest_markdown(payload)
+    if payload.get("report_type") == "research_walk_forward":
+        return research_walk_forward_markdown(payload)
     if payload.get("report_type") == "strategy_contract":
         return strategy_contract_markdown(payload)
     if payload.get("report_type") == "strategy_runner":
@@ -1002,6 +1004,88 @@ def research_backtest_markdown(payload: Mapping[str, Any]) -> str:
     else:
         lines.append("- None")
 
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
+def research_walk_forward_markdown(payload: Mapping[str, Any]) -> str:
+    """Render chronological walk-forward and sealed-holdout evidence."""
+
+    selected = payload.get("selected_candidate") or {}
+    summary = payload.get("walk_forward_summary") or {}
+    holdout = payload.get("holdout_trial") or {}
+    lines = [
+        f"# {payload.get('title', 'SPY Walk-forward And Sealed Holdout Research')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Dataset fingerprint: `{payload.get('dataset_fingerprint')}`",
+        f"- Development fingerprint: `{payload.get('development_fingerprint')}`",
+        f"- Holdout fingerprint: `{payload.get('holdout_fingerprint')}`",
+        f"- Candidate specification fingerprint: "
+        f"`{payload.get('candidate_spec_fingerprint')}`",
+        f"- Walk-forward completed: `{payload.get('walk_forward_completed', False)}`",
+        f"- Holdout partition sealed before selection: "
+        f"`{payload.get('holdout_partition_sealed_before_selection', False)}`",
+        f"- Holdout used for selection: `{payload.get('holdout_used_for_selection', True)}`",
+        f"- Holdout evaluation count: `{payload.get('holdout_evaluation_count', 0)}`",
+        f"- Research validation completed: "
+        f"`{payload.get('research_validation_completed', False)}`",
+        f"- Promotion eligible: `{payload.get('promotion_eligible', False)}`",
+        f"- Non-promotion reason: `{payload.get('non_promotion_reason')}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Submitted orders: `{payload.get('submitted_orders', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        "",
+        "## Walk-forward Summary",
+        "",
+        f"- Completed folds: `{summary.get('completed_fold_count', 0)}`",
+        f"- Unique selected candidates: "
+        f"`{summary.get('unique_selected_candidate_count', 0)}`",
+        f"- Compounded next-period return: "
+        f"`{summary.get('compounded_validation_return_pct')}%`",
+        f"- Worst next-period drawdown: "
+        f"`{summary.get('worst_validation_drawdown_pct')}%`",
+        f"- Next-period closed trades: "
+        f"`{summary.get('total_validation_closed_trades', 0)}`",
+        "",
+        "## Fold Evidence",
+        "",
+    ]
+    folds = payload.get("folds", [])
+    if folds:
+        for fold in folds:
+            candidate = fold.get("selected_candidate") or {}
+            validation = fold.get("validation_trial") or {}
+            lines.append(
+                f"- Fold `{fold.get('fold_index')}`: train=`{fold.get('train_bar_count')}` "
+                f"validation=`{fold.get('validation_bar_count')}` selected="
+                f"`{candidate.get('short_window')}:{candidate.get('long_window')}` "
+                f"validation_return=`{validation.get('total_return_pct')}%` "
+                f"validation_drawdown=`{validation.get('max_drawdown_pct')}%` "
+                f"selection_used_validation=`{fold.get('selection_used_validation_data')}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(
+        [
+            "",
+            "## Final Sealed Holdout",
+            "",
+            f"- Selected candidate: "
+            f"`{selected.get('short_window')}:{selected.get('long_window')}`",
+            f"- Selection score: `{payload.get('selected_development_score')}`",
+            f"- Eligible: `{holdout.get('eligible', False)}`",
+            f"- Return: `{holdout.get('total_return_pct')}%`",
+            f"- Net P&L: `{holdout.get('net_pnl')}`",
+            f"- Maximum drawdown: `{holdout.get('max_drawdown_pct')}%`",
+            f"- Closed trades: `{holdout.get('closed_trade_count', 0)}`",
+            "",
+            "Operator rerun prevention is not enforced by software. Treat the final "
+            "holdout as consumed after its first recorded evaluation.",
+        ]
+    )
     lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
     return "\n".join(lines) + "\n"
 

@@ -25,6 +25,10 @@ from trader.alpha_summary import run_alpha_test_summary
 from trader.backtest.data_adapter import build_backtest_feed, build_backtest_feed_report
 from trader.backtest.engine import build_backtest_run_report
 from trader.backtest.research import build_research_backtest_report
+from trader.backtest.walk_forward import (
+    build_research_walk_forward_report,
+    parse_research_candidates,
+)
 from trader.config import ConfigError, TraderConfig, load_config
 from trader.data.commodity_universe import build_commodity_research_universe_report
 from trader.data.historical import (
@@ -94,6 +98,8 @@ from trader.models import (
     PaperReconcileRequest,
     ResearchBacktestReport,
     ResearchBacktestRequest,
+    ResearchWalkForwardReport,
+    ResearchWalkForwardRequest,
     RiskDecision,
     ShadowDataPolicy,
     SignalContractReport,
@@ -986,6 +992,127 @@ def research_backtest(
     console.print("Submitted orders: false.")
     console.print("Promotion eligible: false.")
     _print_research_backtest_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("research-walk-forward")
+def research_walk_forward(
+    symbol: Annotated[str, typer.Option(help="Execution research symbol; SPY only.")] = "SPY",
+    window_pairs: Annotated[
+        str,
+        typer.Option(
+            "--window-pairs",
+            help="Predeclared comma-separated short:long candidate grid.",
+        ),
+    ] = "5:20,10:30,20:50",
+    fold_count: Annotated[int, typer.Option(help="Anchored validation fold count.")] = 3,
+    minimum_train_bars: Annotated[
+        int,
+        typer.Option(help="Minimum bars in the first anchored training segment."),
+    ] = 500,
+    validation_bars: Annotated[
+        int,
+        typer.Option(help="Bars in each non-overlapping next-period validation segment."),
+    ] = 100,
+    holdout_bars: Annotated[
+        int,
+        typer.Option(help="Final bars reserved from all parameter selection."),
+    ] = 200,
+    minimum_closed_trades: Annotated[
+        int,
+        typer.Option(help="Minimum closed trades required for candidate eligibility."),
+    ] = 1,
+    drawdown_penalty: Annotated[
+        str,
+        typer.Option(help="Drawdown penalty in the deterministic selection score."),
+    ] = "1",
+    quantity: Annotated[int, typer.Option(help="Fixed integer simulated quantity.")] = 1,
+    starting_cash: Annotated[str, typer.Option(help="Starting simulated cash.")] = "100000",
+    spread_bps: Annotated[str, typer.Option(help="Modeled full spread in basis points.")] = "2",
+    slippage_bps: Annotated[
+        str,
+        typer.Option(help="Modeled slippage per fill side in basis points."),
+    ] = "1",
+    commission_per_share: Annotated[
+        str,
+        typer.Option(help="Modeled per-share commission."),
+    ] = "0.005",
+    minimum_commission: Annotated[
+        str,
+        typer.Option(help="Modeled minimum commission per fill."),
+    ] = "1.00",
+    bar_size: Annotated[str | None, typer.Option("--bar-size")] = "5 mins",
+    what_to_show: Annotated[str | None, typer.Option("--what-to-show")] = "TRADES",
+    latest: Annotated[bool, typer.Option("--latest/--all")] = True,
+    strict: Annotated[bool, typer.Option("--strict/--non-strict")] = True,
+    snapshot_timestamp: Annotated[str | None, typer.Option("--snapshot-timestamp")] = None,
+    base_path: Annotated[Path, typer.Option("--base-path")] = Path("data/historical"),
+) -> None:
+    """Run broker-free SPY walk-forward selection and one sealed holdout."""
+
+    try:
+        candidates = parse_research_candidates(window_pairs)
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]Invalid --window-pairs:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    request = ResearchWalkForwardRequest(
+        symbol=symbol,
+        candidates=candidates,
+        fold_count=fold_count,
+        minimum_train_bars=minimum_train_bars,
+        validation_bars=validation_bars,
+        holdout_bars=holdout_bars,
+        minimum_closed_trades=minimum_closed_trades,
+        drawdown_penalty=_parse_decimal_option(drawdown_penalty, "--drawdown-penalty"),
+        quantity=quantity,
+        starting_cash=_parse_decimal_option(starting_cash, "--starting-cash"),
+        spread_bps=_parse_decimal_option(spread_bps, "--spread-bps"),
+        slippage_bps=_parse_decimal_option(slippage_bps, "--slippage-bps"),
+        commission_per_share=_parse_decimal_option(
+            commission_per_share,
+            "--commission-per-share",
+        ),
+        minimum_commission=_parse_decimal_option(
+            minimum_commission,
+            "--minimum-commission",
+        ),
+        requested_bar_size=bar_size,
+        requested_what_to_show=what_to_show,
+        latest=latest,
+        strict=strict,
+        snapshot_timestamp=snapshot_timestamp,
+        base_data_path=base_path.as_posix(),
+    )
+    loader_request = HistoricalSnapshotLoadRequest(
+        symbols=[request.symbol],
+        bar_size=request.requested_bar_size,
+        what_to_show=request.requested_what_to_show,
+        latest=request.latest,
+        strict=request.strict,
+        snapshot_timestamp=request.snapshot_timestamp,
+        base_data_path=request.base_data_path,
+    )
+    loader_report = load_historical_snapshots(loader_request)
+    datasets = [result.dataset for result in loader_report.results if result.dataset is not None]
+    feed = build_backtest_feed(datasets, alignment_mode=BacktestAlignmentMode.INTERSECTION)
+    feed = feed.model_copy(
+        update={
+            "warnings": list(dict.fromkeys([*feed.warnings, *loader_report.warnings])),
+            "errors": list(dict.fromkeys([*feed.errors, *loader_report.errors])),
+        }
+    )
+    report = build_research_walk_forward_report(feed, request)
+    json_path, md_path = Journal().write_cycle("research_walk_forward", _report_dict(report))
+
+    console.print("[bold]SPY walk-forward and sealed-holdout research[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("Submitted orders: false.")
+    console.print("Promotion eligible: false.")
+    _print_research_walk_forward_result(report)
     console.print(f"JSON report: {json_path}")
     console.print(f"Markdown report: {md_path}")
     if not report.ok:
@@ -2887,6 +3014,7 @@ def _report_dict(
         | PaperReadinessRunReport
         | PaperReconcileReport
         | ResearchBacktestReport
+        | ResearchWalkForwardReport
         | SignalContractReport
         | StrategyContractReport
     ),
@@ -3013,6 +3141,37 @@ def _print_research_backtest_result(report: ResearchBacktestReport) -> None:
             console.print(f"- {escape(warning)}")
     if report.errors:
         console.print("[red]Research backtest errors[/red]")
+        for error in report.errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_research_walk_forward_result(report: ResearchWalkForwardReport) -> None:
+    table = Table(title="Research Validation")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Final status", _enum_value(report.final_status))
+    table.add_row("Walk-forward completed", str(report.walk_forward_completed).lower())
+    table.add_row("Completed folds", str(len([fold for fold in report.folds if fold.ok])))
+    table.add_row("Holdout evaluations", str(report.holdout_evaluation_count))
+    table.add_row("Holdout used for selection", str(report.holdout_used_for_selection).lower())
+    table.add_row("Sealed holdout completed", str(report.sealed_holdout_completed).lower())
+    table.add_row("Promotion eligible", str(report.promotion_eligible).lower())
+    if report.selected_candidate is not None:
+        table.add_row(
+            "Selected candidate",
+            f"{report.selected_candidate.short_window}:{report.selected_candidate.long_window}",
+        )
+    if report.holdout_trial is not None:
+        table.add_row("Holdout return", f"{report.holdout_trial.total_return_pct}%")
+        table.add_row("Holdout drawdown", f"{report.holdout_trial.max_drawdown_pct}%")
+        table.add_row("Holdout trades", str(report.holdout_trial.closed_trade_count))
+    console.print(table)
+    if report.warnings:
+        console.print("[yellow]Research validation warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Research validation errors[/red]")
         for error in report.errors:
             console.print(f"- {escape(error)}")
 

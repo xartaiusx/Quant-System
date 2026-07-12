@@ -47,6 +47,8 @@ class _SimulationResult:
 def build_research_backtest_report(
     feed: BacktestDataFeed,
     request: ResearchBacktestRequest,
+    *,
+    evaluation_start_index: int = 0,
 ) -> ResearchBacktestReport:
     """Run a deterministic long-only SPY simulation from an offline feed."""
 
@@ -64,10 +66,16 @@ def build_research_backtest_report(
         errors.append("SPY bars contain duplicate timestamps")
     for bar in bars:
         errors.extend(_validate_bar(bar))
-    minimum_bars = request.long_window + 2
-    if len(bars) < minimum_bars:
+    if evaluation_start_index < 0 or evaluation_start_index >= len(bars):
+        errors.append("evaluation_start_index must identify a source bar")
+    elif evaluation_start_index > 0 and evaluation_start_index < request.long_window + 1:
+        errors.append("warmup segment must cover long_window + 1 bars")
+    evaluation_bar_count = max(0, len(bars) - evaluation_start_index)
+    minimum_bars = request.long_window + 2 if evaluation_start_index == 0 else 2
+    observed_bars = len(bars) if evaluation_start_index == 0 else evaluation_bar_count
+    if observed_bars < minimum_bars:
         errors.append(
-            f"SPY bars observed {len(bars)}; expected at least {minimum_bars}"
+            f"SPY evaluation bars observed {observed_bars}; expected at least {minimum_bars}"
         )
 
     if errors:
@@ -78,9 +86,11 @@ def build_research_backtest_report(
             warnings=list(dict.fromkeys(warnings)),
             errors=list(dict.fromkeys(errors)),
             final_status=ResearchBacktestStatus.FAILED,
+            warmup_bar_count=evaluation_start_index,
+            evaluation_bar_count=evaluation_bar_count,
         )
 
-    result = _simulate(bars, request)
+    result = _simulate(bars, request, evaluation_start_index=evaluation_start_index)
     combined_warnings = list(dict.fromkeys([*warnings, *result.warnings]))
     combined_errors = list(dict.fromkeys(result.errors))
     return ResearchBacktestReport(
@@ -98,12 +108,16 @@ def build_research_backtest_report(
             if not combined_errors
             else ResearchBacktestStatus.FAILED
         ),
+        warmup_bar_count=evaluation_start_index,
+        evaluation_bar_count=evaluation_bar_count,
     )
 
 
 def _simulate(
     bars: list[BacktestBar],
     request: ResearchBacktestRequest,
+    *,
+    evaluation_start_index: int,
 ) -> _SimulationResult:
     cash = request.starting_cash
     position = 0
@@ -120,7 +134,7 @@ def _simulate(
     peak_equity = request.starting_cash
 
     for frame_index, bar in enumerate(bars):
-        if pending is not None:
+        if frame_index >= evaluation_start_index and pending is not None:
             fill = _build_fill(
                 request,
                 action=pending.action,
@@ -153,7 +167,10 @@ def _simulate(
             pending = None
 
         closes.append(bar.close)
-        if len(closes) >= request.long_window + 1:
+        if (
+            frame_index >= evaluation_start_index
+            and len(closes) >= request.long_window + 1
+        ):
             previous_fast = _average(closes[-request.short_window - 1 : -1])
             previous_slow = _average(closes[-request.long_window - 1 : -1])
             current_fast = _average(closes[-request.short_window :])
@@ -179,16 +196,17 @@ def _simulate(
                 )
                 signal_count += 1
 
-        if position > 0:
-            exposure_bars += 1
-        point, peak_equity = _equity_point(
-            bar,
-            frame_index=frame_index,
-            cash=cash,
-            position=position,
-            peak_equity=peak_equity,
-        )
-        equity_curve.append(point)
+        if frame_index >= evaluation_start_index:
+            if position > 0:
+                exposure_bars += 1
+            point, peak_equity = _equity_point(
+                bar,
+                frame_index=frame_index,
+                cash=cash,
+                position=position,
+                peak_equity=peak_equity,
+            )
+            equity_curve.append(point)
 
     if not errors and position > 0 and request.force_close_at_end:
         final_bar = bars[-1]
@@ -227,7 +245,7 @@ def _simulate(
         warnings.append("final-bar signal was not filled because no next bar exists")
 
     metrics = None if errors else _metrics(
-        bars,
+        bars[evaluation_start_index:],
         request,
         fills=fills,
         trades=trades,
