@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install package
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev,research]"
       - name: Run tests
         run: python -m pytest
 
@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install package
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev,research]"
       - name: Run ruff
         run: python -m ruff check --no-cache src tests
 
@@ -45,7 +45,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install package
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev,research]"
       - name: Run mypy
         run: python -m mypy src
 
@@ -76,12 +76,14 @@ jobs:
             src/trader/strategy/signal_evaluation.py \
             src/trader/strategy/evaluator_comparison.py \
             src/trader/data/commodity_universe.py \
+            src/trader/data/research_store.py \
             src/trader/data/quality_gate.py
       - name: Keep research backtest broker and order API free
         run: |
           ! grep -n -E "trader\.broker|ibapi|trader\.execution|placeOrder|cancelOrder|reqGlobalCancel" \
             src/trader/backtest/research.py \
-            src/trader/backtest/walk_forward.py
+            src/trader/backtest/walk_forward.py \
+            src/trader/data/research_store.py
       - name: Check order flags stay rejected
         run: |
           ! grep -R -n -E "ALLOW_PAPER_ORDERS=true|ALLOW_LIVE_ORDERS=true" \

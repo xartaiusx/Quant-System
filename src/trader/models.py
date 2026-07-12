@@ -179,6 +179,13 @@ class ResearchWalkForwardStatus(StrEnum):
     FAILED = "failed"
 
 
+class ResearchDataQualityStatus(StrEnum):
+    """Curated research-partition quality states."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+
+
 class InertStrategyRunnerStatus(StrEnum):
     """Offline inert strategy runner states for no-op diagnostics."""
 
@@ -1466,6 +1473,184 @@ class BacktestRunReport(SerializableModel):
         "simulation, broker routing, or P&L calculation was performed."
     )
     final_status: str = "unknown"
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class ResearchDataIngestRequest(SerializableModel):
+    """Offline SPY Massive minute-aggregate ingestion request."""
+
+    source_path: str
+    root_path: str
+    symbol: str = "SPY"
+    source_name: str = "massive"
+    dataset: str = "minute_aggs_v1"
+    price_view: str = "raw"
+    rth_only: bool = True
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def normalize_symbol(cls, value: object) -> str:
+        normalized = str(value).strip().upper()
+        if normalized != "SPY":
+            raise ValueError("research data ingestion is SPY-only")
+        return normalized
+
+    @field_validator("source_name", mode="before")
+    @classmethod
+    def normalize_source_name(cls, value: object) -> str:
+        normalized = str(value).strip().lower()
+        if normalized != "massive":
+            raise ValueError("only Massive flat files are supported")
+        return normalized
+
+    @field_validator("dataset", mode="before")
+    @classmethod
+    def normalize_dataset(cls, value: object) -> str:
+        normalized = str(value).strip().lower()
+        if normalized != "minute_aggs_v1":
+            raise ValueError("only Massive minute_aggs_v1 is supported")
+        return normalized
+
+    @field_validator("price_view", mode="before")
+    @classmethod
+    def normalize_price_view(cls, value: object) -> str:
+        normalized = str(value).strip().lower()
+        if normalized != "raw":
+            raise ValueError("flat-file ingestion must preserve the raw price view")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> ResearchDataIngestRequest:
+        if not self.rth_only:
+            raise ValueError("research data ingestion requires XNYS regular hours")
+        return self
+
+
+class ResearchDataQualityFinding(SerializableModel):
+    """One deterministic quality finding from research-data ingestion or audit."""
+
+    severity: str
+    code: str
+    message: str
+    count: int = Field(default=1, ge=0)
+    session_date: str | None = None
+    samples: list[str] = Field(default_factory=list)
+
+
+class ResearchDataArtifact(SerializableModel):
+    """Immutable source artifact retained in the research store."""
+
+    source_path: str
+    stored_path: str
+    sha256: str
+    size_bytes: int = Field(ge=0)
+    immutable: bool = True
+
+
+class ResearchDataPartition(SerializableModel):
+    """One immutable active or superseded SPY Parquet partition."""
+
+    session_date: str
+    revision: int = Field(ge=1)
+    active: bool = True
+    row_count: int = Field(ge=0)
+    expected_row_count: int = Field(ge=0)
+    first_timestamp: datetime | None = None
+    last_timestamp: datetime | None = None
+    parquet_path: str
+    parquet_sha256: str
+    source_sha256: str
+    quality_status: ResearchDataQualityStatus
+
+
+class ResearchDataIngestReport(SerializableModel):
+    """No-secret report for one offline Massive flat-file ingestion."""
+
+    title: str = "SPY Research Data Ingestion"
+    report_type: str = "research_data_ingest"
+    command: str = "research-data-ingest"
+    ok: bool
+    request: ResearchDataIngestRequest
+    root_path: str
+    catalog_path: str
+    artifact: ResearchDataArtifact | None = None
+    rows_scanned: int = Field(default=0, ge=0)
+    symbol_rows_seen: int = Field(default=0, ge=0)
+    rth_rows_selected: int = Field(default=0, ge=0)
+    outside_rth_rows_excluded: int = Field(default=0, ge=0)
+    idempotent_replay: bool = False
+    partitions: list[ResearchDataPartition] = Field(default_factory=list)
+    findings: list[ResearchDataQualityFinding] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    immutable_raw_preserved: bool = True
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    promotion_eligible: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class ResearchDataAuditRequest(SerializableModel):
+    """Offline active-partition catalog audit request."""
+
+    root_path: str
+    symbol: str = "SPY"
+    dataset: str = "minute_aggs_v1"
+    price_view: str = "raw"
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def normalize_symbol(cls, value: object) -> str:
+        normalized = str(value).strip().upper()
+        if normalized != "SPY":
+            raise ValueError("research data audit is SPY-only")
+        return normalized
+
+    @field_validator("dataset", mode="before")
+    @classmethod
+    def normalize_dataset(cls, value: object) -> str:
+        normalized = str(value).strip().lower()
+        if normalized != "minute_aggs_v1":
+            raise ValueError("only Massive minute_aggs_v1 is supported")
+        return normalized
+
+    @field_validator("price_view", mode="before")
+    @classmethod
+    def normalize_price_view(cls, value: object) -> str:
+        normalized = str(value).strip().lower()
+        if normalized != "raw":
+            raise ValueError("only the raw price view is supported")
+        return normalized
+
+
+class ResearchDataAuditReport(SerializableModel):
+    """Offline integrity and coverage audit for active research partitions."""
+
+    title: str = "SPY Research Data Store Audit"
+    report_type: str = "research_data_audit"
+    command: str = "research-data-audit"
+    ok: bool
+    request: ResearchDataAuditRequest
+    root_path: str
+    catalog_path: str
+    active_partitions: list[ResearchDataPartition] = Field(default_factory=list)
+    active_session_count: int = Field(default=0, ge=0)
+    total_row_count: int = Field(default=0, ge=0)
+    first_session_date: str | None = None
+    last_session_date: str | None = None
+    missing_session_dates: list[str] = Field(default_factory=list)
+    findings: list[ResearchDataQualityFinding] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    promotion_eligible: bool = False
+    final_status: str
     timestamp: datetime = Field(default_factory=utc_now)
 
 

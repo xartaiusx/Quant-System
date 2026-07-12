@@ -37,6 +37,11 @@
   complete training-candidate retention, next-period validation, deterministic
   return/drawdown selection, partition fingerprints, and one final holdout
   evaluation per report. Operator-rerun prevention is explicitly not claimed.
+- Offline SPY research-data ingestion implemented with immutable Massive raw
+  archives, versioned Parquet partitions, SQLite WAL lineage, exact XNYS
+  regular-session gates, correction history, and checksum/coverage audits.
+- Daily SPY history from inception still has an explicit 1993-2003 provenance
+  gap that the documented Massive flat-file archive does not close.
 - GitHub Actions CI added for tests, lint, typecheck, whitespace, and safety scans.
 - Optional `ibapi` dependency check script.
 - Offline `ibapi` protocol compatibility check for the current official IBKR
@@ -157,6 +162,11 @@
 7. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
 8. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
 9. Require ledger-matched broker truth before any broader paper execution daemon.
-10. Acquire a substantially longer, quality-gated SPY research history and run
-    the predeclared walk-forward experiment once. Treat its final holdout as
-    consumed, retain all local evidence, and do not tune against the result.
+10. Ingest licensed Massive SPY minute files into the external research store,
+    require a passing `research-data-audit`, and separately resolve the
+    1993-2003 daily-history provenance gap.
+11. Add source-hashed split-adjusted signal and dividend-adjusted benchmark
+    views, derive five-minute bars, and connect only passing active catalog
+    revisions to the broker-free research engine.
+12. Run the predeclared walk-forward experiment once. Treat its final holdout
+    as consumed, retain all local evidence, and do not tune against the result.

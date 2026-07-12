@@ -31,6 +31,10 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return backtest_feed_markdown(payload)
     if payload.get("report_type") == "backtest_run":
         return backtest_run_markdown(payload)
+    if payload.get("report_type") == "research_data_ingest":
+        return research_data_ingest_markdown(payload)
+    if payload.get("report_type") == "research_data_audit":
+        return research_data_audit_markdown(payload)
     if payload.get("report_type") == "research_backtest":
         return research_backtest_markdown(payload)
     if payload.get("report_type") == "research_walk_forward":
@@ -927,6 +931,66 @@ def backtest_run_markdown(payload: Mapping[str, Any]) -> str:
         lines.append("- None")
 
     lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def research_data_ingest_markdown(payload: Mapping[str, Any]) -> str:
+    """Render an offline immutable SPY research-data ingestion report."""
+
+    request = payload.get("request", {})
+    artifact = payload.get("artifact") or {}
+    partitions = payload.get("partitions", [])
+    findings = payload.get("findings", [])
+    lines = [
+        f"# {payload.get('title', 'SPY Research Data Ingestion')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Symbol: `{request.get('symbol', 'SPY')}`",
+        f"- Dataset: `{request.get('dataset', 'minute_aggs_v1')}`",
+        f"- Price view: `{request.get('price_view', 'raw')}`",
+        f"- Catalog: `{payload.get('catalog_path')}`",
+        f"- Source SHA-256: `{artifact.get('sha256', 'unavailable')}`",
+        f"- Immutable raw preserved: `{payload.get('immutable_raw_preserved', False)}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        f"- Promotion eligible: `{payload.get('promotion_eligible', True)}`",
+        "",
+        "## Counts",
+        "",
+        f"- Rows scanned: `{payload.get('rows_scanned', 0)}`",
+        f"- SPY rows seen: `{payload.get('symbol_rows_seen', 0)}`",
+        f"- RTH rows selected: `{payload.get('rth_rows_selected', 0)}`",
+        f"- Outside-RTH rows excluded: `{payload.get('outside_rth_rows_excluded', 0)}`",
+        f"- Partitions: `{len(partitions)}`",
+        f"- Findings: `{len(findings)}`",
+        f"- Idempotent replay: `{payload.get('idempotent_replay', False)}`",
+    ]
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
+def research_data_audit_markdown(payload: Mapping[str, Any]) -> str:
+    """Render an offline active research-partition audit report."""
+
+    request = payload.get("request", {})
+    lines = [
+        f"# {payload.get('title', 'SPY Research Data Store Audit')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Symbol: `{request.get('symbol', 'SPY')}`",
+        f"- Catalog: `{payload.get('catalog_path')}`",
+        f"- Active sessions: `{payload.get('active_session_count', 0)}`",
+        f"- Active rows: `{payload.get('total_row_count', 0)}`",
+        f"- First session: `{payload.get('first_session_date')}`",
+        f"- Last session: `{payload.get('last_session_date')}`",
+        f"- Missing sessions: `{len(payload.get('missing_session_dates', []))}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        f"- Promotion eligible: `{payload.get('promotion_eligible', True)}`",
+    ]
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
     return "\n".join(lines) + "\n"
 
 

@@ -98,6 +98,10 @@ from trader.models import (
     PaperReconcileRequest,
     ResearchBacktestReport,
     ResearchBacktestRequest,
+    ResearchDataAuditReport,
+    ResearchDataAuditRequest,
+    ResearchDataIngestReport,
+    ResearchDataIngestRequest,
     ResearchWalkForwardReport,
     ResearchWalkForwardRequest,
     RiskDecision,
@@ -902,6 +906,85 @@ def backtest_run(
         "P&L calculation was performed."
     )
     _print_backtest_run_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("research-data-ingest")
+def research_data_ingest(
+    source_file: Annotated[
+        Path,
+        typer.Option("--source-file", help="Licensed Massive minute aggregate CSV or CSV.gz."),
+    ],
+    root: Annotated[
+        Path,
+        typer.Option("--root", help="External immutable research-data store root."),
+    ] = Path("D:/MarketData/Quant-System"),
+    symbol: Annotated[str, typer.Option(help="Research symbol; SPY only.")] = "SPY",
+) -> None:
+    """Archive and ingest one Massive SPY minute-aggregate flat file offline."""
+
+    try:
+        from trader.data.research_store import ingest_massive_minute_file
+    except ImportError as exc:
+        console.print(
+            "[red]Research dependencies unavailable.[/red] "
+            "Install the project with `.[research]`."
+        )
+        raise typer.Exit(code=2) from exc
+
+    request = ResearchDataIngestRequest(
+        source_path=source_file.as_posix(),
+        root_path=root.as_posix(),
+        symbol=symbol,
+    )
+    report = ingest_massive_minute_file(request)
+    json_path, md_path = Journal().write_cycle("research_data_ingest", _report_dict(report))
+
+    console.print("[bold]SPY immutable research-data ingestion[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print("Submitted orders: false.")
+    console.print(f"Rows selected: {report.rth_rows_selected}")
+    console.print(f"Active partitions written: {len(report.partitions)}")
+    console.print(f"Final status: {report.final_status}")
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("research-data-audit")
+def research_data_audit(
+    root: Annotated[
+        Path,
+        typer.Option("--root", help="External immutable research-data store root."),
+    ] = Path("D:/MarketData/Quant-System"),
+    symbol: Annotated[str, typer.Option(help="Research symbol; SPY only.")] = "SPY",
+) -> None:
+    """Audit active SPY Parquet partitions and lineage without contacting a broker."""
+
+    try:
+        from trader.data.research_store import audit_research_data_store
+    except ImportError as exc:
+        console.print(
+            "[red]Research dependencies unavailable.[/red] "
+            "Install the project with `.[research]`."
+        )
+        raise typer.Exit(code=2) from exc
+
+    request = ResearchDataAuditRequest(root_path=root.as_posix(), symbol=symbol)
+    report = audit_research_data_store(request)
+    json_path, md_path = Journal().write_cycle("research_data_audit", _report_dict(report))
+
+    console.print("[bold]SPY research-data store audit[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print(f"Active sessions: {report.active_session_count}")
+    console.print(f"Active rows: {report.total_row_count}")
+    console.print(f"Final status: {report.final_status}")
     console.print(f"JSON report: {json_path}")
     console.print(f"Markdown report: {md_path}")
     if not report.ok:
@@ -3014,6 +3097,8 @@ def _report_dict(
         | PaperReadinessRunReport
         | PaperReconcileReport
         | ResearchBacktestReport
+        | ResearchDataAuditReport
+        | ResearchDataIngestReport
         | ResearchWalkForwardReport
         | SignalContractReport
         | StrategyContractReport
