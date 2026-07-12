@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 from trader.alpha_shadow_daemon_summary import run_alpha_shadow_daemon_summary
@@ -20,7 +20,7 @@ COMMIT_SHA = "abc123"
 
 
 def now() -> datetime:
-    return datetime(2026, 7, 6, 15, tzinfo=UTC)
+    return datetime(2026, 7, 13, 20, tzinfo=UTC)
 
 
 def patch_current_commit(monkeypatch) -> None:
@@ -52,7 +52,15 @@ def daemon_report(
     account_verified: bool = True,
     write_heartbeat: bool = True,
     delayed: bool = False,
+    release_clean: bool = True,
+    trading_date: str = "2026-07-13",
+    coverage_window: str = "opening",
 ) -> AlphaShadowDaemonReport:
+    source_hour = {"opening": 14, "midday": 17, "closing": 19}[coverage_window]
+    source_timestamp = datetime.fromisoformat(trading_date).replace(
+        hour=source_hour,
+        tzinfo=UTC,
+    )
     heartbeat_path = tmp_path / "state" / f"{campaign_id}_heartbeat.json"
     if write_heartbeat:
         heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,7 +77,7 @@ def daemon_report(
         broker_connected=broker_connected,
         account_summary_verified=account_verified,
         source_bar_timestamp_by_symbol={
-            "SPY": ((timestamp or now()) - timedelta(minutes=5)).isoformat()
+            "SPY": source_timestamp.isoformat()
         },
         stale_data_detected=stale,
         stale_symbols=["SPY"] if stale else [],
@@ -85,6 +93,13 @@ def daemon_report(
             kill_switch_path=(tmp_path / "state" / "kill").as_posix(),
         ),
         commit_sha=commit_sha,
+        release_fingerprint=f"git:{commit_sha}" if commit_sha else None,
+        release_worktree_clean=release_clean,
+        config_fingerprint="sha256:config-v1",
+        strategy_fingerprint="sha256:strategy-v1",
+        data_fingerprint=f"sha256:data-{campaign_id}",
+        trading_dates=[trading_date],
+        coverage_windows=[coverage_window],
         campaign_id=campaign_id,
         cycles=[cycle],
         cycle_count=1,
@@ -128,11 +143,40 @@ def write_daemon_report(
 
 
 def write_clean_reports(tmp_path: Path, count: int = 5) -> None:
+    trading_dates = [
+        "2026-07-06",
+        "2026-07-07",
+        "2026-07-08",
+        "2026-07-09",
+        "2026-07-10",
+        "2026-07-06",
+        "2026-07-07",
+        "2026-07-08",
+        "2026-07-09",
+        "2026-07-10",
+    ]
+    coverage_windows = [
+        "opening",
+        "opening",
+        "midday",
+        "midday",
+        "closing",
+        "opening",
+        "midday",
+        "closing",
+        "opening",
+        "closing",
+    ]
     for index in range(count):
         write_daemon_report(
             tmp_path,
             index,
-            daemon_report(tmp_path, campaign_id=f"campaign-clean-{index:03d}"),
+            daemon_report(
+                tmp_path,
+                campaign_id=f"campaign-clean-{index:03d}",
+                trading_date=trading_dates[index],
+                coverage_window=coverage_windows[index],
+            ),
         )
 
 
@@ -148,12 +192,47 @@ def test_alpha_shadow_daemon_summary_marks_clean_sessions_graduation_ready(
     assert report.ok is True
     assert report.graduation_ready is True
     assert report.clean_session_count == 5
+    assert report.distinct_trading_date_count == 5
+    assert report.engineering_pilot_ready is False
     assert report.total_cycles == 5
     assert report.broker_connected_cycles == 5
     assert report.account_summary_verified_cycles == 5
     assert report.missing_heartbeat_count == 0
     assert report.safety_violation_count == 0
     assert report.order_api_invoked is False
+
+
+def test_alpha_shadow_daemon_summary_unlocks_pilot_only_after_ten_windowed_sessions(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    patch_current_commit(monkeypatch)
+    write_clean_reports(tmp_path, count=10)
+
+    report = run_alpha_shadow_daemon_summary(summary_request(tmp_path), now=now())
+
+    assert report.graduation_ready is True
+    assert report.engineering_pilot_ready is True
+    assert report.clean_session_count == 10
+    assert report.distinct_trading_date_count == 5
+    assert report.coverage_windows == ["opening", "midday", "closing"]
+
+
+def test_alpha_shadow_daemon_summary_fails_on_config_fingerprint_drift(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    patch_current_commit(monkeypatch)
+    write_clean_reports(tmp_path)
+    source = sorted((tmp_path / "reports").glob("alpha_shadow_daemon_*.json"))[-1]
+    payload = json.loads(source.read_text())
+    payload["config_fingerprint"] = "sha256:changed"
+    source.write_text(json.dumps(payload))
+
+    report = run_alpha_shadow_daemon_summary(summary_request(tmp_path), now=now())
+
+    assert report.ok is False
+    assert any("config fingerprint drift" in error for error in report.errors)
 
 
 def test_alpha_shadow_daemon_summary_fails_on_stale_data(
@@ -201,6 +280,46 @@ def test_alpha_shadow_daemon_summary_fails_on_missing_heartbeat(
     assert report.ok is False
     assert report.missing_heartbeat_count == 1
     assert any("missing heartbeat" in error for error in report.errors)
+
+
+def test_alpha_shadow_daemon_summary_fails_on_heartbeat_campaign_mismatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    patch_current_commit(monkeypatch)
+    source = daemon_report(tmp_path, campaign_id="campaign-heartbeat-mismatch")
+    Path(source.heartbeat_path).write_text(
+        json.dumps({"campaign_id": "different-campaign"})
+    )
+    write_daemon_report(tmp_path, 0, source)
+
+    report = run_alpha_shadow_daemon_summary(summary_request(tmp_path), now=now())
+
+    assert report.ok is False
+    assert report.heartbeat_mismatch_count == 1
+    assert any("heartbeat campaign_id does not match" in error for error in report.errors)
+
+
+def test_alpha_shadow_daemon_summary_fails_on_unclean_release(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    patch_current_commit(monkeypatch)
+    write_daemon_report(
+        tmp_path,
+        0,
+        daemon_report(
+            tmp_path,
+            campaign_id="campaign-dirty-release",
+            release_clean=False,
+        ),
+    )
+
+    report = run_alpha_shadow_daemon_summary(summary_request(tmp_path), now=now())
+
+    assert report.ok is False
+    assert report.unclean_release_count == 1
+    assert any("clean committed worktree" in error for error in report.errors)
 
 
 def test_alpha_shadow_daemon_summary_fails_on_mismatched_commit(

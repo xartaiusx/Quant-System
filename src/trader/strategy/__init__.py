@@ -5,6 +5,7 @@ from __future__ import annotations
 from trader.strategy.base import Strategy
 from trader.strategy.mean_reversion import MeanReversionStrategy
 from trader.strategy.momentum import MomentumStrategy
+from trader.strategy.spy_sma import evaluate_spy_sma_policy
 
 
 def get_strategy(name: str) -> Strategy:
@@ -18,4 +19,10 @@ def get_strategy(name: str) -> Strategy:
     raise ValueError(f"unknown strategy: {name}")
 
 
-__all__ = ["MeanReversionStrategy", "MomentumStrategy", "Strategy", "get_strategy"]
+__all__ = [
+    "MeanReversionStrategy",
+    "MomentumStrategy",
+    "Strategy",
+    "evaluate_spy_sma_policy",
+    "get_strategy",
+]

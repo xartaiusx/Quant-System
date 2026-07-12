@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import time
@@ -9,6 +10,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from trader.alpha_shadow import run_alpha_shadow_run
 from trader.config import PAPER_PORTS, TraderConfig, TradingMode
@@ -28,6 +30,7 @@ from trader.reporting.journal import Journal
 AlphaShadowRunner = Callable[[TraderConfig, AlphaShadowRunRequest], AlphaShadowRunReport]
 SleepFn = Callable[[float], None]
 NowFn = Callable[[], datetime]
+_EASTERN = ZoneInfo("America/New_York")
 
 
 def run_alpha_shadow_daemon(
@@ -51,6 +54,11 @@ def run_alpha_shadow_daemon(
     errors = _config_errors(config)
     cycles: list[AlphaShadowDaemonCycle] = []
     halted_by_kill_switch = False
+    session_heartbeat_path = _session_heartbeat_path(selected_request)
+    if session_heartbeat_path.exists():
+        errors.append(
+            "campaign-specific heartbeat already exists; use a new campaign_id"
+        )
 
     if not errors:
         for cycle_index in range(1, selected_request.max_cycles + 1):
@@ -68,7 +76,12 @@ def run_alpha_shadow_daemon(
                 now_fn=now_fn,
             )
             cycles.append(cycle)
-            _write_heartbeat(selected_request, cycles, halted=False)
+            _write_heartbeat(
+                Path(selected_request.heartbeat_path),
+                selected_request,
+                cycles,
+                halted=False,
+            )
             cycles[-1] = cycle.model_copy(update={"heartbeat_written": True})
 
             if not cycle.ok:
@@ -83,14 +96,28 @@ def run_alpha_shadow_daemon(
         warnings=warnings,
         halted_by_kill_switch=halted_by_kill_switch,
     )
-    _write_heartbeat(selected_request, cycles, halted=halted_by_kill_switch)
+    _write_heartbeat(
+        Path(selected_request.heartbeat_path),
+        selected_request,
+        cycles,
+        halted=halted_by_kill_switch,
+    )
+    if not session_heartbeat_path.exists():
+        _write_heartbeat(
+            session_heartbeat_path,
+            selected_request,
+            cycles,
+            halted=halted_by_kill_switch,
+        )
     return _build_report(
+        config,
         selected_request,
         cycles=cycles,
         warnings=warnings,
         errors=errors,
         halted_by_kill_switch=halted_by_kill_switch,
         final_status=final_status,
+        heartbeat_path=session_heartbeat_path.as_posix(),
     )
 
 
@@ -225,6 +252,33 @@ def _run_cycle(
             if shadow_report is not None
             else {}
         ),
+        data_quality_status_by_symbol=(
+            dict(shadow_report.data_quality_status_by_symbol)
+            if shadow_report is not None
+            else {}
+        ),
+        strategy_name=(
+            shadow_report.strategy_name if shadow_report is not None else "spy_sma_target_state"
+        ),
+        strategy_version=(
+            shadow_report.strategy_version if shadow_report is not None else "1.0.0"
+        ),
+        strategy_parameter_fingerprint=(
+            shadow_report.strategy_parameter_fingerprint
+            if shadow_report is not None
+            else None
+        ),
+        data_fingerprint=(
+            _fingerprint(
+                {
+                    "quality": shadow_report.data_quality_status_by_symbol,
+                    "source_timestamps": shadow_report.source_bar_timestamp_by_symbol,
+                    "warmup": shadow_report.warmup_data_fingerprint,
+                }
+            )
+            if shadow_report is not None
+            else None
+        ),
         stale_data_detected=bool(stale_symbols),
         stale_symbols=stale_symbols,
         warnings=_unique(warnings),
@@ -254,6 +308,7 @@ def _shadow_request(
         short_window=request.short_window,
         long_window=request.long_window,
         min_bars=request.min_bars,
+        stale_after_minutes=request.stale_after_minutes,
         max_zero_volume_bars=request.max_zero_volume_bars,
         min_average_volume=request.min_average_volume,
         min_average_dollar_volume=request.min_average_dollar_volume,
@@ -263,6 +318,7 @@ def _shadow_request(
 
 
 def _build_report(
+    config: TraderConfig,
     request: AlphaShadowDaemonRequest,
     *,
     cycles: list[AlphaShadowDaemonCycle],
@@ -270,22 +326,51 @@ def _build_report(
     errors: list[str],
     halted_by_kill_switch: bool,
     final_status: AlphaShadowDaemonStatus,
+    heartbeat_path: str,
 ) -> AlphaShadowDaemonReport:
     clean_cycle_count = sum(1 for cycle in cycles if cycle.ok and not cycle.stale_data_detected)
+    commit_sha = _current_commit_sha()
+    strategy_fingerprints = {
+        cycle.strategy_parameter_fingerprint
+        for cycle in cycles
+        if cycle.strategy_parameter_fingerprint
+    }
+    trading_dates, coverage_windows = _session_coverage(cycles)
     return AlphaShadowDaemonReport(
         ok=final_status != AlphaShadowDaemonStatus.FAILED,
         request=request,
-        commit_sha=_current_commit_sha(),
+        commit_sha=commit_sha,
+        release_fingerprint=f"git:{commit_sha}" if commit_sha else None,
+        release_worktree_clean=_git_worktree_clean(),
+        config_fingerprint=_config_fingerprint(config, request),
+        strategy_fingerprint=(
+            next(iter(strategy_fingerprints)) if len(strategy_fingerprints) == 1 else None
+        ),
+        data_fingerprint=_fingerprint(
+            [
+                {
+                    "cycle": cycle.cycle_index,
+                    "data": cycle.data_fingerprint,
+                    "source_timestamps": cycle.source_bar_timestamp_by_symbol,
+                }
+                for cycle in cycles
+            ]
+        )
+        if cycles
+        else None,
+        trading_dates=trading_dates,
+        coverage_windows=coverage_windows,
         campaign_id=request.campaign_id,
         cycles=cycles,
         cycle_count=len(cycles),
         clean_cycle_count=clean_cycle_count,
-        graduation_ready=(
+        session_evidence_ready=(
             clean_cycle_count >= request.graduation_clean_sessions_required
             and not errors
             and not halted_by_kill_switch
         ),
-        heartbeat_path=request.heartbeat_path,
+        graduation_ready=False,
+        heartbeat_path=heartbeat_path,
         kill_switch_path=request.kill_switch_path,
         halted_by_kill_switch=halted_by_kill_switch,
         stale_data_detected=any(cycle.stale_data_detected for cycle in cycles),
@@ -300,12 +385,12 @@ def _build_report(
 
 
 def _write_heartbeat(
+    heartbeat_path: Path,
     request: AlphaShadowDaemonRequest,
     cycles: list[AlphaShadowDaemonCycle],
     *,
     halted: bool,
 ) -> None:
-    heartbeat_path = Path(request.heartbeat_path)
     heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "report_type": "alpha_shadow_daemon_heartbeat",
@@ -314,13 +399,31 @@ def _write_heartbeat(
         "cycle_count": len(cycles),
         "last_cycle_status": _enum_value(cycles[-1].final_status) if cycles else None,
         "last_cycle_campaign_id": cycles[-1].cycle_campaign_id if cycles else None,
+        "strategy_fingerprint": (
+            cycles[-1].strategy_parameter_fingerprint if cycles else None
+        ),
+        "data_fingerprint": cycles[-1].data_fingerprint if cycles else None,
         "halted": halted,
         "submitted_orders": False,
         "paper_orders_enabled": False,
         "order_routing_enabled": False,
         "order_api_invoked": False,
     }
-    heartbeat_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    temporary = heartbeat_path.with_name(f".{heartbeat_path.name}.{time.time_ns()}.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        temporary.replace(heartbeat_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _session_heartbeat_path(request: AlphaShadowDaemonRequest) -> Path:
+    latest = Path(request.heartbeat_path)
+    campaign_digest = hashlib.sha256(
+        (request.campaign_id or "missing-campaign").encode("utf-8")
+    ).hexdigest()[:16]
+    suffix = latest.suffix or ".json"
+    return latest.with_name(f"{latest.stem}_{campaign_digest}{suffix}")
 
 
 def _stale_symbols(
@@ -418,6 +521,63 @@ def _final_status(
     return AlphaShadowDaemonStatus.COMPLETED
 
 
+def _config_fingerprint(
+    config: TraderConfig,
+    request: AlphaShadowDaemonRequest,
+) -> str:
+    return _fingerprint(
+        {
+            "allow_live_orders": config.allow_live_orders,
+            "allow_paper_orders": config.allow_paper_orders,
+            "bar_size": request.bar_size,
+            "broker_kind": _enum_value(config.broker_kind),
+            "duration": request.duration,
+            "host": config.ibkr_host,
+            "long_window": request.long_window,
+            "max_open_positions": request.max_open_positions,
+            "max_trade_notional": str(request.max_trade_notional),
+            "min_bars": request.min_bars,
+            "port": config.ibkr_port,
+            "short_window": request.short_window,
+            "stale_after_minutes": request.stale_after_minutes,
+            "symbol": request.symbol,
+            "trading_mode": _enum_value(config.trading_mode),
+            "use_rth": request.use_rth,
+            "what_to_show": request.what_to_show,
+        }
+    )
+
+
+def _session_coverage(
+    cycles: list[AlphaShadowDaemonCycle],
+) -> tuple[list[str], list[str]]:
+    trading_dates: set[str] = set()
+    windows: set[str] = set()
+    for cycle in cycles:
+        raw = cycle.source_bar_timestamp_by_symbol.get("SPY")
+        parsed = _parse_timestamp(raw)
+        if parsed is None:
+            continue
+        eastern = parsed.astimezone(_EASTERN)
+        trading_dates.add(eastern.date().isoformat())
+        clock = (eastern.hour, eastern.minute)
+        if clock < (11, 0):
+            windows.add("opening")
+        elif clock < (14, 30):
+            windows.add("midday")
+        else:
+            windows.add("closing")
+    ordered_windows = [
+        name for name in ("opening", "midday", "closing") if name in windows
+    ]
+    return sorted(trading_dates), ordered_windows
+
+
+def _fingerprint(value: object) -> str:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
 def _current_commit_sha() -> str | None:
     try:
         result = subprocess.run(
@@ -433,6 +593,20 @@ def _current_commit_sha() -> str | None:
         return None
     commit_sha = result.stdout.strip()
     return commit_sha or None
+
+
+def _git_worktree_clean() -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and not result.stdout.strip()
 
 
 def _enum_value(value: object) -> str:

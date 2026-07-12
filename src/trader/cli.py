@@ -25,6 +25,7 @@ from trader.alpha_summary import run_alpha_test_summary
 from trader.backtest.data_adapter import build_backtest_feed, build_backtest_feed_report
 from trader.backtest.engine import build_backtest_run_report
 from trader.backtest.research import build_research_backtest_report
+from trader.backtest.research_experiment import run_research_experiment
 from trader.backtest.walk_forward import (
     build_research_walk_forward_report,
     parse_research_candidates,
@@ -42,6 +43,12 @@ from trader.data.historical_loader import (
 )
 from trader.data.ibkr_data_diagnostics import build_ibkr_data_diagnostics_report
 from trader.data.quality_gate import build_data_quality_gate_report
+from trader.data.research_bakeoff import run_research_data_bakeoff
+from trader.data.research_catalog import (
+    derive_research_views,
+    import_research_data_batch,
+    load_research_catalog,
+)
 from trader.data.snapshots import deterministic_history, deterministic_quotes, mock_positions
 from trader.data.universe import parse_symbols
 from trader.execution.paper_order_smoke import run_paper_order_smoke
@@ -98,12 +105,26 @@ from trader.models import (
     PaperReconcileRequest,
     ResearchBacktestReport,
     ResearchBacktestRequest,
+    ResearchBacktestStatus,
+    ResearchCatalogLoadReport,
+    ResearchCatalogLoadRequest,
     ResearchDataAuditReport,
     ResearchDataAuditRequest,
+    ResearchDataBakeoffReport,
+    ResearchDataBatchImportReport,
+    ResearchDataBatchImportRequest,
     ResearchDataIngestReport,
     ResearchDataIngestRequest,
+    ResearchDerivedViewReport,
+    ResearchDerivedViewRequest,
+    ResearchExperimentPhase,
+    ResearchExperimentReport,
+    ResearchExperimentRequest,
+    ResearchSampleKind,
+    ResearchSizingMode,
     ResearchWalkForwardReport,
     ResearchWalkForwardRequest,
+    ResearchWalkForwardStatus,
     RiskDecision,
     ShadowDataPolicy,
     SignalContractReport,
@@ -956,6 +977,174 @@ def research_data_ingest(
         raise typer.Exit(code=1)
 
 
+@app.command("research-data-bakeoff")
+def research_data_bakeoff(
+    manifest: Annotated[
+        Path,
+        typer.Option("--manifest", help="Local no-secret vendor bake-off JSON manifest."),
+    ],
+) -> None:
+    """Validate operator-supplied SPY vendor samples without network or broker access."""
+
+    report = run_research_data_bakeoff(manifest)
+    json_path, md_path = Journal().write_cycle("research_data_bakeoff", _report_dict(report))
+    console.print("[bold]SPY research-data vendor bake-off[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Credentials read: false.")
+    console.print("Network accessed: false.")
+    console.print(f"Samples passed: {sum(1 for item in report.sample_results if item.ok)}")
+    procurement_ready = ", ".join(report.procurement_ready_vendors) or "none"
+    console.print(f"Procurement-ready vendors: {procurement_ready}")
+    console.print(f"Final status: {report.final_status}")
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("research-data-import-batch")
+def research_data_import_batch(
+    source_dir: Annotated[
+        Path,
+        typer.Option("--source-dir", help="Directory of local licensed source files."),
+    ],
+    vendor: Annotated[
+        str,
+        typer.Option(help="Declared vendor name, such as massive or norgate."),
+    ],
+    kind: Annotated[
+        ResearchSampleKind,
+        typer.Option(help="Source kind: minute_bars, daily_bars, or corporate_actions."),
+    ],
+    root: Annotated[
+        Path,
+        typer.Option("--root", help="External immutable research-data store root."),
+    ] = Path("D:/MarketData/Quant-System"),
+    pattern: Annotated[
+        str,
+        typer.Option(help="Non-recursive local filename glob, sorted before import."),
+    ] = "*.csv*",
+    coverage_start: Annotated[
+        str | None,
+        typer.Option(help="Complete corporate-action coverage start (YYYY-MM-DD)."),
+    ] = None,
+    coverage_end: Annotated[
+        str | None,
+        typer.Option(help="Complete corporate-action coverage end (YYYY-MM-DD)."),
+    ] = None,
+) -> None:
+    """Import a deterministic batch of local licensed SPY files offline."""
+
+    request = ResearchDataBatchImportRequest(
+        source_dir=source_dir.as_posix(),
+        root_path=root.as_posix(),
+        vendor=vendor,
+        kind=kind,
+        pattern=pattern,
+        coverage_start=coverage_start,
+        coverage_end=coverage_end,
+    )
+    report = import_research_data_batch(request)
+    json_path, md_path = Journal().write_cycle(
+        "research_data_batch_import",
+        _report_dict(report),
+    )
+    console.print("[bold]SPY research-data batch import[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Credentials read: false.")
+    console.print("Network accessed: false.")
+    console.print(f"Files passed: {report.succeeded_count}")
+    console.print(f"Files failed: {report.failed_count}")
+    console.print(f"Final status: {report.final_status}")
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("research-data-derive")
+def research_data_derive(
+    root: Annotated[
+        Path,
+        typer.Option("--root", help="External immutable research-data store root."),
+    ] = Path("D:/MarketData/Quant-System"),
+    algorithm_version: Annotated[
+        str,
+        typer.Option(help="Version of the deterministic derivation algorithm."),
+    ] = "spy_views_v1",
+) -> None:
+    """Derive raw-execution, split-adjusted-signal, and benchmark SPY views."""
+
+    report = derive_research_views(
+        ResearchDerivedViewRequest(
+            root_path=root.as_posix(),
+            algorithm_version=algorithm_version,
+        )
+    )
+    json_path, md_path = Journal().write_cycle(
+        "research_derived_views",
+        _report_dict(report),
+    )
+    console.print("[bold]SPY derived research views[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print(f"Partitions ready: {len(report.partitions)}")
+    console.print(f"Stale partitions superseded: {report.stale_partitions_superseded}")
+    console.print(f"Final status: {report.final_status}")
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("research-catalog-load")
+def research_catalog_load(
+    root: Annotated[
+        Path,
+        typer.Option("--root", help="External immutable research-data store root."),
+    ] = Path("D:/MarketData/Quant-System"),
+    price_view: Annotated[
+        str,
+        typer.Option(help="Approved derived price view."),
+    ] = "split_adjusted_signal",
+    bar_size: Annotated[str, typer.Option(help="Approved derived bar size.")] = "5 mins",
+    start_date: Annotated[
+        str | None,
+        typer.Option(help="Optional first session date, inclusive."),
+    ] = None,
+    end_date: Annotated[
+        str | None,
+        typer.Option(help="Optional last session date, inclusive."),
+    ] = None,
+) -> None:
+    """Load checksum-valid active SPY catalog revisions without broker access."""
+
+    report = load_research_catalog(
+        ResearchCatalogLoadRequest(
+            root_path=root.as_posix(),
+            price_view=price_view,
+            bar_size=bar_size,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    )
+    json_path, md_path = Journal().write_cycle(
+        "research_catalog_load",
+        _report_dict(report),
+    )
+    console.print("[bold]SPY research catalog load[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    console.print(f"Partitions loaded: {len(report.partitions)}")
+    console.print(f"Bars loaded: {report.feed.total_bars if report.feed else 0}")
+    console.print(f"Dataset fingerprint: {report.dataset_fingerprint or 'unavailable'}")
+    console.print(f"Final status: {report.final_status}")
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("research-data-audit")
 def research_data_audit(
     root: Annotated[
@@ -996,7 +1185,15 @@ def research_backtest(
     symbol: Annotated[str, typer.Option(help="Execution research symbol; SPY only.")] = "SPY",
     short_window: Annotated[int, typer.Option(help="Fast moving-average window.")] = 5,
     long_window: Annotated[int, typer.Option(help="Slow moving-average window.")] = 20,
+    sizing_mode: Annotated[
+        ResearchSizingMode,
+        typer.Option(help="Fixed quantity or unlevered target allocation."),
+    ] = ResearchSizingMode.FIXED_QUANTITY,
     quantity: Annotated[int, typer.Option(help="Fixed integer simulated quantity.")] = 1,
+    target_allocation_pct: Annotated[
+        str,
+        typer.Option(help="Unlevered target allocation percentage."),
+    ] = "100",
     starting_cash: Annotated[str, typer.Option(help="Starting simulated cash.")] = "100000",
     spread_bps: Annotated[str, typer.Option(help="Modeled full spread in basis points.")] = "2",
     slippage_bps: Annotated[
@@ -1011,24 +1208,44 @@ def research_backtest(
         str,
         typer.Option(help="Modeled minimum commission per fill."),
     ] = "1.00",
+    tick_size: Annotated[str, typer.Option(help="Simulated SPY price tick.")] = "0.01",
+    limit_buffer_bps: Annotated[
+        str,
+        typer.Option(help="Additional price-protection buffer in basis points."),
+    ] = "0",
+    max_volume_participation: Annotated[
+        str,
+        typer.Option(help="Maximum fraction of bar volume available to the order."),
+    ] = "0.01",
     force_close_at_end: Annotated[
         bool,
         typer.Option("--force-close-at-end/--leave-open", help="Liquidate at final close."),
     ] = True,
-    bar_size: Annotated[str | None, typer.Option("--bar-size")] = "5 mins",
-    what_to_show: Annotated[str | None, typer.Option("--what-to-show")] = "TRADES",
-    latest: Annotated[bool, typer.Option("--latest/--all")] = True,
-    strict: Annotated[bool, typer.Option("--strict/--non-strict")] = True,
-    snapshot_timestamp: Annotated[str | None, typer.Option("--snapshot-timestamp")] = None,
-    base_path: Annotated[Path, typer.Option("--base-path")] = Path("data/historical"),
+    catalog_root: Annotated[
+        Path,
+        typer.Option("--catalog-root", help="External immutable research catalog root."),
+    ] = Path("D:/MarketData/Quant-System"),
+    start_date: Annotated[
+        str | None,
+        typer.Option(help="Optional first catalog session date, inclusive."),
+    ] = None,
+    end_date: Annotated[
+        str | None,
+        typer.Option(help="Optional last catalog session date, inclusive."),
+    ] = None,
 ) -> None:
-    """Run a cost-aware, broker-free SPY research simulation."""
+    """Run a broker-free SPY research simulation from passing catalog revisions."""
 
     request = ResearchBacktestRequest(
         symbol=symbol,
         short_window=short_window,
         long_window=long_window,
+        sizing_mode=sizing_mode,
         quantity=quantity,
+        target_allocation_pct=_parse_decimal_option(
+            target_allocation_pct,
+            "--target-allocation-pct",
+        ),
         starting_cash=_parse_decimal_option(starting_cash, "--starting-cash"),
         spread_bps=_parse_decimal_option(spread_bps, "--spread-bps"),
         slippage_bps=_parse_decimal_option(slippage_bps, "--slippage-bps"),
@@ -1040,33 +1257,85 @@ def research_backtest(
             minimum_commission,
             "--minimum-commission",
         ),
+        tick_size=_parse_decimal_option(tick_size, "--tick-size"),
+        limit_buffer_bps=_parse_decimal_option(
+            limit_buffer_bps,
+            "--limit-buffer-bps",
+        ),
+        max_volume_participation=_parse_decimal_option(
+            max_volume_participation,
+            "--max-volume-participation",
+        ),
         force_close_at_end=force_close_at_end,
-        requested_bar_size=bar_size,
-        requested_what_to_show=what_to_show,
-        latest=latest,
-        strict=strict,
-        snapshot_timestamp=snapshot_timestamp,
-        base_data_path=base_path.as_posix(),
+        requested_bar_size="5 mins",
     )
-    loader_request = HistoricalSnapshotLoadRequest(
-        symbols=[request.symbol],
-        bar_size=request.requested_bar_size,
-        what_to_show=request.requested_what_to_show,
-        latest=request.latest,
-        strict=request.strict,
-        snapshot_timestamp=request.snapshot_timestamp,
-        base_data_path=request.base_data_path,
+    signal_catalog, execution_catalog, benchmark_catalog = _load_research_catalog_bundle(
+        catalog_root,
+        start_date=start_date,
+        end_date=end_date,
     )
-    loader_report = load_historical_snapshots(loader_request)
-    datasets = [result.dataset for result in loader_report.results if result.dataset is not None]
-    feed = build_backtest_feed(datasets, alignment_mode=BacktestAlignmentMode.INTERSECTION)
-    feed = feed.model_copy(
+    feed = signal_catalog.feed or build_backtest_feed(
+        [],
+        alignment_mode=BacktestAlignmentMode.INTERSECTION,
+    )
+    execution_feed = execution_catalog.feed or build_backtest_feed(
+        [],
+        alignment_mode=BacktestAlignmentMode.INTERSECTION,
+    )
+    report = build_research_backtest_report(
+        feed,
+        request,
+        execution_feed=execution_feed,
+        benchmark_feed=benchmark_catalog.feed,
+        corporate_actions=signal_catalog.corporate_actions,
+    )
+    catalog_reports = (signal_catalog, execution_catalog, benchmark_catalog)
+    catalog_ok = all(item.ok for item in catalog_reports)
+    action_fingerprints = {
+        item.action_fingerprint
+        for item in catalog_reports
+        if item.action_fingerprint is not None
+    }
+    fingerprint_errors = (
+        []
+        if len(action_fingerprints) == 1
+        else ["catalog signal, execution, and benchmark action fingerprints differ"]
+    )
+    catalog_errors = [
+        error
+        for item in catalog_reports
+        for error in item.errors
+    ]
+    catalog_warnings = [
+        warning
+        for item in catalog_reports
+        for warning in item.warnings
+    ]
+    completed = report.ok and catalog_ok and not fingerprint_errors
+    report = report.model_copy(
         update={
-            "warnings": list(dict.fromkeys([*feed.warnings, *loader_report.warnings])),
-            "errors": list(dict.fromkeys([*feed.errors, *loader_report.errors])),
+            "source_catalog_path": signal_catalog.catalog_path,
+            "catalog_dataset_fingerprint": signal_catalog.dataset_fingerprint,
+            "execution_dataset_fingerprint": execution_catalog.dataset_fingerprint,
+            "benchmark_dataset_fingerprint": benchmark_catalog.dataset_fingerprint,
+            "action_fingerprint": signal_catalog.action_fingerprint,
+            "catalog_partition_count": sum(
+                len(item.partitions) for item in catalog_reports
+            ),
+            "warnings": list(
+                dict.fromkeys([*report.warnings, *catalog_warnings])
+            ),
+            "errors": list(
+                dict.fromkeys([*report.errors, *catalog_errors, *fingerprint_errors])
+            ),
+            "ok": completed,
+            "final_status": (
+                ResearchBacktestStatus.COMPLETED
+                if completed
+                else ResearchBacktestStatus.FAILED
+            ),
         }
     )
-    report = build_research_backtest_report(feed, request)
     json_path, md_path = Journal().write_cycle("research_backtest", _report_dict(report))
 
     console.print("[bold]SPY broker-free research backtest[/bold]")
@@ -1112,7 +1381,15 @@ def research_walk_forward(
         str,
         typer.Option(help="Drawdown penalty in the deterministic selection score."),
     ] = "1",
+    sizing_mode: Annotated[
+        ResearchSizingMode,
+        typer.Option(help="Fixed quantity or unlevered target allocation."),
+    ] = ResearchSizingMode.FIXED_QUANTITY,
     quantity: Annotated[int, typer.Option(help="Fixed integer simulated quantity.")] = 1,
+    target_allocation_pct: Annotated[
+        str,
+        typer.Option(help="Unlevered target allocation percentage."),
+    ] = "100",
     starting_cash: Annotated[str, typer.Option(help="Starting simulated cash.")] = "100000",
     spread_bps: Annotated[str, typer.Option(help="Modeled full spread in basis points.")] = "2",
     slippage_bps: Annotated[
@@ -1127,14 +1404,29 @@ def research_walk_forward(
         str,
         typer.Option(help="Modeled minimum commission per fill."),
     ] = "1.00",
-    bar_size: Annotated[str | None, typer.Option("--bar-size")] = "5 mins",
-    what_to_show: Annotated[str | None, typer.Option("--what-to-show")] = "TRADES",
-    latest: Annotated[bool, typer.Option("--latest/--all")] = True,
-    strict: Annotated[bool, typer.Option("--strict/--non-strict")] = True,
-    snapshot_timestamp: Annotated[str | None, typer.Option("--snapshot-timestamp")] = None,
-    base_path: Annotated[Path, typer.Option("--base-path")] = Path("data/historical"),
+    tick_size: Annotated[str, typer.Option(help="Simulated SPY price tick.")] = "0.01",
+    limit_buffer_bps: Annotated[
+        str,
+        typer.Option(help="Additional price-protection buffer in basis points."),
+    ] = "0",
+    max_volume_participation: Annotated[
+        str,
+        typer.Option(help="Maximum fraction of bar volume available to the order."),
+    ] = "0.01",
+    catalog_root: Annotated[
+        Path,
+        typer.Option("--catalog-root", help="External immutable research catalog root."),
+    ] = Path("D:/MarketData/Quant-System"),
+    start_date: Annotated[
+        str | None,
+        typer.Option(help="Optional first catalog session date, inclusive."),
+    ] = None,
+    end_date: Annotated[
+        str | None,
+        typer.Option(help="Optional last catalog session date, inclusive."),
+    ] = None,
 ) -> None:
-    """Run broker-free SPY walk-forward selection and one sealed holdout."""
+    """Run broker-free SPY selection and one sealed holdout from catalog revisions."""
 
     try:
         candidates = parse_research_candidates(window_pairs)
@@ -1150,7 +1442,12 @@ def research_walk_forward(
         holdout_bars=holdout_bars,
         minimum_closed_trades=minimum_closed_trades,
         drawdown_penalty=_parse_decimal_option(drawdown_penalty, "--drawdown-penalty"),
+        sizing_mode=sizing_mode,
         quantity=quantity,
+        target_allocation_pct=_parse_decimal_option(
+            target_allocation_pct,
+            "--target-allocation-pct",
+        ),
         starting_cash=_parse_decimal_option(starting_cash, "--starting-cash"),
         spread_bps=_parse_decimal_option(spread_bps, "--spread-bps"),
         slippage_bps=_parse_decimal_option(slippage_bps, "--slippage-bps"),
@@ -1162,32 +1459,76 @@ def research_walk_forward(
             minimum_commission,
             "--minimum-commission",
         ),
-        requested_bar_size=bar_size,
-        requested_what_to_show=what_to_show,
-        latest=latest,
-        strict=strict,
-        snapshot_timestamp=snapshot_timestamp,
-        base_data_path=base_path.as_posix(),
+        tick_size=_parse_decimal_option(tick_size, "--tick-size"),
+        limit_buffer_bps=_parse_decimal_option(
+            limit_buffer_bps,
+            "--limit-buffer-bps",
+        ),
+        max_volume_participation=_parse_decimal_option(
+            max_volume_participation,
+            "--max-volume-participation",
+        ),
+        requested_bar_size="5 mins",
     )
-    loader_request = HistoricalSnapshotLoadRequest(
-        symbols=[request.symbol],
-        bar_size=request.requested_bar_size,
-        what_to_show=request.requested_what_to_show,
-        latest=request.latest,
-        strict=request.strict,
-        snapshot_timestamp=request.snapshot_timestamp,
-        base_data_path=request.base_data_path,
+    signal_catalog, execution_catalog, benchmark_catalog = _load_research_catalog_bundle(
+        catalog_root,
+        start_date=start_date,
+        end_date=end_date,
     )
-    loader_report = load_historical_snapshots(loader_request)
-    datasets = [result.dataset for result in loader_report.results if result.dataset is not None]
-    feed = build_backtest_feed(datasets, alignment_mode=BacktestAlignmentMode.INTERSECTION)
-    feed = feed.model_copy(
+    feed = signal_catalog.feed or build_backtest_feed(
+        [],
+        alignment_mode=BacktestAlignmentMode.INTERSECTION,
+    )
+    execution_feed = execution_catalog.feed or build_backtest_feed(
+        [],
+        alignment_mode=BacktestAlignmentMode.INTERSECTION,
+    )
+    report = build_research_walk_forward_report(
+        feed,
+        request,
+        execution_feed=execution_feed,
+        benchmark_feed=benchmark_catalog.feed,
+        corporate_actions=signal_catalog.corporate_actions,
+    )
+    catalog_reports = (signal_catalog, execution_catalog, benchmark_catalog)
+    catalog_ok = all(item.ok for item in catalog_reports)
+    action_fingerprints = {
+        item.action_fingerprint
+        for item in catalog_reports
+        if item.action_fingerprint is not None
+    }
+    fingerprint_errors = (
+        []
+        if len(action_fingerprints) == 1
+        else ["catalog signal, execution, and benchmark action fingerprints differ"]
+    )
+    catalog_errors = [error for item in catalog_reports for error in item.errors]
+    catalog_warnings = [warning for item in catalog_reports for warning in item.warnings]
+    completed = report.ok and catalog_ok and not fingerprint_errors
+    report = report.model_copy(
         update={
-            "warnings": list(dict.fromkeys([*feed.warnings, *loader_report.warnings])),
-            "errors": list(dict.fromkeys([*feed.errors, *loader_report.errors])),
+            "source_catalog_path": signal_catalog.catalog_path,
+            "catalog_dataset_fingerprint": signal_catalog.dataset_fingerprint,
+            "execution_dataset_fingerprint": execution_catalog.dataset_fingerprint,
+            "benchmark_dataset_fingerprint": benchmark_catalog.dataset_fingerprint,
+            "action_fingerprint": signal_catalog.action_fingerprint,
+            "catalog_partition_count": sum(
+                len(item.partitions) for item in catalog_reports
+            ),
+            "warnings": list(
+                dict.fromkeys([*report.warnings, *catalog_warnings])
+            ),
+            "errors": list(
+                dict.fromkeys([*report.errors, *catalog_errors, *fingerprint_errors])
+            ),
+            "ok": completed,
+            "final_status": (
+                ResearchWalkForwardStatus.COMPLETED
+                if completed
+                else ResearchWalkForwardStatus.FAILED
+            ),
         }
     )
-    report = build_research_walk_forward_report(feed, request)
     json_path, md_path = Journal().write_cycle("research_walk_forward", _report_dict(report))
 
     console.print("[bold]SPY walk-forward and sealed-holdout research[/bold]")
@@ -1196,6 +1537,54 @@ def research_walk_forward(
     console.print("Submitted orders: false.")
     console.print("Promotion eligible: false.")
     _print_research_walk_forward_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("research-experiment-run")
+def research_experiment_run(
+    spec: Annotated[
+        Path,
+        typer.Option("--spec", help="Tracked preregistered experiment JSON."),
+    ],
+    phase: Annotated[
+        ResearchExperimentPhase,
+        typer.Option(help="Development or one-time final_holdout phase."),
+    ] = ResearchExperimentPhase.DEVELOPMENT,
+    catalog_root: Annotated[
+        Path,
+        typer.Option("--catalog-root", help="External immutable research catalog root."),
+    ] = Path("D:/MarketData/Quant-System"),
+    confirmation: Annotated[
+        str | None,
+        typer.Option(help="Exact preregistered confirmation for final holdout access."),
+    ] = None,
+) -> None:
+    """Run a tracked SPY experiment without broker or credential access."""
+
+    report = run_research_experiment(
+        ResearchExperimentRequest(
+            spec_path=spec.as_posix(),
+            root_path=catalog_root.as_posix(),
+            phase=phase,
+            confirmation=confirmation,
+        )
+    )
+    json_path, md_path = Journal().write_cycle(
+        "research_experiment",
+        _report_dict(report),
+    )
+    console.print("[bold]SPY preregistered research experiment[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Credentials read: false.")
+    console.print("Network accessed: false.")
+    console.print(f"Phase: {report.phase}")
+    console.print(f"Holdout consumed: {str(report.holdout_access_consumed).lower()}")
+    console.print(f"Research review ready: {str(report.research_review_ready).lower()}")
+    console.print("Promotion eligible: false.")
+    console.print(f"Final status: {report.final_status}")
     console.print(f"JSON report: {json_path}")
     console.print(f"Markdown report: {md_path}")
     if not report.ok:
@@ -1950,6 +2339,10 @@ def alpha_shadow_run(
         int,
         typer.Option("--min-bars", help="Minimum SPY bars required."),
     ] = 50,
+    stale_after_minutes: Annotated[
+        int,
+        typer.Option(help="Maximum age of the newest current-live SPY bar."),
+    ] = 15,
     max_zero_volume_bars: Annotated[
         int,
         typer.Option("--max-zero-volume-bars", help="Maximum SPY zero-volume bars."),
@@ -1995,6 +2388,7 @@ def alpha_shadow_run(
         short_window=short_window,
         long_window=long_window,
         min_bars=min_bars,
+        stale_after_minutes=stale_after_minutes,
         max_zero_volume_bars=max_zero_volume_bars,
         min_average_volume=_parse_decimal_option(
             min_average_volume,
@@ -2290,6 +2684,22 @@ def alpha_shadow_daemon_summary(
             help="Clean daemon sessions required before paper-daemon design.",
         ),
     ] = 5,
+    min_distinct_trading_dates: Annotated[
+        int,
+        typer.Option(help="Distinct strict-live XNYS dates required for graduation."),
+    ] = 5,
+    pilot_min_clean_sessions: Annotated[
+        int,
+        typer.Option(help="Clean sessions required for engineering-pilot evidence."),
+    ] = 10,
+    pilot_min_distinct_trading_dates: Annotated[
+        int,
+        typer.Option(help="Distinct XNYS dates required for engineering-pilot evidence."),
+    ] = 5,
+    required_coverage_windows: Annotated[
+        str,
+        typer.Option(help="Comma-separated pilot windows: opening,midday,closing."),
+    ] = "opening,midday,closing",
     max_report_age_hours: Annotated[
         int,
         typer.Option("--max-report-age-hours", help="Maximum source report age in hours."),
@@ -2307,6 +2717,12 @@ def alpha_shadow_daemon_summary(
     request = AlphaShadowDaemonSummaryRequest(
         report_glob=report_glob,
         min_clean_sessions=min_clean_sessions,
+        min_distinct_trading_dates=min_distinct_trading_dates,
+        pilot_min_clean_sessions=pilot_min_clean_sessions,
+        pilot_min_distinct_trading_dates=pilot_min_distinct_trading_dates,
+        required_coverage_windows=[
+            item.strip() for item in required_coverage_windows.split(",") if item.strip()
+        ],
         max_report_age_hours=max_report_age_hours,
         require_same_commit=_parse_bool_option(
             require_same_commit,
@@ -3097,8 +3513,13 @@ def _report_dict(
         | PaperReadinessRunReport
         | PaperReconcileReport
         | ResearchBacktestReport
+        | ResearchCatalogLoadReport
+        | ResearchDataBakeoffReport
+        | ResearchDataBatchImportReport
         | ResearchDataAuditReport
         | ResearchDataIngestReport
+        | ResearchDerivedViewReport
+        | ResearchExperimentReport
         | ResearchWalkForwardReport
         | SignalContractReport
         | StrategyContractReport
@@ -3749,7 +4170,12 @@ def _print_alpha_shadow_daemon_result(report: AlphaShadowDaemonReport) -> None:
     table.add_row("Data policy", _enum_value(report.market_data_policy))
     table.add_row("Delayed data mode", str(report.delayed_data_mode).lower())
     table.add_row("Graduation eligible", str(report.graduation_eligible).lower())
+    table.add_row("Session evidence ready", str(report.session_evidence_ready).lower())
     table.add_row("Graduation ready", str(report.graduation_ready).lower())
+    table.add_row("Trading dates", ", ".join(report.trading_dates) or "none")
+    table.add_row("Coverage windows", ", ".join(report.coverage_windows) or "none")
+    table.add_row("Config fingerprint", report.config_fingerprint or "unknown")
+    table.add_row("Strategy fingerprint", report.strategy_fingerprint or "unknown")
     table.add_row("Non-graduating reason", report.non_graduating_reason or "n/a")
     table.add_row("Broker-connected cycles", str(report.broker_connected_cycles))
     table.add_row(
@@ -3808,6 +4234,12 @@ def _print_alpha_shadow_daemon_summary_result(
     table.add_row("Sessions", str(report.session_count))
     table.add_row("Clean sessions", str(report.clean_session_count))
     table.add_row("Min clean sessions", str(report.request.min_clean_sessions))
+    table.add_row("Distinct trading dates", str(report.distinct_trading_date_count))
+    table.add_row(
+        "Min distinct dates",
+        str(report.request.min_distinct_trading_dates),
+    )
+    table.add_row("Coverage windows", ", ".join(report.coverage_windows) or "none")
     table.add_row("Total cycles", str(report.total_cycles))
     table.add_row("Total clean cycles", str(report.total_clean_cycles))
     table.add_row("Stale sessions", str(report.stale_session_count))
@@ -3821,6 +4253,7 @@ def _print_alpha_shadow_daemon_summary_result(
     table.add_row("Heartbeat mismatches", str(report.heartbeat_mismatch_count))
     table.add_row("Safety violations", str(report.safety_violation_count))
     table.add_row("Graduation ready", str(report.graduation_ready).lower())
+    table.add_row("Engineering pilot ready", str(report.engineering_pilot_ready).lower())
     table.add_row("Submitted orders", str(report.submitted_orders).lower())
     table.add_row("Paper orders enabled", str(report.paper_orders_enabled).lower())
     table.add_row("Read-Only API expected", str(report.read_only_api_expected).lower())
@@ -4797,6 +5230,46 @@ def _broker_next_step(report: BrokerDiagnosticReport) -> str:
     if report.failure_stage == "config_validation":
         return "Fix rejected config before attempting a broker socket."
     return "Inspect errors and rerun after correcting the reported blocker."
+
+
+def _load_research_catalog_bundle(
+    root: Path,
+    *,
+    start_date: str | None,
+    end_date: str | None,
+) -> tuple[
+    ResearchCatalogLoadReport,
+    ResearchCatalogLoadReport,
+    ResearchCatalogLoadReport,
+]:
+    signal = load_research_catalog(
+        ResearchCatalogLoadRequest(
+            root_path=root.as_posix(),
+            price_view="split_adjusted_signal",
+            bar_size="5 mins",
+            start_date=start_date,
+            end_date=end_date,
+        )
+    )
+    execution = load_research_catalog(
+        ResearchCatalogLoadRequest(
+            root_path=root.as_posix(),
+            price_view="raw_execution",
+            bar_size="5 mins",
+            start_date=start_date,
+            end_date=end_date,
+        )
+    )
+    benchmark = load_research_catalog(
+        ResearchCatalogLoadRequest(
+            root_path=root.as_posix(),
+            price_view="total_return_benchmark",
+            bar_size="1 day",
+            start_date=start_date,
+            end_date=end_date,
+        )
+    )
+    return signal, execution, benchmark
 
 
 def _enum_value(value: object) -> str:

@@ -38,7 +38,7 @@ from trader.models import (
 
 DEFAULT_RESEARCH_DATA_ROOT = Path("D:/MarketData/Quant-System")
 CATALOG_RELATIVE_PATH = Path("catalog/research.sqlite3")
-CATALOG_SCHEMA_VERSION = 1
+CATALOG_SCHEMA_VERSION = 2
 _MASSIVE_REQUIRED_COLUMNS = frozenset(
     {
         "ticker",
@@ -468,14 +468,118 @@ def initialize_research_store(root: Path) -> Path:
             );
             """
         )
-        connection.execute(
-            "INSERT OR IGNORE INTO schema_metadata(version, installed_at) VALUES (?, ?)",
-            (CATALOG_SCHEMA_VERSION, _utc_iso()),
+        versions = sorted(
+            row[0] for row in connection.execute("SELECT version FROM schema_metadata")
         )
-        versions = [row[0] for row in connection.execute("SELECT version FROM schema_metadata")]
-        if versions != [CATALOG_SCHEMA_VERSION]:
+        if not versions:
+            connection.execute(
+                "INSERT INTO schema_metadata(version, installed_at) VALUES (?, ?)",
+                (1, _utc_iso()),
+            )
+            versions = [1]
+        if versions[-1] == 1:
+            _install_catalog_v2(connection)
+            connection.execute(
+                "INSERT INTO schema_metadata(version, installed_at) VALUES (?, ?)",
+                (2, _utc_iso()),
+            )
+            versions.append(2)
+        if versions != list(range(1, CATALOG_SCHEMA_VERSION + 1)):
             raise RuntimeError(f"unsupported research catalog schema versions: {versions}")
     return catalog_path
+
+
+def _install_catalog_v2(connection: sqlite3.Connection) -> None:
+    """Install additive corporate-action, derived-lineage, and experiment tables."""
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS action_sets (
+            id TEXT PRIMARY KEY,
+            artifact_id INTEGER NOT NULL REFERENCES source_artifacts(id),
+            source_name TEXT NOT NULL,
+            dataset TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            coverage_start TEXT NOT NULL,
+            coverage_end TEXT NOT NULL,
+            complete INTEGER NOT NULL CHECK (complete IN (0, 1)),
+            active INTEGER NOT NULL CHECK (active IN (0, 1)),
+            source_sha256 TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS corporate_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action_set_id TEXT NOT NULL REFERENCES action_sets(id),
+            symbol TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            ex_date TEXT NOT NULL,
+            factor TEXT,
+            cash_amount TEXT,
+            currency TEXT,
+            revision TEXT NOT NULL,
+            active INTEGER NOT NULL CHECK (active IN (0, 1)),
+            created_at TEXT NOT NULL,
+            UNIQUE(action_set_id, symbol, action_type, ex_date, revision)
+        );
+        CREATE INDEX IF NOT EXISTS corporate_actions_lookup
+        ON corporate_actions(symbol, ex_date, action_type, active);
+        CREATE TABLE IF NOT EXISTS derived_partitions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            dataset TEXT NOT NULL,
+            price_view TEXT NOT NULL,
+            bar_size TEXT NOT NULL,
+            session_date TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            active INTEGER NOT NULL CHECK (active IN (0, 1)),
+            row_count INTEGER NOT NULL,
+            expected_row_count INTEGER NOT NULL,
+            first_timestamp TEXT,
+            last_timestamp TEXT,
+            parquet_path TEXT NOT NULL,
+            parquet_sha256 TEXT NOT NULL,
+            action_fingerprint TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            algorithm_version TEXT NOT NULL,
+            quality_status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(symbol, dataset, price_view, bar_size, session_date, revision)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS one_active_derived_partition
+        ON derived_partitions(symbol, dataset, price_view, bar_size, session_date)
+        WHERE active = 1;
+        CREATE TABLE IF NOT EXISTS derived_lineage (
+            derived_partition_id INTEGER NOT NULL REFERENCES derived_partitions(id),
+            parent_partition_id INTEGER NOT NULL REFERENCES partitions(id),
+            lineage_role TEXT NOT NULL,
+            parent_parquet_sha256 TEXT NOT NULL,
+            PRIMARY KEY (derived_partition_id, parent_partition_id, lineage_role)
+        );
+        CREATE TABLE IF NOT EXISTS experiment_specs (
+            experiment_id TEXT PRIMARY KEY,
+            spec_fingerprint TEXT NOT NULL UNIQUE,
+            spec_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS experiment_runs (
+            run_id TEXT PRIMARY KEY,
+            experiment_id TEXT NOT NULL REFERENCES experiment_specs(experiment_id),
+            phase TEXT NOT NULL,
+            dataset_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            report_path TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS holdout_access (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            experiment_id TEXT NOT NULL REFERENCES experiment_specs(experiment_id),
+            holdout_fingerprint TEXT NOT NULL,
+            confirmation TEXT NOT NULL,
+            accessed_at TEXT NOT NULL,
+            UNIQUE(experiment_id, holdout_fingerprint)
+        );
+        """
+    )
 
 
 def _parse_massive_minute_file(

@@ -7,14 +7,15 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol, cast
 
 from trader.config import PAPER_PORTS, TraderConfig, TradingMode
-from trader.data.quality_gate import build_data_quality_gate_report
+from trader.data.historical_loader import load_historical_snapshots
+from trader.data.quality_gate import build_data_quality_gate_from_loader
+from trader.data.shadow_warmup import assemble_shadow_warmup
 from trader.execution.router import ExecutionRouter
 from trader.models import (
     AccountSnapshot,
     AlphaShadowRunReport,
     AlphaShadowRunRequest,
     AlphaShadowRunStatus,
-    AnalyticalSignalConditionState,
     AnalyticalSignalEvaluationReport,
     BrokerDiagnosticReport,
     DataQualityGateReport,
@@ -22,13 +23,17 @@ from trader.models import (
     ExecutionResult,
     HistoricalLoadedBar,
     HistoricalLoaderReport,
+    HistoricalSnapshotLoadRequest,
     MarketQuote,
     PaperReadinessRunRequest,
     PaperReadinessRunStage,
     PaperReadinessStageStatus,
     RiskDecision,
+    ShadowWarmupAssemblyReport,
     Signal,
     SignalDirection,
+    SPYPolicyTransition,
+    SPYSmaDecision,
     new_campaign_id,
     utc_now,
 )
@@ -54,6 +59,7 @@ from trader.paper_readiness import (
 from trader.portfolio.construction import build_trade_plans
 from trader.reporting.journal import Journal
 from trader.risk.rules import evaluate_trade_plans
+from trader.strategy.spy_sma import STRATEGY_NAME, STRATEGY_VERSION, evaluate_spy_sma_policy
 
 DEFAULT_ALPHA_SHADOW_SYMBOLS = ["SPY"]
 _EQUITY_TAGS = ("NetLiquidation", "EquityWithLoanValue")
@@ -196,9 +202,31 @@ def run_alpha_shadow_run(
         )
     assert loader_report is not None
 
+    warmup_stage, warmup_report, assembled_loader_report = _run_warmup_stage(
+        alpha_request,
+        loader_report,
+        journal=selected_journal,
+    )
+    stages.append(warmup_stage)
+    if warmup_report is None or not warmup_report.ok or assembled_loader_report is None:
+        return _build_alpha_report(
+            config,
+            alpha_request,
+            stages,
+            final_status=AlphaShadowRunStatus.FAILED,
+            warnings=run_warnings,
+            errors=["SPY prior-session/current-live warmup assembly failed"],
+            broker_report=broker_report,
+            account_report=account_report,
+            loader_report=loader_report,
+            warmup_report=warmup_report,
+        )
+    loader_report = assembled_loader_report
+
     data_quality_stage, data_quality_report = _run_data_quality_stage(
         config,
         alpha_request,
+        loader_report,
         journal=selected_journal,
     )
     stages.append(data_quality_stage)
@@ -213,6 +241,7 @@ def run_alpha_shadow_run(
             broker_report=broker_report,
             account_report=account_report,
             loader_report=loader_report,
+            warmup_report=warmup_report,
             data_quality_report=data_quality_report,
         )
 
@@ -233,6 +262,7 @@ def run_alpha_shadow_run(
             broker_report=broker_report,
             account_report=account_report,
             loader_report=loader_report,
+            warmup_report=warmup_report,
             data_quality_report=data_quality_report,
             signal_report=signal_report,
         )
@@ -257,6 +287,7 @@ def run_alpha_shadow_run(
             broker_report=broker_report,
             account_report=account_report,
             loader_report=loader_report,
+            warmup_report=warmup_report,
             data_quality_report=data_quality_report,
             signal_report=signal_report,
             shadow_payload=shadow_payload,
@@ -277,6 +308,7 @@ def run_alpha_shadow_run(
         broker_report=broker_report,
         account_report=account_report,
         loader_report=loader_report,
+        warmup_report=warmup_report,
         data_quality_report=data_quality_report,
         signal_report=signal_report,
         shadow_payload=shadow_payload,
@@ -326,9 +358,76 @@ def _readiness_request(request: AlphaShadowRunRequest) -> PaperReadinessRunReque
     )
 
 
+def _run_warmup_stage(
+    request: AlphaShadowRunRequest,
+    latest_loader_report: HistoricalLoaderReport,
+    *,
+    journal: Journal,
+) -> tuple[
+    PaperReadinessRunStage,
+    ShadowWarmupAssemblyReport | None,
+    HistoricalLoaderReport | None,
+]:
+    started_at = utc_now()
+    command = (
+        "shadow-warmup-assemble --symbol SPY --prior-complete-sessions 2 "
+        f"--min-bars {request.min_bars} "
+        f"--stale-after-minutes {request.stale_after_minutes}"
+    )
+    try:
+        all_loader_report = load_historical_snapshots(
+            HistoricalSnapshotLoadRequest(
+                symbols=request.symbols,
+                bar_size=request.bar_size,
+                what_to_show=request.what_to_show,
+                latest=False,
+                strict=request.strict,
+                base_data_path=request.base_data_path,
+            )
+        )
+        report, assembled_loader = assemble_shadow_warmup(
+            latest_loader_report,
+            all_loader_report,
+            minimum_bars=request.min_bars,
+            stale_after_minutes=request.stale_after_minutes,
+        )
+        paths = _write_model_report(journal, "shadow_warmup_assembly", report)
+        return (
+            _stage(
+                "shadow_warmup_assembly",
+                command,
+                ok=report.ok,
+                status=_completed_partial_or_failed(report.ok, False),
+                started_at=started_at,
+                report_paths={
+                    "shadow_warmup_json": paths["json"],
+                    "shadow_warmup_markdown": paths["markdown"],
+                },
+                warnings=report.warnings,
+                errors=report.errors,
+            ),
+            report,
+            assembled_loader,
+        )
+    except Exception as exc:
+        return (
+            _stage(
+                "shadow_warmup_assembly",
+                command,
+                ok=False,
+                status=PaperReadinessStageStatus.FAILED,
+                started_at=started_at,
+                errors=[f"shadow_warmup_assembly raised {type(exc).__name__}: {exc}"],
+            ),
+            None,
+            None,
+        )
+
+
 def _run_data_quality_stage(
     config: TraderConfig,
     request: AlphaShadowRunRequest,
+    loader_report: HistoricalLoaderReport,
     *,
     journal: Journal,
 ) -> tuple[PaperReadinessRunStage, DataQualityGateReport | None]:
@@ -354,7 +453,8 @@ def _run_data_quality_stage(
             min_average_volume=request.min_average_volume,
             min_average_dollar_volume=request.min_average_dollar_volume,
         )
-        report = build_data_quality_gate_report(config, quality_request)
+        del config
+        report = build_data_quality_gate_from_loader(quality_request, loader_report)
         paths = _write_model_report(journal, "data_quality_gate", report)
         partial = report.final_status != "passed"
         return (
@@ -398,7 +498,8 @@ def _run_shadow_simulation_stage(
     command = "shadow-trade-plan-risk-simulate --symbols SPY --destination simulator"
     warnings: list[str] = []
     errors: list[str] = []
-    signals = _shadow_signals(signal_report)
+    del signal_report
+    signals, strategy_decision = _shadow_signals(loader_report, request)
     if not signals:
         warnings.append("no shadow signal could be derived from the latest SPY observation")
 
@@ -440,6 +541,7 @@ def _run_shadow_simulation_stage(
         "risk_decisions": decisions,
         "execution_results": results,
         "source_bar_timestamp_by_symbol": source_timestamps,
+        "strategy_decision": strategy_decision,
     }
     ok = not errors
     partial = bool(warnings) and ok
@@ -457,42 +559,42 @@ def _run_shadow_simulation_stage(
     )
 
 
-def _shadow_signals(report: AnalyticalSignalEvaluationReport) -> list[Signal]:
-    observation = _latest_spy_observation(report)
-    if observation is None:
-        return []
-    if observation.condition_state == AnalyticalSignalConditionState.CONDITION_MET:
-        direction = SignalDirection.BUY
-    elif observation.condition_state == AnalyticalSignalConditionState.CONDITION_NOT_MET:
-        direction = SignalDirection.HOLD
-    else:
-        return []
+def _shadow_signals(
+    loader_report: HistoricalLoaderReport,
+    request: AlphaShadowRunRequest,
+) -> tuple[list[Signal], SPYSmaDecision | None]:
+    spy_bars = [
+        bar
+        for result in loader_report.results
+        if result.symbol == "SPY" and result.dataset is not None
+        for bar in result.dataset.bars
+    ]
+    if not spy_bars:
+        return [], None
+    decision = evaluate_spy_sma_policy(
+        spy_bars,
+        short_window=request.short_window,
+        long_window=request.long_window,
+    )
+    if not decision.warmup_complete or not decision.data_valid:
+        return [], decision
+    direction = (
+        SignalDirection.BUY
+        if decision.transition == SPYPolicyTransition.ENTER_LONG
+        else SignalDirection.HOLD
+    )
     return [
         Signal(
             symbol="SPY",
             direction=direction,
             strength=Decimal("0.50"),
             confidence=Decimal("0.50"),
-            strategy="alpha_shadow_moving_average",
-            reason=(
-                "shadow observation "
-                f"{observation.condition_name}:{observation.condition_state}"
-            ),
-            generated_at=observation.timestamp,
+            strategy=STRATEGY_NAME,
+            reason=f"{decision.reason}; transition={decision.transition}",
+            generated_at=decision.as_of or utc_now(),
             horizon_minutes=60,
         )
-    ]
-
-
-def _latest_spy_observation(report: AnalyticalSignalEvaluationReport) -> Any | None:
-    observations = [
-        observation
-        for observation in report.observations
-        if observation.symbol == "SPY" and observation.data_valid
-    ]
-    if not observations:
-        return None
-    return sorted(observations, key=lambda item: (item.timestamp, item.frame_index))[-1]
+    ], decision
 
 
 def _shadow_quotes(
@@ -578,6 +680,7 @@ def _build_alpha_report(
     broker_report: BrokerDiagnosticReport | None = None,
     account_report: BrokerDiagnosticReport | None = None,
     loader_report: HistoricalLoaderReport | None = None,
+    warmup_report: ShadowWarmupAssemblyReport | None = None,
     data_quality_report: DataQualityGateReport | None = None,
     signal_report: AnalyticalSignalEvaluationReport | None = None,
     shadow_payload: dict[str, Any] | None = None,
@@ -587,6 +690,7 @@ def _build_alpha_report(
     trade_plans = list(shadow_payload.get("trade_plans", []))
     risk_decisions = list(shadow_payload.get("risk_decisions", []))
     execution_results = list(shadow_payload.get("execution_results", []))
+    strategy_decision = shadow_payload.get("strategy_decision")
     combined_errors = _unique([*errors, *[error for stage in stages for error in stage.errors]])
     combined_warnings = _unique(
         [*warnings, *[warning for stage in stages for warning in stage.warnings]]
@@ -614,6 +718,22 @@ def _build_alpha_report(
             stage.name == "history_snapshot" and stage.ok for stage in stages
         ),
         history_load_completed=_history_load_stage_passed(loader_report),
+        warmup_assembly_completed=bool(warmup_report and warmup_report.ok),
+        warmup_prior_session_dates=(
+            warmup_report.prior_complete_session_dates if warmup_report else []
+        ),
+        warmup_current_live_bar_count=(
+            warmup_report.current_live_bar_count if warmup_report else 0
+        ),
+        warmup_assembled_bar_count=(
+            warmup_report.assembled_bar_count if warmup_report else 0
+        ),
+        warmup_boundary_agreement_passed=bool(
+            warmup_report and warmup_report.boundary_agreement_passed
+        ),
+        warmup_data_fingerprint=(
+            warmup_report.data_fingerprint if warmup_report else None
+        ),
         data_quality_completed=bool(data_quality_report and data_quality_report.ok),
         signal_evaluation_completed=bool(signal_report and signal_report.ok),
         trade_plan_completed=bool(trade_plans) or bool(shadow_signals),
@@ -623,6 +743,21 @@ def _build_alpha_report(
             shadow_payload.get("source_bar_timestamp_by_symbol", {})
         ),
         data_quality_status_by_symbol=_data_quality_status_by_symbol(data_quality_report),
+        strategy_name=STRATEGY_NAME,
+        strategy_version=STRATEGY_VERSION,
+        strategy_parameter_fingerprint=(
+            strategy_decision.parameter_fingerprint
+            if isinstance(strategy_decision, SPYSmaDecision)
+            else None
+        ),
+        strategy_decision=(
+            strategy_decision if isinstance(strategy_decision, SPYSmaDecision) else None
+        ),
+        target_state=(
+            strategy_decision.target_state
+            if isinstance(strategy_decision, SPYSmaDecision)
+            else None
+        ),
         shadow_signals=shadow_signals,
         trade_plans=trade_plans,
         risk_decisions=risk_decisions,
