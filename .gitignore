@@ -16,6 +16,7 @@ venv/
 env/
 
 # Local configuration and secrets
+/Quant Creds/
 .env
 .env.*
 !.env.example
