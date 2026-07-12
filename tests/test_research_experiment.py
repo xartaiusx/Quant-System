@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import subprocess
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,10 +13,16 @@ from trader.backtest import research_experiment as experiment_module
 from trader.cli import app
 from trader.data.research_store import initialize_research_store
 from trader.models import (
+    BacktestAlignmentMode,
+    BacktestBar,
+    BacktestDataFeed,
+    BacktestFeedFrame,
+    BacktestFeedStatus,
     ResearchCatalogLoadReport,
     ResearchCatalogLoadRequest,
     ResearchExperimentCandidateResult,
     ResearchExperimentPhase,
+    ResearchExperimentRegistrationRequest,
     ResearchExperimentRequest,
     ResearchWindowCandidate,
 )
@@ -58,12 +65,78 @@ def test_git_evidence_requires_committed_unchanged_spec(tmp_path: Path) -> None:
     assert experiment_module._git_evidence(spec)[1] is False
 
 
+def test_registration_supersedes_unconsumed_v1_and_seals_holdout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        experiment_module.importlib.metadata,
+        "version",
+        lambda _name: "10.48.1",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "quant-system@example.invalid")
+    _git(repo, "config", "user.name", "Quant System Test")
+    v1 = _write_spec(repo / "research/v1.json")
+    v2 = _write_v2_spec(repo / "research/v2.json")
+    (repo / "pyproject.toml").write_text("[project]\nname='fixture'\nversion='1'\n")
+    (repo / "requirements.lock").write_text(
+        "pytest==8.4.2 --hash=sha256:fixture\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "preregister experiments")
+    root = tmp_path / "store"
+
+    report = experiment_module.register_research_experiment(
+        ResearchExperimentRegistrationRequest(
+            spec_path=v2.as_posix(),
+            supersedes_spec_path=v1.as_posix(),
+            root_path=root.as_posix(),
+        )
+    )
+
+    assert report.ok is True
+    assert report.worktree_clean is True
+    assert report.sealed_period is not None
+    assert report.sealed_period.start_date == "2024-01-01"
+    assert report.environment_manifest is not None
+    assert report.environment_manifest.ibapi_version == "10.48.1"
+    with sqlite3.connect(root / "catalog/research.sqlite3") as connection:
+        statuses = dict(
+            connection.execute(
+                "SELECT experiment_id, status FROM experiment_specs"
+            ).fetchall()
+        )
+        seals = connection.execute(
+            "SELECT experiment_id, start_date, end_date FROM sealed_periods"
+        ).fetchall()
+    assert statuses == {
+        "spy-sma-2016-2025-v1": "superseded",
+        "spy-sma-2016-2025-v2": "active",
+    }
+    assert seals == [("spy-sma-2016-2025-v2", "2024-01-01", "2025-12-31")]
+
+    replay = experiment_module.register_research_experiment(
+        ResearchExperimentRegistrationRequest(
+            spec_path=v2.as_posix(),
+            supersedes_spec_path=v1.as_posix(),
+            root_path=root.as_posix(),
+        )
+    )
+    assert replay.ok is True
+    assert replay.idempotent_replay is True
+
+
 def test_development_phase_never_records_holdout_access(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     spec = _write_spec(tmp_path / "spec.json")
     root = tmp_path / "store"
+    _register(spec, root)
     bundle = _bundle(root, ok=True)
     development = _development()
     monkeypatch.setattr(experiment_module, "_load_bundle", lambda *args, **kwargs: bundle)
@@ -95,6 +168,7 @@ def test_final_holdout_requires_exact_confirmation(
 ) -> None:
     spec = _write_spec(tmp_path / "spec.json")
     root = tmp_path / "store"
+    _register(spec, root)
     bundle = _bundle(root, ok=True)
     monkeypatch.setattr(experiment_module, "_load_bundle", lambda *args, **kwargs: bundle)
     monkeypatch.setattr(
@@ -125,6 +199,7 @@ def test_final_holdout_access_is_append_only_and_consumed_on_failed_access(
 ) -> None:
     spec = _write_spec(tmp_path / "spec.json")
     root = tmp_path / "store"
+    _register(spec, root)
     ready = _bundle(root, ok=True)
     failed = _bundle(root, ok=False)
     calls = iter((ready, failed))
@@ -164,6 +239,46 @@ def test_final_holdout_access_is_append_only_and_consumed_on_failed_access(
         assert connection.execute("SELECT COUNT(*) FROM holdout_access").fetchone()[0] == 1
 
 
+def test_full_chronological_development_and_holdout_paths(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    spec = _write_spec(tmp_path / "spec.json")
+    root = tmp_path / "store"
+    _register(spec, root)
+    bundle = _historical_bundle(root)
+    monkeypatch.setattr(experiment_module, "_load_bundle", lambda *args, **kwargs: bundle)
+
+    development = experiment_module.run_research_experiment(
+        ResearchExperimentRequest(
+            spec_path=spec.as_posix(),
+            root_path=root.as_posix(),
+            phase=ResearchExperimentPhase.DEVELOPMENT,
+        ),
+        require_spec_tracked=False,
+    )
+
+    assert development.ok is True
+    assert len(development.validation_folds) == 5
+    assert development.selected_candidate is not None
+
+    final = experiment_module.run_research_experiment(
+        ResearchExperimentRequest(
+            spec_path=spec.as_posix(),
+            root_path=root.as_posix(),
+            phase=ResearchExperimentPhase.FINAL_HOLDOUT,
+            confirmation="ACCESS_FINAL_HOLDOUT_ONCE",
+        ),
+        require_spec_tracked=False,
+    )
+
+    assert final.ok is True
+    assert final.holdout_access_recorded is True
+    assert final.holdout_access_consumed is True
+    assert final.holdout_result is not None
+    assert final.holdout_result.closed_trade_count > 0
+
+
 def test_deflated_sharpe_reports_only_with_supported_sample() -> None:
     candidate = ResearchWindowCandidate(short_window=5, long_window=20)
     trials = [
@@ -198,6 +313,8 @@ def test_experiment_report_renders_and_cli_is_registered(tmp_path: Path) -> None
     assert "Holdout consumed" in rendered
     result = CliRunner().invoke(app, ["research-experiment-run", "--help"])
     assert result.exit_code == 0
+    register_help = CliRunner().invoke(app, ["research-experiment-register", "--help"])
+    assert register_help.exit_code == 0
 
 
 def test_experiment_module_is_broker_network_and_order_api_free() -> None:
@@ -207,7 +324,8 @@ def test_experiment_module_is_broker_network_and_order_api_free() -> None:
     for forbidden in (
         "trader.broker",
         "trader.execution",
-        "ibapi",
+        "import ibapi",
+        "from ibapi",
         "requests",
         "httpx",
         "placeOrder",
@@ -226,6 +344,28 @@ def _write_spec(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path.resolve()
+
+
+def _write_v2_spec(path: Path) -> Path:
+    payload = json.loads(
+        Path("research/experiments/spy_sma_2016_2025_v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path.resolve()
+
+
+def _register(spec: Path, root: Path) -> None:
+    report = experiment_module.register_research_experiment(
+        ResearchExperimentRegistrationRequest(
+            spec_path=spec.as_posix(),
+            root_path=root.as_posix(),
+        ),
+        require_release_evidence=False,
+    )
+    assert report.final_status == "registered"
 
 
 def _git(repo: Path, *arguments: str) -> None:
@@ -249,6 +389,62 @@ def _bundle(root: Path, *, ok: bool):
         action_fingerprint="sha256:actions" if ok else None,
         errors=[] if ok else ["fixture holdout catalog unavailable"],
         final_status="loaded" if ok else "failed",
+    )
+    return experiment_module._CatalogBundle(
+        signal=report,
+        execution=report,
+        benchmark=report,
+    )
+
+
+def _historical_bundle(root: Path):
+    frames: list[BacktestFeedFrame] = []
+    for year in range(2016, 2026):
+        start = datetime(year, 1, 2, 14, 30, tzinfo=UTC)
+        for index in range(120):
+            cycle = index % 40
+            close = (
+                Decimal("100") + Decimal(cycle)
+                if cycle < 20
+                else Decimal("140") - Decimal(cycle)
+            )
+            bar = BacktestBar(
+                symbol="SPY",
+                timestamp=start + timedelta(days=index),
+                open=close,
+                high=close + Decimal("1"),
+                low=close - Decimal("1"),
+                close=close,
+                volume=Decimal("1000000"),
+            )
+            frames.append(
+                BacktestFeedFrame(
+                    timestamp=bar.timestamp,
+                    bars_by_symbol={"SPY": bar},
+                )
+            )
+    feed = BacktestDataFeed(
+        symbols=["SPY"],
+        alignment_mode=BacktestAlignmentMode.INTERSECTION,
+        frames=frames,
+        total_bars=len(frames),
+        frame_count=len(frames),
+        first_timestamp=frames[0].timestamp,
+        last_timestamp=frames[-1].timestamp,
+        missing_bars_by_symbol={"SPY": 0},
+        duplicate_timestamps_by_symbol={"SPY": 0},
+        feed_status=BacktestFeedStatus.READY,
+    )
+    catalog = initialize_research_store(root)
+    request = ResearchCatalogLoadRequest(root_path=root.as_posix())
+    report = ResearchCatalogLoadReport(
+        ok=True,
+        request=request,
+        catalog_path=catalog.as_posix(),
+        dataset_fingerprint="sha256:historical",
+        action_fingerprint="sha256:actions",
+        feed=feed,
+        final_status="loaded",
     )
     return experiment_module._CatalogBundle(
         signal=report,

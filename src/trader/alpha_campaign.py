@@ -153,6 +153,8 @@ def _run_paper_campaign(
         max_report_age_hours=request.max_report_age_hours,
         alpha_shadow_report_path=request.alpha_shadow_report_path,
         paper_smoke_report_path=request.paper_smoke_report_path,
+        research_experiment_report_path=request.research_experiment_report_path,
+        strict_shadow_summary_report_path=request.strict_shadow_summary_report_path,
     )
     alpha_report = alpha_paper_runner(config, alpha_request)
     alpha_paths = _write_report(journal, "alpha_paper_run", alpha_report)

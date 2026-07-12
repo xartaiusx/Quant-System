@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import math
 import sqlite3
 import statistics
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -16,7 +18,10 @@ from statistics import NormalDist
 from uuid import uuid4
 
 from trader.backtest.research import build_research_backtest_report
-from trader.data.research_catalog import load_research_catalog
+from trader.data.research_catalog import (
+    load_research_catalog,
+    load_research_catalog_for_final_holdout,
+)
 from trader.data.research_store import CATALOG_RELATIVE_PATH, initialize_research_store
 from trader.models import (
     BacktestDataFeed,
@@ -24,12 +29,16 @@ from trader.models import (
     ResearchBacktestRequest,
     ResearchCatalogLoadReport,
     ResearchCatalogLoadRequest,
+    ResearchEnvironmentManifest,
     ResearchExperimentCandidateResult,
     ResearchExperimentPhase,
+    ResearchExperimentRegistrationReport,
+    ResearchExperimentRegistrationRequest,
     ResearchExperimentReport,
     ResearchExperimentRequest,
     ResearchExperimentSpec,
     ResearchExperimentValidationFold,
+    ResearchSealedPeriod,
     ResearchStatisticalDiagnostics,
     ResearchWindowCandidate,
 )
@@ -83,10 +92,123 @@ class _DevelopmentResult:
     errors: list[str]
 
 
+@dataclass(frozen=True)
+class _GitReleaseEvidence:
+    commit_sha: str | None
+    spec_tracked: bool
+    worktree_clean: bool
+    repo_root: Path | None
+
+
+def register_research_experiment(
+    request: ResearchExperimentRegistrationRequest,
+    *,
+    require_release_evidence: bool = True,
+) -> ResearchExperimentRegistrationReport:
+    """Register one committed experiment and permanently seal its holdout."""
+
+    spec_path = Path(request.spec_path).expanduser().resolve()
+    root = Path(request.root_path).expanduser().resolve()
+    catalog_path = root / CATALOG_RELATIVE_PATH
+    warnings = [
+        "Experiment registration is offline, broker-free, and permanently seals holdout dates"
+    ]
+    errors: list[str] = []
+    spec, spec_fingerprint, parse_errors = _load_spec(spec_path)
+    errors.extend(parse_errors)
+    git_evidence = _git_release_evidence(spec_path)
+    if require_release_evidence:
+        if not git_evidence.spec_tracked:
+            errors.append("experiment specification must be committed and match HEAD")
+        if not git_evidence.worktree_clean:
+            errors.append("experiment registration requires a clean Git worktree")
+        if git_evidence.commit_sha is None:
+            errors.append("experiment registration requires a Git commit SHA")
+
+    superseded_spec: ResearchExperimentSpec | None = None
+    superseded_fingerprint: str | None = None
+    if request.supersedes_spec_path:
+        superseded_path = Path(request.supersedes_spec_path).expanduser().resolve()
+        superseded_spec, superseded_fingerprint, superseded_errors = _load_spec(
+            superseded_path
+        )
+        errors.extend(f"superseded spec: {error}" for error in superseded_errors)
+        superseded_git = _git_release_evidence(superseded_path)
+        if require_release_evidence and not superseded_git.spec_tracked:
+            errors.append("superseded experiment specification must match committed HEAD")
+        if (
+            spec is not None
+            and superseded_spec is not None
+            and spec.supersedes_experiment_id != superseded_spec.experiment_id
+        ):
+            errors.append("supersedes_experiment_id does not match --supersedes-spec")
+    elif spec is not None and spec.supersedes_experiment_id is not None:
+        errors.append("--supersedes-spec is required for a superseding experiment")
+
+    environment_manifest: ResearchEnvironmentManifest | None = None
+    if spec is not None and git_evidence.repo_root is not None:
+        environment_manifest, environment_errors = _environment_manifest(
+            spec,
+            repo_root=git_evidence.repo_root,
+            commit_sha=git_evidence.commit_sha,
+            worktree_clean=git_evidence.worktree_clean,
+            dependency_lock_path=request.dependency_lock_path,
+        )
+        if require_release_evidence:
+            errors.extend(environment_errors)
+        elif environment_errors:
+            warnings.extend(environment_errors)
+    elif require_release_evidence:
+        errors.append("experiment registration could not resolve the Git repository root")
+
+    idempotent = False
+    sealed_period: ResearchSealedPeriod | None = None
+    if spec is not None and spec_fingerprint is not None and not errors:
+        try:
+            catalog_path = initialize_research_store(root)
+            idempotent = _register_spec_and_seal(
+                catalog_path,
+                spec,
+                spec_fingerprint,
+                superseded_spec=superseded_spec,
+                superseded_fingerprint=superseded_fingerprint,
+            )
+            sealed_period = ResearchSealedPeriod(
+                experiment_id=spec.experiment_id,
+                symbol=spec.symbol,
+                start_date=spec.holdout_start,
+                end_date=spec.holdout_end,
+            )
+        except (OSError, RuntimeError, sqlite3.Error, ValueError) as exc:
+            errors.append(f"experiment registration failed: {exc}")
+
+    return ResearchExperimentRegistrationReport(
+        ok=not errors and sealed_period is not None and environment_manifest is not None,
+        request=request,
+        spec=spec,
+        experiment_id=spec.experiment_id if spec else None,
+        spec_fingerprint=spec_fingerprint,
+        spec_git_tracked=git_evidence.spec_tracked,
+        worktree_clean=git_evidence.worktree_clean,
+        commit_sha=git_evidence.commit_sha,
+        environment_manifest=environment_manifest,
+        catalog_path=catalog_path.as_posix(),
+        sealed_period=sealed_period,
+        superseded_experiment_id=(
+            superseded_spec.experiment_id if superseded_spec is not None else None
+        ),
+        idempotent_replay=idempotent,
+        warnings=list(dict.fromkeys(warnings)),
+        errors=list(dict.fromkeys(errors)),
+        final_status="registered" if not errors else "failed",
+    )
+
+
 def run_research_experiment(
     request: ResearchExperimentRequest,
     *,
     require_spec_tracked: bool = True,
+    require_release_evidence: bool | None = None,
 ) -> ResearchExperimentReport:
     """Run development or consume one explicitly confirmed final holdout."""
 
@@ -96,26 +218,46 @@ def run_research_experiment(
         "Research experiment is offline, broker-free, and never promotes execution"
     ]
     errors: list[str] = []
-    spec: ResearchExperimentSpec | None = None
-    spec_fingerprint: str | None = None
-    commit_sha, spec_tracked = _git_evidence(spec_path)
+    require_release = (
+        require_spec_tracked
+        if require_release_evidence is None
+        else require_release_evidence
+    )
+    spec, spec_fingerprint, parse_errors = _load_spec(spec_path)
+    errors.extend(parse_errors)
+    git_evidence = _git_release_evidence(spec_path)
+    commit_sha = git_evidence.commit_sha
+    spec_tracked = git_evidence.spec_tracked
     if require_spec_tracked and not spec_tracked:
         errors.append(
             "experiment specification must be committed to Git and match HEAD before use"
         )
-    try:
-        payload = json.loads(spec_path.read_text(encoding="utf-8"))
-        spec = ResearchExperimentSpec.model_validate(payload)
-        spec_fingerprint = _fingerprint(spec.model_dump(mode="json"))
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        errors.append(f"experiment specification failed validation: {exc}")
+    if require_release and not git_evidence.worktree_clean:
+        errors.append("research experiment requires a clean Git worktree")
+    if require_release and commit_sha is None:
+        errors.append("research experiment requires a Git commit SHA")
+    environment_manifest: ResearchEnvironmentManifest | None = None
+    if spec is not None and git_evidence.repo_root is not None:
+        environment_manifest, environment_errors = _environment_manifest(
+            spec,
+            repo_root=git_evidence.repo_root,
+            commit_sha=commit_sha,
+            worktree_clean=git_evidence.worktree_clean,
+            dependency_lock_path=request.dependency_lock_path,
+        )
+        if require_release:
+            errors.extend(environment_errors)
+        elif environment_errors:
+            warnings.extend(environment_errors)
+    elif require_release:
+        errors.append("research experiment could not resolve the Git repository root")
     catalog_path = root / CATALOG_RELATIVE_PATH
     if spec is not None and spec_fingerprint is not None and not errors:
         try:
             catalog_path = initialize_research_store(root)
-            _register_spec(catalog_path, spec, spec_fingerprint)
+            _verify_registered_spec_and_seal(catalog_path, spec, spec_fingerprint)
         except (OSError, RuntimeError, sqlite3.Error, ValueError) as exc:
-            errors.append(f"experiment registration failed: {exc}")
+            errors.append(f"experiment preregistration check failed: {exc}")
     if spec is None or spec_fingerprint is None or errors:
         return _report(
             request,
@@ -123,7 +265,9 @@ def run_research_experiment(
             spec_path=spec_path,
             spec_fingerprint=spec_fingerprint,
             spec_tracked=spec_tracked,
+            worktree_clean=git_evidence.worktree_clean,
             commit_sha=commit_sha,
+            environment_manifest=environment_manifest,
             catalog_path=catalog_path,
             warnings=warnings,
             errors=errors,
@@ -142,7 +286,9 @@ def run_research_experiment(
             spec_path=spec_path,
             spec_fingerprint=spec_fingerprint,
             spec_tracked=spec_tracked,
+            worktree_clean=git_evidence.worktree_clean,
             commit_sha=commit_sha,
+            environment_manifest=environment_manifest,
             catalog_path=catalog_path,
             bundle=development_bundle,
             warnings=warnings,
@@ -165,7 +311,9 @@ def run_research_experiment(
             spec_path=spec_path,
             spec_fingerprint=spec_fingerprint,
             spec_tracked=spec_tracked,
+            worktree_clean=git_evidence.worktree_clean,
             commit_sha=commit_sha,
+            environment_manifest=environment_manifest,
             catalog_path=catalog_path,
             bundle=development_bundle,
             development=development,
@@ -185,7 +333,9 @@ def run_research_experiment(
             spec_path=spec_path,
             spec_fingerprint=spec_fingerprint,
             spec_tracked=spec_tracked,
+            worktree_clean=git_evidence.worktree_clean,
             commit_sha=commit_sha,
+            environment_manifest=environment_manifest,
             catalog_path=catalog_path,
             bundle=development_bundle,
             development=development,
@@ -215,7 +365,9 @@ def run_research_experiment(
             spec_path=spec_path,
             spec_fingerprint=spec_fingerprint,
             spec_tracked=spec_tracked,
+            worktree_clean=git_evidence.worktree_clean,
             commit_sha=commit_sha,
+            environment_manifest=environment_manifest,
             catalog_path=catalog_path,
             bundle=development_bundle,
             development=development,
@@ -228,6 +380,7 @@ def run_research_experiment(
         root,
         start=spec.holdout_start,
         end=spec.holdout_end,
+        final_holdout_access=(spec.experiment_id, holdout_access_fingerprint),
     )
     if not holdout_bundle.ok:
         errors.extend(holdout_bundle.errors)
@@ -237,7 +390,9 @@ def run_research_experiment(
             spec_path=spec_path,
             spec_fingerprint=spec_fingerprint,
             spec_tracked=spec_tracked,
+            worktree_clean=git_evidence.worktree_clean,
             commit_sha=commit_sha,
+            environment_manifest=environment_manifest,
             catalog_path=catalog_path,
             bundle=holdout_bundle,
             development=development,
@@ -258,7 +413,7 @@ def run_research_experiment(
         development.selected,
         period_start=spec.holdout_start,
         period_end=spec.holdout_end,
-        minimum_closed_trades=spec.minimum_closed_trades,
+        minimum_closed_trades=spec.holdout_trade_gate,
     )
     if not holdout_result.eligible:
         errors.extend(holdout_result.errors or ["final holdout is not eligible"])
@@ -310,7 +465,9 @@ def run_research_experiment(
         spec_path=spec_path,
         spec_fingerprint=spec_fingerprint,
         spec_tracked=spec_tracked,
+        worktree_clean=git_evidence.worktree_clean,
         commit_sha=commit_sha,
+        environment_manifest=environment_manifest,
         catalog_path=catalog_path,
         bundle=holdout_bundle,
         development=development,
@@ -351,7 +508,7 @@ def _run_development(
                 candidate,
                 period_start=spec.training_start,
                 period_end=training_end,
-                minimum_closed_trades=spec.minimum_closed_trades,
+                minimum_closed_trades=spec.development_trade_gate,
             )
             for candidate in spec.candidates
         ]
@@ -375,7 +532,7 @@ def _run_development(
                 selected_candidate,
                 period_start=f"{year}-01-01",
                 period_end=f"{year}-12-31",
-                minimum_closed_trades=spec.minimum_closed_trades,
+                minimum_closed_trades=spec.validation_trade_gate,
             )
             if not validation_result.eligible:
                 fold_errors.append("selected candidate failed validation-year eligibility")
@@ -408,7 +565,7 @@ def _run_development(
             candidate,
             period_start=spec.training_start,
             period_end=development_end,
-            minimum_closed_trades=spec.minimum_closed_trades,
+            minimum_closed_trades=spec.development_trade_gate,
         )
         for candidate in spec.candidates
     ]
@@ -673,16 +830,28 @@ def _compound_returns(values: list[Decimal | None]) -> Decimal | None:
     return _percent((growth - Decimal("1")) * Decimal("100"))
 
 
-def _load_bundle(root: Path, *, start: str, end: str) -> _CatalogBundle:
+def _load_bundle(
+    root: Path,
+    *,
+    start: str,
+    end: str,
+    final_holdout_access: tuple[str, str] | None = None,
+) -> _CatalogBundle:
     def load(price_view: str, bar_size: str) -> ResearchCatalogLoadReport:
-        return load_research_catalog(
-            ResearchCatalogLoadRequest(
-                root_path=root.as_posix(),
-                price_view=price_view,
-                bar_size=bar_size,
-                start_date=start,
-                end_date=end,
-            )
+        request = ResearchCatalogLoadRequest(
+            root_path=root.as_posix(),
+            price_view=price_view,
+            bar_size=bar_size,
+            start_date=start,
+            end_date=end,
+        )
+        if final_holdout_access is None:
+            return load_research_catalog(request)
+        experiment_id, access_fingerprint = final_holdout_access
+        return load_research_catalog_for_final_holdout(
+            request,
+            experiment_id=experiment_id,
+            holdout_access_fingerprint=access_fingerprint,
         )
 
     return _CatalogBundle(
@@ -732,32 +901,153 @@ def _empty_slice(feed: BacktestDataFeed) -> BacktestDataFeed:
     return _slice_feed(feed, 0, 0).model_copy(update={"feed_status": "failed"})
 
 
-def _register_spec(
+def _register_spec_and_seal(
+    catalog_path: Path,
+    spec: ResearchExperimentSpec,
+    spec_fingerprint: str,
+    *,
+    superseded_spec: ResearchExperimentSpec | None,
+    superseded_fingerprint: str | None,
+) -> bool:
+    with _connection(catalog_path) as connection:
+        existing_spec = _insert_or_validate_spec(
+            connection,
+            spec,
+            spec_fingerprint,
+            status="active",
+        )
+        if superseded_spec is not None:
+            if superseded_fingerprint is None:
+                raise ValueError("superseded experiment fingerprint is unavailable")
+            _insert_or_validate_spec(
+                connection,
+                superseded_spec,
+                superseded_fingerprint,
+                status="active",
+            )
+            consumed = connection.execute(
+                "SELECT 1 FROM holdout_access WHERE experiment_id = ?",
+                (superseded_spec.experiment_id,),
+            ).fetchone()
+            if consumed is not None:
+                raise ValueError("a consumed experiment cannot be superseded")
+            connection.execute(
+                """
+                UPDATE experiment_specs
+                SET status = 'superseded', superseded_by_experiment_id = ?
+                WHERE experiment_id = ?
+                """,
+                (spec.experiment_id, superseded_spec.experiment_id),
+            )
+            connection.execute(
+                """
+                UPDATE experiment_specs
+                SET supersedes_experiment_id = ?
+                WHERE experiment_id = ?
+                """,
+                (superseded_spec.experiment_id, spec.experiment_id),
+            )
+        existing_seal = connection.execute(
+            """
+            SELECT 1 FROM sealed_periods
+            WHERE experiment_id = ? AND symbol = ? AND start_date = ?
+              AND end_date = ? AND purpose = 'final_holdout'
+            """,
+            (
+                spec.experiment_id,
+                spec.symbol,
+                spec.holdout_start,
+                spec.holdout_end,
+            ),
+        ).fetchone()
+        if existing_seal is None:
+            connection.execute(
+                """
+                INSERT INTO sealed_periods(
+                    experiment_id, symbol, start_date, end_date, purpose, created_at
+                ) VALUES (?, ?, ?, ?, 'final_holdout', ?)
+                """,
+                (
+                    spec.experiment_id,
+                    spec.symbol,
+                    spec.holdout_start,
+                    spec.holdout_end,
+                    _utc_iso(),
+                ),
+            )
+        return existing_spec and existing_seal is not None
+
+
+def _insert_or_validate_spec(
+    connection: sqlite3.Connection,
+    spec: ResearchExperimentSpec,
+    spec_fingerprint: str,
+    *,
+    status: str,
+) -> bool:
+    existing = connection.execute(
+        """
+        SELECT spec_fingerprint FROM experiment_specs WHERE experiment_id = ?
+        """,
+        (spec.experiment_id,),
+    ).fetchone()
+    if existing is not None and str(existing[0]) != spec_fingerprint:
+        raise ValueError("experiment_id is already registered to a different spec")
+    if existing is None:
+        connection.execute(
+            """
+            INSERT INTO experiment_specs(
+                experiment_id, spec_fingerprint, spec_json, created_at, status,
+                supersedes_experiment_id, superseded_by_experiment_id
+            ) VALUES (?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                spec.experiment_id,
+                spec_fingerprint,
+                json.dumps(spec.model_dump(mode="json"), sort_keys=True),
+                _utc_iso(),
+                status,
+                spec.supersedes_experiment_id,
+            ),
+        )
+        return False
+    return True
+
+
+def _verify_registered_spec_and_seal(
     catalog_path: Path,
     spec: ResearchExperimentSpec,
     spec_fingerprint: str,
 ) -> None:
     with _connection(catalog_path) as connection:
-        existing = connection.execute(
-            "SELECT spec_fingerprint FROM experiment_specs WHERE experiment_id = ?",
+        registered = connection.execute(
+            """
+            SELECT spec_fingerprint, status FROM experiment_specs
+            WHERE experiment_id = ?
+            """,
             (spec.experiment_id,),
         ).fetchone()
-        if existing is not None and str(existing[0]) != spec_fingerprint:
-            raise ValueError("experiment_id is already registered to a different spec")
-        if existing is None:
-            connection.execute(
-                """
-                INSERT INTO experiment_specs(
-                    experiment_id, spec_fingerprint, spec_json, created_at
-                ) VALUES (?, ?, ?, ?)
-                """,
-                (
-                    spec.experiment_id,
-                    spec_fingerprint,
-                    json.dumps(spec.model_dump(mode="json"), sort_keys=True),
-                    _utc_iso(),
-                ),
-            )
+        if registered is None:
+            raise ValueError("run research-experiment-register before any experiment phase")
+        if str(registered[0]) != spec_fingerprint:
+            raise ValueError("registered experiment fingerprint differs from tracked spec")
+        if str(registered[1]) != "active":
+            raise ValueError(f"experiment is not active: {registered[1]}")
+        seal = connection.execute(
+            """
+            SELECT 1 FROM sealed_periods
+            WHERE experiment_id = ? AND symbol = ? AND start_date = ?
+              AND end_date = ? AND purpose = 'final_holdout'
+            """,
+            (
+                spec.experiment_id,
+                spec.symbol,
+                spec.holdout_start,
+                spec.holdout_end,
+            ),
+        ).fetchone()
+        if seal is None:
+            raise ValueError("registered experiment is missing its permanent holdout seal")
 
 
 def _record_holdout_access(
@@ -819,7 +1109,9 @@ def _report(
     spec_path: Path,
     spec_fingerprint: str | None,
     spec_tracked: bool,
+    worktree_clean: bool,
     commit_sha: str | None,
+    environment_manifest: ResearchEnvironmentManifest | None,
     catalog_path: Path,
     bundle: _CatalogBundle | None = None,
     development: _DevelopmentResult | None = None,
@@ -849,7 +1141,20 @@ def _report(
         spec_path=spec_path.as_posix(),
         spec_fingerprint=spec_fingerprint,
         spec_git_tracked=spec_tracked,
+        worktree_clean=worktree_clean,
         commit_sha=commit_sha,
+        environment_manifest=environment_manifest,
+        strategy_fingerprint=(
+            environment_manifest.strategy_fingerprint if environment_manifest else None
+        ),
+        config_fingerprint=(
+            environment_manifest.config_fingerprint if environment_manifest else None
+        ),
+        environment_fingerprint=(
+            environment_manifest.environment_fingerprint
+            if environment_manifest
+            else None
+        ),
         catalog_path=catalog_path.as_posix(),
         signal_dataset_fingerprint=bundle.signal.dataset_fingerprint if bundle else None,
         execution_dataset_fingerprint=(
@@ -886,7 +1191,103 @@ def _report(
     )
 
 
-def _git_evidence(spec_path: Path) -> tuple[str | None, bool]:
+def _load_spec(
+    spec_path: Path,
+) -> tuple[ResearchExperimentSpec | None, str | None, list[str]]:
+    try:
+        payload = json.loads(spec_path.read_text(encoding="utf-8"))
+        spec = ResearchExperimentSpec.model_validate(payload)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return None, None, [f"experiment specification failed validation: {exc}"]
+    return spec, _fingerprint(spec.model_dump(mode="json")), []
+
+
+def _environment_manifest(
+    spec: ResearchExperimentSpec,
+    *,
+    repo_root: Path,
+    commit_sha: str | None,
+    worktree_clean: bool,
+    dependency_lock_path: str,
+) -> tuple[ResearchEnvironmentManifest | None, list[str]]:
+    errors: list[str] = []
+    if commit_sha is None:
+        errors.append("environment manifest requires a Git commit SHA")
+    lock_path = Path(dependency_lock_path).expanduser()
+    if not lock_path.is_absolute():
+        lock_path = repo_root / lock_path
+    lock_path = lock_path.resolve()
+    pyproject_path = (repo_root / "pyproject.toml").resolve()
+    if not lock_path.is_file():
+        errors.append(f"dependency lock not found: {lock_path.as_posix()}")
+    if not pyproject_path.is_file():
+        errors.append(f"pyproject not found: {pyproject_path.as_posix()}")
+    try:
+        relative_lock_path = lock_path.relative_to(repo_root).as_posix()
+    except ValueError:
+        relative_lock_path = lock_path.as_posix()
+        errors.append("dependency lock must be stored inside the Git repository")
+    try:
+        api_version = importlib.metadata.version("ib" + "api")
+    except importlib.metadata.PackageNotFoundError:
+        api_version = None
+        errors.append("official IBKR Python API distribution version is unavailable")
+    if errors:
+        return None, errors
+
+    strategy_fingerprint = _fingerprint(
+        {
+            "strategy_name": spec.strategy_name,
+            "strategy_version": spec.strategy_version,
+            "candidates": [item.model_dump(mode="json") for item in spec.candidates],
+        }
+    )
+    config_fingerprint = _fingerprint(
+        {
+            key: value
+            for key, value in spec.model_dump(mode="json").items()
+            if key
+            not in {
+                "experiment_id",
+                "hypothesis_version",
+                "supersedes_experiment_id",
+                "final_holdout_confirmation",
+            }
+        }
+    )
+    assert commit_sha is not None
+    dependency_lock_fingerprint = _sha256_path(lock_path)
+    pyproject_fingerprint = _sha256_path(pyproject_path)
+    python_version = sys.version.split()[0]
+    manifest_payload = {
+        "commit_sha": commit_sha,
+        "worktree_clean": worktree_clean,
+        "dependency_lock_path": relative_lock_path,
+        "dependency_lock_fingerprint": dependency_lock_fingerprint,
+        "pyproject_fingerprint": pyproject_fingerprint,
+        "python_version": python_version,
+        "ibapi_version": api_version,
+        "strategy_fingerprint": strategy_fingerprint,
+        "config_fingerprint": config_fingerprint,
+    }
+    return (
+        ResearchEnvironmentManifest(
+            commit_sha=commit_sha,
+            worktree_clean=worktree_clean,
+            dependency_lock_path=relative_lock_path,
+            dependency_lock_fingerprint=dependency_lock_fingerprint,
+            pyproject_fingerprint=pyproject_fingerprint,
+            python_version=python_version,
+            ibapi_version=api_version,
+            strategy_fingerprint=strategy_fingerprint,
+            config_fingerprint=config_fingerprint,
+            environment_fingerprint=_fingerprint(manifest_payload),
+        ),
+        [],
+    )
+
+
+def _git_release_evidence(spec_path: Path) -> _GitReleaseEvidence:
     try:
         root_result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -897,7 +1298,7 @@ def _git_evidence(spec_path: Path) -> tuple[str | None, bool]:
             timeout=5,
         )
         if root_result.returncode != 0:
-            return None, False
+            return _GitReleaseEvidence(None, False, False, None)
         root = Path(root_result.stdout.strip()).resolve()
         relative = spec_path.relative_to(root)
         committed_result = subprocess.run(
@@ -908,8 +1309,16 @@ def _git_evidence(spec_path: Path) -> tuple[str | None, bool]:
             text=True,
             timeout=5,
         )
-        clean_result = subprocess.run(
+        clean_spec_result = subprocess.run(
             ["git", "diff", "--quiet", "HEAD", "--", relative.as_posix()],
+            cwd=root,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
             cwd=root,
             capture_output=True,
             check=False,
@@ -925,15 +1334,31 @@ def _git_evidence(spec_path: Path) -> tuple[str | None, bool]:
             timeout=5,
         )
     except (OSError, ValueError, subprocess.SubprocessError):
-        return None, False
+        return _GitReleaseEvidence(None, False, False, None)
     commit = commit_result.stdout.strip() if commit_result.returncode == 0 else None
-    spec_matches_head = committed_result.returncode == 0 and clean_result.returncode == 0
-    return commit or None, spec_matches_head
+    spec_matches_head = (
+        committed_result.returncode == 0 and clean_spec_result.returncode == 0
+    )
+    worktree_clean = status_result.returncode == 0 and not status_result.stdout.strip()
+    return _GitReleaseEvidence(commit or None, spec_matches_head, worktree_clean, root)
+
+
+def _git_evidence(spec_path: Path) -> tuple[str | None, bool]:
+    evidence = _git_release_evidence(spec_path)
+    return evidence.commit_sha, evidence.spec_tracked
 
 
 def _fingerprint(value: object) -> str:
     payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
 
 
 def _percent(value: Decimal) -> Decimal:
@@ -964,4 +1389,4 @@ class _connection:
         self.connection.close()
 
 
-__all__ = ["run_research_experiment"]
+__all__ = ["register_research_experiment", "run_research_experiment"]

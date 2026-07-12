@@ -470,7 +470,31 @@ def derive_research_views(
 def load_research_catalog(
     request: ResearchCatalogLoadRequest,
 ) -> ResearchCatalogLoadReport:
-    """Load only active, checksum-valid derived SPY partitions into a feed."""
+    """Load non-sealed active, checksum-valid derived SPY partitions."""
+
+    return _load_research_catalog(request, final_holdout_access=None)
+
+
+def load_research_catalog_for_final_holdout(
+    request: ResearchCatalogLoadRequest,
+    *,
+    experiment_id: str,
+    holdout_access_fingerprint: str,
+) -> ResearchCatalogLoadReport:
+    """Load one consumed final holdout through a catalog-verified capability."""
+
+    return _load_research_catalog(
+        request,
+        final_holdout_access=(experiment_id, holdout_access_fingerprint),
+    )
+
+
+def _load_research_catalog(
+    request: ResearchCatalogLoadRequest,
+    *,
+    final_holdout_access: tuple[str, str] | None,
+) -> ResearchCatalogLoadReport:
+    """Load active derived partitions while enforcing permanent holdout seals."""
 
     root = Path(request.root_path).expanduser().resolve()
     catalog_path = root / CATALOG_RELATIVE_PATH
@@ -491,6 +515,17 @@ def load_research_catalog(
                 errors.extend(_derived_coverage_errors(rows, request))
                 coverage_start = date.fromisoformat(str(rows[0]["session_date"]))
                 coverage_end = date.fromisoformat(str(rows[-1]["session_date"]))
+                errors.extend(
+                    _sealed_period_errors(
+                        connection,
+                        symbol=request.symbol,
+                        coverage_start=coverage_start,
+                        coverage_end=coverage_end,
+                        requested_start=request.start_date,
+                        requested_end=request.end_date,
+                        final_holdout_access=final_holdout_access,
+                    )
+                )
                 actions, action_fingerprint = _active_actions(
                     connection,
                     coverage_start=coverage_start,
@@ -508,7 +543,7 @@ def load_research_catalog(
                             action_fingerprint=action_fingerprint,
                         )
                     )
-            for row in rows:
+            for row in rows if not errors else []:
                 partition = _derived_partition_from_row(connection, row)
                 if partition.action_fingerprint != action_fingerprint:
                     errors.append(
@@ -570,6 +605,68 @@ def load_research_catalog(
         errors=_unique(errors),
         final_status="loaded" if feed is not None and not errors else "failed",
     )
+
+
+def _sealed_period_errors(
+    connection: sqlite3.Connection,
+    *,
+    symbol: str,
+    coverage_start: date,
+    coverage_end: date,
+    requested_start: str | None,
+    requested_end: str | None,
+    final_holdout_access: tuple[str, str] | None,
+) -> list[str]:
+    rows = connection.execute(
+        """
+        SELECT
+            sealed_periods.experiment_id,
+            sealed_periods.start_date,
+            sealed_periods.end_date,
+            experiment_specs.status
+        FROM sealed_periods
+        JOIN experiment_specs
+          ON experiment_specs.experiment_id = sealed_periods.experiment_id
+        WHERE sealed_periods.symbol = ?
+          AND sealed_periods.start_date <= ?
+          AND sealed_periods.end_date >= ?
+        ORDER BY sealed_periods.start_date, sealed_periods.experiment_id
+        """,
+        (symbol, coverage_end.isoformat(), coverage_start.isoformat()),
+    ).fetchall()
+    if not rows:
+        return []
+    if final_holdout_access is None:
+        periods = ", ".join(
+            f"{row['experiment_id']}:{row['start_date']}..{row['end_date']}"
+            for row in rows
+        )
+        return [f"research catalog request overlaps permanently sealed holdout: {periods}"]
+
+    experiment_id, access_fingerprint = final_holdout_access
+    authorized = next(
+        (
+            row
+            for row in rows
+            if str(row["experiment_id"]) == experiment_id
+            and str(row["start_date"]) == requested_start
+            and str(row["end_date"]) == requested_end
+            and str(row["status"]) == "active"
+        ),
+        None,
+    )
+    if authorized is None:
+        return ["final-holdout capability does not match an active exact catalog seal"]
+    access = connection.execute(
+        """
+        SELECT 1 FROM holdout_access
+        WHERE experiment_id = ? AND holdout_fingerprint = ?
+        """,
+        (experiment_id, access_fingerprint),
+    ).fetchone()
+    if access is None:
+        return ["final-holdout capability was not recorded before catalog access"]
+    return []
 
 
 def _import_batch_item(

@@ -180,10 +180,15 @@ def _passing_manifest(tmp_path: Path) -> Path:
                 "vendor": vendor,
                 "evidence_reference": f"operator-reviewed-{vendor}-terms",
                 "internal_storage_allowed": True,
+                "cloud_backup_allowed": True,
+                "automated_research_allowed": True,
                 "model_training_allowed": True,
                 "derived_data_allowed": True,
                 "correction_replay_available": True,
+                "paper_trading_use_allowed": True,
+                "live_trading_use_allowed": True,
                 "retention_after_termination_allowed": True,
+                "derived_retention_after_termination_allowed": True,
             }
             for vendor in ("massive", "norgate")
         ],
@@ -273,10 +278,15 @@ def test_bakeoff_does_not_approve_rights_only_vendor(tmp_path: Path) -> None:
             "vendor": "rights-only",
             "evidence_reference": "operator-reviewed-rights-only-terms",
             "internal_storage_allowed": True,
+            "cloud_backup_allowed": True,
+            "automated_research_allowed": True,
             "model_training_allowed": True,
             "derived_data_allowed": True,
             "correction_replay_available": True,
+            "paper_trading_use_allowed": True,
+            "live_trading_use_allowed": True,
             "retention_after_termination_allowed": True,
+            "derived_retention_after_termination_allowed": True,
         }
     )
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")

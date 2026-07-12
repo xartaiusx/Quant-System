@@ -15,6 +15,9 @@ from trader.execution.paper_order_smoke import (
 from trader.models import (
     AlphaPaperRunRequest,
     AlphaPaperRunStatus,
+    AlphaShadowDaemonReportEvidence,
+    AlphaShadowDaemonSummaryReport,
+    AlphaShadowDaemonSummaryRequest,
     AlphaShadowRunReport,
     AlphaShadowRunRequest,
     AlphaShadowRunStatus,
@@ -23,6 +26,10 @@ from trader.models import (
     PaperOrderSmokeReport,
     PaperOrderSmokeRequest,
     PaperOrderSmokeRunStatus,
+    ResearchEnvironmentManifest,
+    ResearchExperimentPhase,
+    ResearchExperimentReport,
+    ResearchExperimentRequest,
     Signal,
     SignalDirection,
     TradeAction,
@@ -141,6 +148,68 @@ def write_report(path: Path, report: object) -> Path:
     payload = report.model_dump(mode="json")
     path.write_text(json.dumps(payload))
     return path
+
+
+def promotion_paths(tmp_path: Path) -> dict[str, str]:
+    environment = ResearchEnvironmentManifest(
+        commit_sha="abc123",
+        worktree_clean=True,
+        dependency_lock_path="requirements.lock",
+        dependency_lock_fingerprint="sha256:lock",
+        pyproject_fingerprint="sha256:pyproject",
+        python_version="3.11.9",
+        ibapi_version="10.48.1",
+        strategy_fingerprint="sha256:strategy",
+        config_fingerprint="sha256:config",
+        environment_fingerprint="sha256:environment",
+    )
+    research = ResearchExperimentReport(
+        ok=True,
+        request=ResearchExperimentRequest(
+            spec_path="research/experiments/spy_sma_2016_2025_v2.json",
+            root_path="D:/MarketData/Quant-System",
+            phase=ResearchExperimentPhase.FINAL_HOLDOUT,
+        ),
+        experiment_id="spy-sma-2016-2025-v2",
+        phase=ResearchExperimentPhase.FINAL_HOLDOUT,
+        spec_path="research/experiments/spy_sma_2016_2025_v2.json",
+        spec_git_tracked=True,
+        worktree_clean=True,
+        commit_sha="abc123",
+        environment_manifest=environment,
+        environment_fingerprint=environment.environment_fingerprint,
+        holdout_access_recorded=True,
+        holdout_access_consumed=True,
+        research_review_ready=True,
+        final_status="completed",
+        timestamp=now(),
+    )
+    evidence = [
+        AlphaShadowDaemonReportEvidence(source_report_path=f"reports/daemon-{index}.json")
+        for index in range(10)
+    ]
+    strict = AlphaShadowDaemonSummaryReport(
+        ok=True,
+        request=AlphaShadowDaemonSummaryRequest(),
+        commit_sha="abc123",
+        source_report_paths=[item.source_report_path for item in evidence],
+        source_reports=evidence,
+        session_count=10,
+        clean_session_count=10,
+        distinct_trading_date_count=5,
+        trading_dates=[f"2026-07-{day:02d}" for day in range(6, 11)],
+        coverage_windows=["opening", "midday", "closing"],
+        graduation_ready=True,
+        engineering_pilot_ready=True,
+        final_status="completed",
+        timestamp=now(),
+    )
+    research_path = write_report(tmp_path / "research.json", research)
+    strict_path = write_report(tmp_path / "strict-summary.json", strict)
+    return {
+        "research_experiment_report_path": research_path.as_posix(),
+        "strict_shadow_summary_report_path": strict_path.as_posix(),
+    }
 
 
 class FakePaperOrderBroker:
@@ -263,6 +332,7 @@ def test_alpha_paper_run_submits_one_paper_order_after_verified_reports(
         request(
             alpha_shadow_report_path=shadow_path.as_posix(),
             paper_smoke_report_path=smoke_path.as_posix(),
+            **promotion_paths(tmp_path),
         ),
         broker_factory=lambda _config: fake,
         now=now(),
@@ -276,6 +346,10 @@ def test_alpha_paper_run_submits_one_paper_order_after_verified_reports(
     assert report.paper_order_report.campaign_id == CAMPAIGN_ID
     assert report.alpha_shadow_report_verified is True
     assert report.paper_smoke_report_verified is True
+    assert report.research_experiment_report_verified is True
+    assert report.strict_shadow_summary_report_verified is True
+    assert report.research_review_ready is True
+    assert report.strict_shadow_engineering_pilot_ready is True
     assert report.submitted_orders is True
     assert report.order_id == 10
     assert report.order_status == "Cancelled"
@@ -301,6 +375,7 @@ def test_alpha_paper_run_no_trade_when_shadow_signal_is_hold(
         request(
             alpha_shadow_report_path=shadow_path.as_posix(),
             paper_smoke_report_path=smoke_path.as_posix(),
+            **promotion_paths(tmp_path),
         ),
         broker_factory=lambda _config: fake,
         now=now(),
@@ -339,6 +414,7 @@ def test_alpha_paper_run_rejects_different_commit_report(
         request(
             alpha_shadow_report_path=shadow_path.as_posix(),
             paper_smoke_report_path=smoke_path.as_posix(),
+            **promotion_paths(tmp_path),
         ),
         broker_factory=lambda _config: FakePaperOrderBroker(),
         now=now(),
@@ -365,6 +441,7 @@ def test_alpha_paper_run_rejects_mismatched_campaign(
         request(
             alpha_shadow_report_path=shadow_path.as_posix(),
             paper_smoke_report_path=smoke_path.as_posix(),
+            **promotion_paths(tmp_path),
         ),
         broker_factory=lambda _config: FakePaperOrderBroker(),
         now=now(),
@@ -391,6 +468,7 @@ def test_alpha_paper_run_requires_transmitted_smoke_report(
         request(
             alpha_shadow_report_path=shadow_path.as_posix(),
             paper_smoke_report_path=smoke_path.as_posix(),
+            **promotion_paths(tmp_path),
         ),
         broker_factory=lambda _config: FakePaperOrderBroker(),
         now=now(),
@@ -399,6 +477,68 @@ def test_alpha_paper_run_requires_transmitted_smoke_report(
     assert report.final_status == AlphaPaperRunStatus.FAILED
     assert any("must be transmitted" in error for error in report.errors)
     assert report.order_api_invoked is False
+
+
+def test_alpha_paper_run_rejects_unapproved_research_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.alpha_paper._current_commit_sha", lambda: "abc123")
+    shadow_path = write_report(tmp_path / "shadow.json", shadow_report())
+    smoke_path = write_report(tmp_path / "smoke.json", smoke_report())
+    paths = promotion_paths(tmp_path)
+    research_path = Path(paths["research_experiment_report_path"])
+    payload = json.loads(research_path.read_text(encoding="utf-8"))
+    payload["research_review_ready"] = False
+    research_path.write_text(json.dumps(payload), encoding="utf-8")
+    fake = FakePaperOrderBroker()
+
+    report = run_alpha_paper_run(
+        config(),
+        request(
+            alpha_shadow_report_path=shadow_path.as_posix(),
+            paper_smoke_report_path=smoke_path.as_posix(),
+            **paths,
+        ),
+        broker_factory=lambda _config: fake,
+        now=now(),
+    )
+
+    assert report.final_status == AlphaPaperRunStatus.FAILED
+    assert "research_review_ready" in " ".join(report.errors)
+    assert report.order_api_invoked is False
+    assert fake.place_calls == 0
+
+
+def test_alpha_paper_run_rejects_non_pilot_strict_shadow_summary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.alpha_paper._current_commit_sha", lambda: "abc123")
+    shadow_path = write_report(tmp_path / "shadow.json", shadow_report())
+    smoke_path = write_report(tmp_path / "smoke.json", smoke_report())
+    paths = promotion_paths(tmp_path)
+    summary_path = Path(paths["strict_shadow_summary_report_path"])
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    payload["engineering_pilot_ready"] = False
+    summary_path.write_text(json.dumps(payload), encoding="utf-8")
+    fake = FakePaperOrderBroker()
+
+    report = run_alpha_paper_run(
+        config(),
+        request(
+            alpha_shadow_report_path=shadow_path.as_posix(),
+            paper_smoke_report_path=smoke_path.as_posix(),
+            **paths,
+        ),
+        broker_factory=lambda _config: fake,
+        now=now(),
+    )
+
+    assert report.final_status == AlphaPaperRunStatus.FAILED
+    assert "engineering_pilot_ready" in " ".join(report.errors)
+    assert report.order_api_invoked is False
+    assert fake.place_calls == 0
 
 
 def test_alpha_paper_run_reports_order_failure(
@@ -414,6 +554,7 @@ def test_alpha_paper_run_reports_order_failure(
         request(
             alpha_shadow_report_path=shadow_path.as_posix(),
             paper_smoke_report_path=smoke_path.as_posix(),
+            **promotion_paths(tmp_path),
         ),
         broker_factory=lambda _config: FakePaperOrderBroker(fail_order=True),
         now=now(),
@@ -438,6 +579,7 @@ def test_alpha_paper_markdown_renders_source_and_order_evidence(
         request(
             alpha_shadow_report_path=shadow_path.as_posix(),
             paper_smoke_report_path=smoke_path.as_posix(),
+            **promotion_paths(tmp_path),
         ),
         broker_factory=lambda _config: FakePaperOrderBroker(),
         now=now(),
