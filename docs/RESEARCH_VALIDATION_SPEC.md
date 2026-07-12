@@ -2,96 +2,112 @@
 
 ## Purpose
 
-`research-walk-forward` tests a predeclared SPY moving-average candidate grid
-without contacting IBKR. It is intended to reduce obvious temporal leakage and
-single-split selection bias. It does not establish profitability and cannot
-promote a strategy or unlock paper execution.
+The authoritative research gate is a preregistered, catalog-backed experiment,
+not repeated inspection of a single backtest. It reduces avoidable lookahead,
+selection, and holdout-reuse errors but does not establish future profitability
+or automatically authorize paper execution.
 
-## Chronological Partitions
+`research-walk-forward` remains available for non-promoting exploratory
+diagnostics. `research-experiment-run` is the only command that can report
+`research_review_ready=true`.
 
-The final `holdout_bars` are removed before any model selection. The remaining
-development bars are divided into anchored folds:
+## Preregistration
 
-1. The first training segment contains every development bar before fold 1.
-2. Every later training segment expands by one prior validation segment.
-3. Validation segments are equal-sized, chronological, and non-overlapping.
-4. Each fold evaluates every predeclared candidate on training data.
-5. The deterministic training winner alone is evaluated on the immediately
-   following validation segment.
-6. Every candidate is evaluated once on all development bars. That development
-   winner alone is evaluated on the final holdout.
+The first specification is committed at
+`research/experiments/spy_sma_2016_2025_v1.json` before final-holdout access. It
+declares:
 
-Indicator warmup uses bars immediately before a validation or holdout boundary.
-Warmup bars can update moving averages but cannot generate signals, fills,
-positions, P&L, or equity observations. This avoids discarding the beginning of
-each evaluation segment without allowing pre-segment simulated trades.
+- strategy `spy_sma_target_state` version `1.0.0`;
+- candidates `5:20`, `10:30`, and `20:50`;
+- initial training period 2016-2018;
+- anchored annual validation folds 2019-2023;
+- untouched final holdout 2024-2025;
+- unlevered target-allocation sizing and explicit cost assumptions;
+- deterministic selection and review thresholds;
+- exact one-time final-holdout confirmation text.
 
-## Candidate Selection
+The command fails before catalog data access when the spec is not Git-tracked,
+changes after registration, uses an invalid candidate grid, or violates period
+ordering.
 
-The candidate grid is declared before the run. Duplicate pairs and pairs where
-`short_window >= long_window` are rejected. A trial must complete and meet the
-configured minimum closed-trade count.
+## Development Phase
 
-The deterministic score is:
+Development loads only catalog dates from 2016 through 2023. For each validation
+year:
 
-```text
-total_return_pct - drawdown_penalty * max_drawdown_pct
-```
+1. Training begins in 2016 and ends immediately before that validation year.
+2. Every preregistered candidate is evaluated on training data.
+3. Selection uses only the declared return-minus-drawdown rule.
+4. The deterministic winner alone is evaluated on the untouched next calendar
+   year.
+5. All trials, fingerprints, costs, errors, and selected parameters are retained.
 
-The default drawdown penalty is `1`. Ties preserve the predeclared candidate
-order. The score is transparent and deliberately simple; it is not a claim that
-this objective is economically optimal.
+After annual folds, all candidates are evaluated on the full 2016-2023
+development partition to select the one candidate eligible for final evaluation.
+Development cannot load 2024-2025, create a holdout access row, or become
+research-review ready.
 
-## Holdout Controls
+## Final-Holdout Phase
 
-The report records SHA-256 fingerprints for the complete dataset, development
-partition, final holdout, and serialized research specification. The holdout is
-not passed to fold selection or full-development candidate selection. It is
-evaluated at most once while building one report.
+The final phase reruns and verifies development from the same immutable spec and
+catalog lineage. It then requires the exact confirmation string. Before loading
+2024-2025, it appends a `holdout_access` row to catalog v2. That record is the
+point of consumption: a missing dataset, failed simulation, interruption, or
+unsatisfactory result still consumes the experiment. A second final access for
+the same experiment ID is rejected.
 
-This is logical isolation, not tamper-proof experiment governance. The program
-cannot prevent an operator from deleting reports, changing the candidate grid,
-or rerunning after seeing holdout results. Every report therefore records
-`operator_rerun_prevention_enforced=false` and remains
-`promotion_eligible=false`. Treat a holdout as consumed after first access.
+A failed holdout cannot be tuned and rerun. Subsequent work requires a new
+hypothesis/version and future forward evidence, not a relabeled reuse of the same
+2024-2025 observations.
+
+## Review Gates
+
+`research_review_ready=true` requires every lineage and fold gate plus all of:
+
+- at least four of five validation years positive after base costs;
+- aggregate validation return nonnegative under 2x costs;
+- final-holdout return positive after base costs;
+- Deflated Sharpe probability at least 0.95 when statistically supported;
+- final-holdout maximum drawdown no worse than the total-return benchmark;
+- eligible simulations, complete catalog fingerprints, and no errors.
+
+The Deflated Sharpe Ratio is reported only when its observation and trial-count
+requirements are supported. Probability of Backtest Overfitting is reported only
+when a valid CSCV trial matrix exists; it is otherwise explicitly unavailable.
+Neither statistic substitutes for untouched out-of-sample evidence.
+
+Even a passing report keeps `promotion_eligible=false`. Review readiness is one
+independent prerequisite for strategy-driven paper alpha, not an automatic
+deployment decision.
 
 ## Interpretation Limits
 
-- Costs are explicit assumptions, not observed bid/ask or queue-position data.
-- Five-minute bar simulation cannot reconstruct intrabar paths or limit-order
-  fill probability.
-- A small number of folds or trades has weak statistical power.
-- Repeated experiments, candidate expansion, and informal tuning increase
-  backtest-overfitting risk.
-- Short samples are not annualized and receive no Sharpe-ratio claim.
-- Historical SPY results do not prove future profitability.
-
-Independent research review should assess data provenance, corporate-action
-treatment, sample length, regime coverage, parameter stability, economic
-rationale, transaction-cost sensitivity, and any consumed holdouts before a
-signal is considered for strict-live shadow testing.
+- Five-minute OHLCV cannot reconstruct limit-order queue position or intrabar
+  event order.
+- Data licenses and corporate-action lineage must remain valid and auditable.
+- Candidate expansion, repeated hypotheses, and informal tuning increase
+  backtest-overfitting risk and must be counted as trials.
+- Historical SPY results do not prove future returns.
+- Delayed or strict-live shadow evidence cannot repair weak research evidence;
+  operational and research gates are independent.
 
 ## Safety Invariants
 
 ```text
 broker_contacted=false
+credentials_read=false
+network_accessed=false
 order_routing_enabled=false
 submitted_orders=false
 order_api_invoked=false
-holdout_used_for_selection=false
-holdout_evaluation_count<=1
 promotion_eligible=false
 ```
 
-The module must not import broker or execution code and must not contain order
-API calls. Commodity proxies and direct futures are outside this SPY-only
-research command.
+The experiment module must remain SPY-only and broker/execution/order-API free.
+Commodity proxies and direct futures remain outside this command.
 
 ## Primary References
 
-- Bailey et al., *The Probability of Backtest Overfitting*:
-  https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253
-- FINRA Notice 15-09, algorithmic strategy testing and supervision:
-  https://www.finra.org/rules-guidance/notices/15-09
-- SEC market-access risk-control FAQ:
-  https://www.sec.gov/rules-regulations/staff-guidance/trading-markets-frequently-asked-questions/divisionsmarketregfaq-0
+- Bailey et al., Probability of Backtest Overfitting: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253
+- Bailey and Lopez de Prado, Deflated Sharpe Ratio: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551
+- FINRA algorithmic testing guidance: https://www.finra.org/rules-guidance/notices/15-09

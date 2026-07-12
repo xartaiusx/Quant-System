@@ -49,9 +49,11 @@ supported API is available only from the official MSI or ZIP download.
 | Host | Paper | Live |
 | --- | ---: | ---: |
 | TWS | `7497` | `7496` disabled |
-| IB Gateway | `4002` documented only | `4001` disabled |
+| IB Gateway | `4002` supported paper endpoint | `4001` disabled |
 
-The config rejects live ports `7496` and `4001`. Paper ports `7497` and `4002` are allowed for read-only probing.
+The config rejects live ports `7496` and `4001`. Paper ports `7497` and `4002`
+are allowed for read-only probing and the existing manually gated paper lifecycle
+commands. Read-Only API remains enabled for all shadow work.
 
 ## TWS Settings
 
@@ -108,10 +110,19 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - `paper-reconcile` is the read-only post-paper-run broker-state check. Run it after re-enabling Read-Only API and setting `ALLOW_PAPER_ORDERS=false`.
 - `alpha-test-summary` is offline-only and aggregates ignored local run reports into a no-secret paper campaign summary.
 - `paper-ledger-update` is offline-only and writes one masked campaign row to ignored local `state/paper_ledger.jsonl` after reconciliation and summary evidence pass.
-- `alpha-shadow-daemon` repeats the read-only SPY shadow path for bounded cycles, writes ignored heartbeat evidence, honors a kill-switch file, and keeps order routing disabled.
-- `alpha-shadow-daemon-summary` is offline-only and compares ignored daemon reports for same-commit, heartbeat, broker/account, stale-data, and safety evidence before any paper-daemon design.
+- `alpha-shadow-run` assembles complete cached XNYS sessions with the current
+  completed live prefix and applies freshness only to the newest current bar.
+- `alpha-shadow-daemon` repeats that read-only path, writes ignored heartbeat and
+  release/config/strategy/data fingerprints, honors a kill-switch file, and keeps
+  order routing disabled.
+- `alpha-shadow-daemon-summary` is offline-only. Five clean strict-live sessions
+  on five distinct XNYS dates unlock paper-daemon implementation; ten clean
+  sessions with opening/midday/closing coverage unlock lifecycle-pilot evidence.
+  Delayed sessions never count.
 - `ibkr-data-diagnostics` is offline-only and reads the latest ignored broker/history reports to verify strict SPY bar count and freshness before a market-hours shadow daemon attempt.
-- Paper execution remains blocked by the refusing paper executor.
+- Autonomous paper execution remains blocked by the refusing normal paper
+  executor and the research/strict-live gates. The existing manual paper-smoke
+  module remains the only production order-API exception.
 - Live trading remains impossible.
 
 ## Common Connection Failures
@@ -133,9 +144,16 @@ Keep Read-Only API enabled while developing this project. It blocks API orders a
 - IBKR farm-status warnings such as `2104`, `2106`, `2107`, and `2158` are informational for this probe. They do not mean current-time connectivity failed.
 - A callback `TypeError` mentioning six arguments indicates an outdated adapter;
   current `main` accepts the timestamped API 10.33+ error signature.
-- Live market data requires IBKR permissions/subscriptions. Delayed data is acceptable for early diagnostics and is the default.
+- Live market data requires IBKR permissions/subscriptions and completed API
+  market-data acknowledgement. IBKR currently documents an opened IBKR PRO
+  account and generally $500 in account equity in addition to subscription costs.
+  Delayed data is acceptable only for non-graduating engineering diagnostics.
 - Historical data availability depends on IBKR data permissions, instrument availability, and pacing limits.
-- Strict SPY shadow-daemon attempts require enough current `5 mins` bars and a latest-bar age at or below the configured gate. If `ibkr-data-diagnostics` flags a lag near delayed-data timing, keep the daemon blocked and diagnose permissions or market-data type before changing the gate.
+- Strict SPY shadow-daemon attempts assemble prior complete local sessions with
+  the current completed `5 mins` prefix. They require exact boundary/overlap
+  agreement and a newest-current-bar age at or below the configured gate. If
+  diagnostics shows delayed-like lag, keep graduation blocked and diagnose
+  permissions or market-data type before changing policy.
 - IBKR error `10089` on `market-probe --data-type live` indicates live API market data requires an additional subscription. Under the strict policy, delayed data remains useful for diagnostics but is not sufficient for autonomous shadow readiness.
 - `ibkr-delayed-data-diagnostics` and `alpha-shadow-daemon-delayed` support read-only engineering practice with delayed data. They must report delayed mode, `graduation_eligible=false`, no order APIs, and no paper-execution eligibility.
 - Missing bid/ask values can occur outside market hours or when permissions are unavailable; the report records this as diagnostics rather than pretending mock data is broker data.
@@ -177,3 +195,5 @@ python -m trader.cli alpha-shadow-daemon-summary --report-glob='reports/alpha_sh
 - IBKR TWS API callback and order API changes: https://www.interactivebrokers.com/campus/ibkr-api-page/tws-api-changelog-2/
 - IBKR TWS API setup and paper/live ports: https://www.interactivebrokers.com/campus/trading-lessons/installing-configuring-tws-for-the-api/
 - IBKR contracts API reference: https://www.interactivebrokers.com/campus/ibkr-api-page/contracts/
+- IBKR API market-data requirements: https://www.interactivebrokers.com/campus/ibkr-api-page/market-data-subscriptions/
+- IBKR paper-account limitations: https://www.interactivebrokers.com/campus/glossary-terms/paper-trading-account/

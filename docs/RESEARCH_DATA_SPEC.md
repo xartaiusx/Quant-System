@@ -1,107 +1,156 @@
-# SPY Research Data Store Specification
+# SPY Research Data Specification
 
 ## Purpose
 
-The research store is the canonical, broker-free source for SPY historical
-research. It preserves licensed source files, records lineage and revisions,
-and activates only complete XNYS regular-session partitions. It does not
-download data, read credentials, contact IBKR, evaluate a strategy, calculate
-P&L, or make a dataset promotion-eligible.
+The external research store is the canonical broker-free source for SPY
+historical research. It separates immutable vendor observations, normalized
+canonical data, corporate actions, derived research views, and experiment
+evidence. No research-data command downloads data, reads credentials, contacts
+IBKR, evaluates a strategy, or routes an order.
 
-## Approved Initial Source
+Generated data, catalogs, reports, credentials, and `Quant Creds` remain outside
+Git. The default store root is `D:/MarketData/Quant-System`.
 
-- Vendor: Massive U.S. Stocks SIP flat files.
-- Dataset: `us_stocks_sip/minute_aggs_v1`.
-- Symbol: `SPY` only.
-- Source view: unadjusted/raw.
-- Session: XNYS regular hours only, including official early closes.
-- Storage root: `D:/MarketData/Quant-System` by default.
+## Procurement Bake-off
 
-Massive documents compressed CSV flat files with the columns `ticker`,
-`volume`, `open`, `close`, `high`, `low`, `window_start`, and `transactions`.
-`window_start` is a Unix timestamp in UTC nanoseconds. Final daily files are
-normally available around 11:00 AM ET on the following day.
+Run `research-data-bakeoff` before purchasing or adopting a source. Its manifest
+points only to manually supplied local CSV or CSV.gz samples and declares:
 
-The current Massive Developer plan documents ten years of aggregate history.
-The flat-file archive documents stock aggregate records beginning in September
-2003. It therefore does **not** independently satisfy the desired daily SPY
-history back to the fund's January 22, 1993 inception. The 1993-2003 daily
-segment remains an explicit provenance blocker until a licensed source is
-selected and reconciled. Do not fill it from an unreviewed convenience feed.
+- normal-session and official early-close samples;
+- ex-dividend observations and synthetic split fixtures;
+- before/after correction samples;
+- overlapping daily observations across candidate vendors;
+- expected checksums and row counts when available;
+- written rights for internal storage, model training, derived data, correction
+  replay, and retention after subscription termination.
 
-Primary sources:
+The bake-off validates timestamps, XNYS session alignment, OHLCV, duplicates,
+checksums, corrections, overlap tolerances, and rights evidence. It reports
+procurement readiness but never downloads data or promotes a strategy.
 
-- Massive flat-file quickstart: https://massive.com/docs/flat-files
-- Massive stocks flat-file overview: https://massive.com/docs/flat-files/stocks/overview
-- State Street SPY fund page: https://www.ssga.com/us/en/individual/etfs/state-street-spdr-sp-500-etf-trust-spy
-- NYSE Daily TAQ catalog: https://www.nyse.com/data-products/catalog/daily-taq
+Massive documents its stock flat files as unadjusted SIP data. Prices and volume
+are not adjusted for splits, dividends, or other corporate actions, so raw
+Massive observations must never be treated as a signal-ready adjusted series.
+Norgate is only an approved candidate for daily/corporate-action coverage after
+its export and license pass the same bake-off. Its U.S. Platinum history is
+advertised back to 1990, which can potentially cover SPY's 1993 inception, but
+the actual trial/export and rights must be verified before purchase.
 
-## Layout And Immutability
+Primary vendor sources:
+
+- Massive stock flat files: https://massive.com/docs/flat-files/stocks/overview
+- Norgate U.S. stock packages: https://norgatedata.com/stockmarketpackages.php
+
+## Catalog V2
+
+The SQLite catalog runs in WAL mode with full synchronous writes and foreign
+keys. Schema v2 retains v1 ingestion tables and adds:
+
+- immutable source artifacts and ingestion runs;
+- raw and canonical partitions with active revisions;
+- complete corporate-action sets and event revisions;
+- derived partitions and parent lineage;
+- algorithm, input, action, dataset, and checksum fingerprints;
+- preregistered experiment specs/runs;
+- append-only final-holdout access records.
+
+Corrections never overwrite raw or derived data. A changed source creates a new
+parent revision, deactivates the prior parent, invalidates dependent derived
+partitions, and requires deterministic re-derivation. Loaders reject inactive
+parents, stale lineage, checksum drift, incomplete actions, and multiple active
+revisions.
+
+## Store Layout
 
 ```text
 D:/MarketData/Quant-System/
-  raw/massive/us_stocks_sip/minute_aggs_v1/
-  curated/massive/us_stocks_sip/minute_aggs_v1/
+  raw/<vendor>/<dataset>/
+  curated/<vendor>/<dataset>/
+  derived/<price-view>/<bar-size>/
   catalog/research.sqlite3
   quarantine/
 ```
 
-Raw files are copied byte-for-byte and named by their vendor filename. A
-different checksum for the same filename creates a hash-suffixed artifact; an
-existing artifact is never overwritten. Curated Parquet files are partitioned
-by price view, symbol, year, month, session, and revision. A correction creates
-a new immutable revision and makes the previous revision inactive without
-deleting it.
+Source artifacts are copied byte-for-byte. If a vendor reuses a filename with
+different content, the archive uses a hash-suffixed name. Existing artifacts and
+partitions are never rewritten.
 
-The SQLite catalog uses WAL mode, full synchronous writes, foreign keys, a
-versioned schema, source SHA-256 values, Parquet SHA-256 values, row counts,
-session coverage, active revision state, ingestion runs, and quality findings.
+## Import Contract
 
-## Fail-Closed Quality Contract
+`research-data-import-batch` sorts a non-recursive local filename glob before
+import and accepts only these SPY source kinds:
 
-An input may become active only when all selected SPY rows:
+- `minute_bars`: licensed Massive-style unadjusted minute aggregates;
+- `daily_bars`: approved canonical daily OHLCV exports;
+- `corporate_actions`: complete split/dividend event exports with declared
+  coverage dates.
 
-- have the documented Massive columns and parse cleanly;
-- are aligned to UTC minute boundaries and ordered chronologically;
-- have unique timestamps, positive finite prices, internally valid OHLC, and
-  non-negative integral volume and transaction counts;
-- exactly match every expected XNYS regular-session minute for the date;
-- match the trading date embedded in the vendor filename when present.
+Minute partitions must exactly match the XNYS calendar: 390 one-minute rows on a
+normal session or 210 on a standard early close. Daily imports must contain every
+XNYS session between their first and last observations. Corporate-action sets
+must declare complete coverage for the period they support.
 
-Failed files remain in the immutable raw archive with a failed catalog run, but
-no Parquet partition is activated. Zero-volume rows are warnings and remain
-visible in evidence. Store audits verify paths remain under the configured
-root, active checksums, Parquet row counts, one active revision per session,
-and complete XNYS session coverage between the first and last active dates.
+Target acquisition remains ten complete calendar years of SPY minute data for
+2016-2025 and selected daily/action history from SPY inception through 2025.
+Until a passing licensed daily/action export covers 1993-2003, that segment is a
+hard provenance blocker rather than a gap to fill with a convenience feed.
+
+## Derived Views
+
+`research-data-derive` creates deterministic catalog-v2 revisions:
+
+1. `raw_execution`, `5 mins`: XNYS-anchored OHLCV aggregated from immutable raw
+   one-minute observations for simulated execution.
+2. `split_adjusted_signal`, `5 mins`: the same parent observations adjusted for
+   splits for indicator calculations.
+3. `total_return_benchmark`, `1 day`: a split-and-cash-dividend-adjusted daily
+   benchmark index.
+
+Raw prices remain the simulated execution truth. Splits and cash dividends are
+also applied explicitly to portfolio accounting. Five-minute derivation fails
+on incomplete groups and must produce exactly 78 rows for a normal session or 42
+for a standard early close.
+
+`research-catalog-load` accepts only passing active revisions, rechecks every
+derived and parent checksum, verifies expected XNYS coverage, and returns dataset
+and action fingerprints. Backtest and experiment commands use this loader only;
+they do not consume ad hoc IBKR snapshots.
 
 ## Operator Workflow
 
-Install research-only dependencies separately from the broker runtime:
+Install the isolated research dependencies:
 
 ```powershell
 python -m pip install -e ".[dev,research]"
 ```
 
-Download licensed files explicitly with the vendor-supported S3 client. Keep
-access keys outside the repository. Then ingest and audit locally:
+Run the offline bake-off, import, derivation, and load checks:
 
 ```powershell
-python -m trader.cli research-data-ingest `
-  --source-file D:\MarketData\incoming\2026-07-10.csv.gz `
+python -m trader.cli research-data-bakeoff `
+  --manifest D:\MarketData\bakeoff\spy-vendors.json
+
+python -m trader.cli research-data-import-batch `
+  --source-dir D:\MarketData\incoming\massive `
+  --vendor massive `
+  --kind minute_bars `
   --root D:\MarketData\Quant-System
 
-python -m trader.cli research-data-audit `
+python -m trader.cli research-data-import-batch `
+  --source-dir D:\MarketData\incoming\actions `
+  --vendor norgate `
+  --kind corporate_actions `
+  --coverage-start 1993-01-22 `
+  --coverage-end 2025-12-31 `
   --root D:\MarketData\Quant-System
+
+python -m trader.cli research-data-derive --root D:\MarketData\Quant-System
+python -m trader.cli research-catalog-load `
+  --root D:\MarketData\Quant-System `
+  --price-view split_adjusted_signal `
+  --bar-size "5 mins"
+python -m trader.cli research-data-audit --root D:\MarketData\Quant-System
 ```
 
-Generated JSON and Markdown reports stay under ignored `reports/`. Raw files,
-Parquet files, the SQLite catalog, credentials, and licensed vendor data must
-never be committed.
-
-## Deferred Views
-
-This milestone activates only raw one-minute partitions. Split-adjusted signal
-views, dividend-adjusted daily benchmark views, REST repair, corporate-action
-lineage, five-minute derivation, and direct research-engine loading remain
-separate reviewed milestones. Every derived view must retain its source hashes
-and adjustment algorithm version; raw observations must never be rewritten.
+Stop on any failed report. A successful bake-off is necessary procurement
+evidence, not permission to redistribute vendor data and not a strategy result.

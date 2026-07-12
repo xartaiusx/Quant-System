@@ -30,18 +30,28 @@
 - Milestone 17 implemented: read-only paper readiness orchestration for first paper-client program testing.
 - Milestone 18 implemented: broker-free data-quality gate for local historical snapshots.
 - Milestone 19 implemented: broker-free analytical evaluator comparison diagnostics.
-- Broker-free SPY research backtest core implemented with next-bar fills,
-  configurable spread/slippage/commission costs, portfolio accounting, trade
-  logs, P&L, drawdown, turnover, benchmark return, and explicit non-promotion.
-- Chronological SPY walk-forward research implemented with anchored folds,
-  complete training-candidate retention, next-period validation, deterministic
-  return/drawdown selection, partition fingerprints, and one final holdout
-  evaluation per report. Operator-rerun prevention is explicitly not claimed.
-- Offline SPY research-data ingestion implemented with immutable Massive raw
-  archives, versioned Parquet partitions, SQLite WAL lineage, exact XNYS
-  regular-session gates, correction history, and checksum/coverage audits.
-- Daily SPY history from inception still has an explicit 1993-2003 provenance
-  gap that the documented Massive flat-file archive does not close.
+- One versioned, fingerprinted, broker-free `SPYSmaPolicy` now supplies completed-
+  bar FLAT/LONG target state to both research and alpha-shadow paths.
+- Offline SPY vendor bake-off validates manually supplied Massive/Norgate samples,
+  session alignment, corrections, overlap, corporate-action fixtures, checksums,
+  and written data rights without network or credential access.
+- Catalog schema v2 adds deterministic batch imports, corporate-action sets,
+  immutable derived revisions, parent lineage, experiment records, and append-only
+  final-holdout access.
+- Dual research views are implemented: raw five-minute execution bars,
+  split-adjusted five-minute signal bars, and a daily total-return benchmark.
+- Catalog loading fails closed on stale parents, inactive revisions, checksum
+  drift, missing actions, incomplete five-minute groups, and incorrect XNYS
+  normal/early-close coverage.
+- Broker-free SPY simulation now models price-protected `LMT DAY` orders,
+  trade-through, partial fills, cancellations, fixed/target-allocation sizing,
+  splits, dividends, portfolio accounting, daily returns, base/2x/3x costs, and
+  expanded performance/drawdown/turnover evidence.
+- A tracked 2016-2025 experiment separates development from one-time 2024-2025
+  holdout access, records consumption before access, and reports review gates
+  without automatic execution promotion.
+- Daily SPY history from inception retains an explicit 1993-2003 provenance gap
+  until a licensed daily/action export passes the vendor bake-off.
 - GitHub Actions CI added for tests, lint, typecheck, whitespace, and safety scans.
 - Optional `ibapi` dependency check script.
 - Offline `ibapi` protocol compatibility check for the current official IBKR
@@ -108,10 +118,24 @@
 - Paper reconciliation submitting, modifying, or canceling orders while collecting account, position, open-order, and execution evidence.
 - Research-backtest or walk-forward reports automatically promoting a signal;
   independent research review and strict-live shadow graduation remain required.
+- Research commands reading ad hoc IBKR snapshot datasets instead of passing
+  active catalog revisions.
+- Autonomous SPY paper-daemon implementation before five clean strict-live
+  sessions on five distinct XNYS dates.
+- Any lifecycle engineering pilot before ten clean strict-live sessions across
+  opening, midday, and closing windows.
 
 ## Current Blockers
 
-- Paper execution remains blocked by `PaperExecutor`.
+- The canonical catalog has not yet been populated with licensed 2016-2025 SPY
+  minute data and approved inception-through-2025 daily/corporate-action data.
+- The preregistered development/final-holdout experiment cannot run until those
+  passing active revisions exist.
+- Strict-live shadow graduation still requires funded/subscribed IBKR live SPY
+  API market data and repeated same-fingerprint evidence on distinct market dates.
+- Autonomous paper execution remains blocked by the normal `PaperExecutor` and
+  by research/strict-live gates. Only the existing manual paper smoke path may
+  call paper order APIs.
 - Live trading remains impossible.
 
 ## Current Local Validation
@@ -146,27 +170,37 @@
 - Alpha shadow, paper smoke, alpha paper, reconcile, and alpha summary reports now carry a no-secret `campaign_id`; reconcile, alpha paper, and summary fail closed when source report campaign IDs do not match.
 - `alpha-campaign-run` orchestrates the existing staged SPY paper-alpha workflow in `shadow` or `paper` mode, writes a top-level campaign report, and keeps order APIs confined to the existing paper execution boundary.
 - `paper-ledger-update` reads ignored summary and reconciliation reports offline, validates current-commit same-campaign broker truth, and upserts one masked local JSONL campaign row under ignored `state/`.
-- `alpha-shadow-daemon` runs bounded autonomous read-only SPY shadow cycles, writes ignored heartbeat evidence, detects stale source bars, honors a kill-switch file, and keeps order APIs disabled.
-- `alpha-shadow-daemon-summary` reads ignored local daemon reports offline, compares commit/campaign and heartbeat evidence, fails closed on stale data or broker/account gaps, and reports whether repeated shadow sessions are ready for SPY paper-daemon design.
+- `alpha-shadow-run` assembles complete cached XNYS sessions with the current
+  completed strict-live prefix, checks overlap/boundary agreement, and applies
+  freshness only to the newest current bar.
+- `alpha-shadow-daemon` writes ignored heartbeat plus release/config/strategy/data
+  fingerprints, trading-date, and coverage-window evidence while keeping order
+  APIs disabled. Graduating evidence requires a clean committed worktree and a
+  unique campaign-specific immutable heartbeat.
+- `alpha-shadow-daemon-summary` requires five clean strict-live sessions on five
+  distinct XNYS dates for implementation graduation and ten clean sessions with
+  opening/midday/closing coverage for lifecycle-pilot eligibility. Delayed
+  reports never count.
 - `ibkr-data-diagnostics` reads ignored local reports offline, verifies strict SPY `1 D` / `5 mins` / `TRADES` / `use_rth=1` data freshness and broker/account evidence, surfaces live market-data permission errors from `market-probe`, and keeps daemon startup blocked when latest-bar age exceeds the configured strict gate or live SPY API market data is unavailable.
 - `ibkr-delayed-data-diagnostics` and `alpha-shadow-daemon-delayed` provide a read-only delayed-data engineering lane while live SPY API data is unavailable. Their reports are explicitly non-graduating and must not unlock paper-daemon design or paper execution.
 
 ## Next Recommended Steps
 
-1. During regular market hours, run fresh `broker-probe`, SPY `history-snapshot`, and `ibkr-data-diagnostics --min-bars 50 --stale-after-minutes 15` before every bounded shadow-daemon attempt.
-2. If diagnostics shows delayed-data-like lag, run `market-probe --symbols SPY --data-type live --historical --timeout 30` and treat IBKR `10089` as a live-data permission blocker.
-3. Until live data is available, run `market-probe --symbols SPY --data-type delayed --historical --timeout 30`, `ibkr-delayed-data-diagnostics --stale-after-minutes 30`, and only then `alpha-shadow-daemon-delayed` for engineering practice.
-4. Run bounded `alpha-shadow-daemon --max-cycles 5 --stale-after-minutes 15` sessions only after diagnostics reports `strict_shadow_precheck_passed=true`.
-5. Run `alpha-shadow-daemon-summary --min-clean-sessions 5` and require `graduation_ready=true` before designing a SPY-only paper execution daemon.
-6. Run `paper-reconcile`, `alpha-test-summary`, and `paper-ledger-update` after every paper-order window before marking the next alpha window eligible.
-7. Keep commodity research in security proxies until a futures-contract, rollover, margin, and risk-model milestone is explicitly approved.
-8. Keep future signal-evaluation work free of expanded execution, fills, portfolio accounting, and P&L until explicitly approved.
-9. Require ledger-matched broker truth before any broader paper execution daemon.
-10. Ingest licensed Massive SPY minute files into the external research store,
-    require a passing `research-data-audit`, and separately resolve the
-    1993-2003 daily-history provenance gap.
-11. Add source-hashed split-adjusted signal and dividend-adjusted benchmark
-    views, derive five-minute bars, and connect only passing active catalog
-    revisions to the broker-free research engine.
-12. Run the predeclared walk-forward experiment once. Treat its final holdout
-    as consumed, retain all local evidence, and do not tune against the result.
+1. Complete the offline vendor bake-off, including written rights and trial/export
+   validation, before purchasing Massive or Norgate.
+2. Import licensed 2016-2025 Massive SPY minute files plus approved daily/action
+   history, derive all views, and require passing catalog load/audit evidence.
+3. Commit the experiment specification before running development. Do not use the
+   final-holdout confirmation until development and lineage review are complete.
+4. Fund/subscribe the IBKR account for live SPY API market data and complete the
+   required API acknowledgement; delayed mode remains non-graduating.
+5. Collect five clean strict-live sessions on five XNYS dates to unlock a separate
+   paper-daemon implementation milestone.
+6. Collect ten clean strict-live sessions across opening, midday, and closing
+   windows before any lifecycle engineering pilot.
+7. Require `research_review_ready=true` in addition to operational evidence
+   before any strategy-driven paper alpha mode.
+8. Keep the paper daemon unimplemented until those gates pass. Continue manual
+   reconciliation, summary, and ledger updates after every approved paper window.
+9. Keep GLD/USO research-only, DBA excluded, and direct futures blocked until a
+   separate contract/roll/margin/liquidity/permission/delivery-risk program exists.

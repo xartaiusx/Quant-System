@@ -1,8 +1,8 @@
 # IBKR Quant System
 
-Safety-first Python foundation for a quantitative trading system designed to integrate with Interactive Brokers Trader Workstation or IB Gateway in later phases.
+Safety-first Python foundation for broker-free SPY research and staged Interactive Brokers paper-account validation through Trader Workstation or IB Gateway.
 
-This project is infrastructure-first. It is not a profitability engine, not a live trading bot, and not an order-placement tool.
+This project is infrastructure-first. It is not a profitability claim or a live trading bot. Paper order APIs remain confined to one explicit lifecycle-test module; autonomous paper execution is not implemented.
 
 ## What Is Implemented
 
@@ -14,6 +14,12 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Execution router that accepts only risk-approved plans.
 - Deterministic simulator.
 - Refusing paper executor stub.
+- Shared broker-free SPY moving-average target-state policy used by research and shadow paths.
+- Catalog-backed SPY research simulation with dual price views, limit-order modeling,
+  explicit costs, capital events, portfolio accounting, and daily performance evidence.
+- Preregistered chronological research experiments with append-only final-holdout access.
+- Offline vendor-data bake-off, immutable catalog-v2 lineage, batch import, derived views,
+  and checksum-valid catalog loading.
 - Read-only IBKR TWS / IB Gateway broker probe with current-time diagnostics.
 - Masked managed-account discovery when the broker API is reachable.
 - Read-only IBKR market-data diagnostics for contract resolution, delayed quote capture,
@@ -33,6 +39,8 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 - Broker-free data-quality gate for local historical snapshots.
 - Broker-free analytical evaluator comparison diagnostics for approved moving-average windows.
 - GitHub Actions CI for tests, lint, typecheck, whitespace, and safety scans.
+- Python 3.11 and 3.12 CI coverage plus global order-API and sensitive-artifact scans.
+- Strict-live shadow warmup assembly and multi-session fingerprint/drift evidence.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
 
@@ -40,15 +48,14 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 
 - Live trading.
 - Live executor.
-- Real broker order submission.
+- General-purpose broker order submission.
+- Autonomous paper-order daemon.
 - Market orders.
 - Profit optimization.
-- Production-grade backtesting.
-- Trading decisions from live broker market data.
-- Strategy evaluation from broker historical snapshots.
-- Backtest strategy evaluation from offline snapshot datasets.
-- Order simulation or P&L from offline snapshot datasets.
-- Fill simulation, portfolio accounting, or P&L from backtest runs.
+- A profitability-validated or production-certified strategy.
+- Strategy-driven broker order submission.
+- Research execution from ad hoc IBKR snapshot datasets; research commands require
+  passing active catalog revisions.
 - Real strategy evaluation, signal generation, order simulation, or P&L from strategy-contract checks.
 - Real strategy evaluation, buy/sell/hold signal generation, order-intent generation, fill simulation, portfolio accounting, or P&L from strategy-runner checks.
 - Real signal evaluation, buy/sell/hold outputs, order intents, order simulation, fill simulation, portfolio accounting, or P&L from signal-contract checks.
@@ -59,13 +66,17 @@ This project is infrastructure-first. It is not a profitability engine, not a li
 
 ## Safety Design
 
-Every possible order-shaped object must flow through:
+Normal strategy order-shaped objects must flow through:
 
 ```text
 signal -> trade plan -> risk validation -> execution router -> simulator or paper executor -> journal
 ```
 
 Strategy modules must never import broker or execution code.
+
+The manually gated `paper-order-smoke` lifecycle test is an isolated exception
+for SPY paper-only API validation. It cannot be called by a strategy and is the
+only production module allowlisted for `placeOrder` or `cancelOrder`.
 
 Default settings:
 
@@ -107,10 +118,12 @@ Do not commit `.env`.
 ## Validate
 
 ```bash
-pytest
-ruff check --no-cache src tests
-mypy src
+python -m pytest -p no:cacheprovider
+python -m ruff check --no-cache src tests scripts
+python -m mypy src
 git diff --check
+python scripts/check_order_api_allowlist.py
+python scripts/check_no_sensitive_artifacts.py
 ```
 
 ## Dry-Run Commands
@@ -136,8 +149,13 @@ python -m trader.cli backtest-run --symbols SPY,AAPL
 python -m trader.cli backtest-run --symbols SPY,AAPL --alignment intersection
 python -m trader.cli research-data-ingest --source-file <licensed-massive.csv.gz>
 python -m trader.cli research-data-audit
+python -m trader.cli research-data-bakeoff --manifest <local-manifest.json>
+python -m trader.cli research-data-import-batch --source-dir <licensed-files> --vendor massive --kind minute_bars
+python -m trader.cli research-data-derive
+python -m trader.cli research-catalog-load --price-view split_adjusted_signal
 python -m trader.cli research-backtest --symbol SPY --short-window 5 --long-window 20
 python -m trader.cli research-walk-forward --symbol SPY --window-pairs 5:20,10:30,20:50
+python -m trader.cli research-experiment-run --spec research/experiments/spy_sma_2016_2025_v1.json --phase development
 python -m trader.cli strategy-contract --symbols SPY,AAPL
 python -m trader.cli strategy-contract --symbols SPY,AAPL --alignment intersection
 python -m trader.cli strategy-runner --symbols SPY,AAPL
@@ -190,11 +208,11 @@ scripts/run-paper-readiness-run.sh
 scripts/run-alpha-shadow-run.sh
 ```
 
-## TWS Paper Notes
+## IBKR Paper Notes
 
 Interactive Brokers TWS must be running before a future socket client can connect. TWS API access must be enabled in TWS API settings. The documented default TWS paper socket port is `7497`; the documented TWS live socket port is `7496` and is disabled by this repo.
 
-IB Gateway paper is documented as `4002`; IB Gateway live is documented as `4001` and is disabled by this repo.
+IB Gateway paper on `4002` and TWS paper on `7497` are supported localhost endpoints. IB Gateway live `4001` and TWS live `7496` are rejected by this repo.
 
 `broker-probe` opens a local read-only API socket only to request current server time and masked managed-account identifiers. It does not enable paper execution, does not route orders, and writes `reports/broker_probe_<timestamp>.json` plus `.md`.
 
@@ -237,27 +255,41 @@ deterministically, records frame-level diagnostics, writes run reports, and does
 not contact IBKR, evaluate strategies, simulate orders, calculate fills, or
 compute P&L.
 
-`research-backtest` is the separate SPY-only research simulator. It evaluates a
-long-only moving-average crossover at completed bar closes, fills at the next
-bar open, models spread, slippage, and commissions, and records fills, closed
-trades, cash, positions, equity, P&L, drawdown, turnover, and exposure. It is
-offline-only and always reports `promotion_eligible=false`. Use the separate
-walk-forward command for chronological validation rather than selecting from a
-single in-sample result.
+`research-backtest` is the catalog-only SPY research simulator. It loads
+split-adjusted five-minute bars for the shared target-state policy, raw
+five-minute bars for simulated execution, and a daily total-return benchmark.
+Orders are deterministic price-protected `LMT DAY` simulations with tick
+rounding, trade-through rules, configurable volume participation, partial fills,
+cancellations, spread, slippage, commissions, splits, and cash dividends. It
+supports fixed quantity for engineering tests and unlevered target allocation
+for return research. Reports include daily returns, cost scenarios, portfolio
+accounting, P&L, drawdown duration, turnover, exposure, and benchmark-relative
+metrics. Annualized CAGR, volatility, Sharpe, Sortino, and Calmar remain
+unavailable until at least 30 completed daily observations exist. Every report
+keeps `promotion_eligible=false`.
 
-`research-walk-forward` adds anchored chronological development folds and one
-final holdout. Each fold chooses only from its training segment, validates the
-choice on the next non-overlapping segment, retains every training candidate,
-then selects once on the full development partition before evaluating the
-fingerprinted holdout exactly once per report. The report remains
-`promotion_eligible=false`: software cannot prevent an operator from rerunning
-or informally tuning against a consumed holdout.
+The same completed-bar `SPYSmaPolicy` supplies research and shadow target state.
+Research may enter or reduce a simulated long position from that state; the
+read-only shadow path emits BUY only for an `ENTER_LONG` transition. A
+`HOLD_LONG` observation remains HOLD and cannot create a repeated trade plan.
 
-`research-data-ingest` and `research-data-audit` maintain an external,
-offline-only SPY research store with immutable Massive raw files, versioned
-Parquet partitions, SQLite lineage, XNYS regular-session validation, and
-checksum audits. Install `.[research]` first. Licensed data and generated store
-artifacts remain outside Git. See `docs/RESEARCH_DATA_SPEC.md`.
+`research-walk-forward` remains a non-promoting exploratory chronological tool.
+The authoritative final-holdout workflow is `research-experiment-run`, which
+requires a committed preregistration, loads only 2016-2023 in development, and
+records one append-only catalog access before loading the 2024-2025 holdout.
+Final access requires the exact confirmation in the tracked specification; a
+failed or interrupted access still consumes the experiment. Review readiness is
+reported separately from execution promotion and never routes orders.
+
+The research-data commands maintain an external, offline-only SPY store.
+`research-data-bakeoff` validates manually supplied vendor samples and written
+rights without downloading data or reading credentials. Import commands archive
+licensed raw files immutably; catalog v2 records revisions, corporate actions,
+derived lineage, and experiment access. `research-data-derive` creates raw
+execution, split-adjusted signal, and total-return benchmark views, while
+`research-catalog-load` accepts only active checksum-valid revisions with exact
+XNYS session coverage. Install `.[research]` first and keep licensed data,
+catalogs, and reports outside Git. See `docs/RESEARCH_DATA_SPEC.md`.
 
 `strategy-contract` is an offline interface scaffold. It validates a no-op
 strategy contract against local feed frames, writes contract reports, and does
@@ -315,21 +347,22 @@ fallback is a failed readiness run. It writes
 `paper_orders_enabled=false`, reports `submitted_orders=false`, and keeps direct
 futures out of scope.
 
-`alpha-shadow-run` is the first broker-connected alpha testing command. It is
-still read-only with respect to IBKR: TWS paper must listen on `127.0.0.1:7497`,
-TWS Read-Only API is expected to remain enabled, `ALLOW_PAPER_ORDERS=false` is
-required, and no broker order APIs are invoked. The command is SPY-only in this
-milestone. It runs broker/account checks, an SPY historical snapshot, offline
-load, SPY data-quality gates, analytical signal evaluation, shadow trade-plan
-construction, dry-run risk checks, and simulator routing. Reports are written to
-`reports/alpha_shadow_run_<timestamp>.json` plus `.md` and include masked
-account IDs, `campaign_id`, stage paths, data-quality metrics, shadow signal/trade-plan/risk
-counts, simulator fill counts, `submitted_orders=false`, and
-`paper_orders_enabled=false`.
+`alpha-shadow-run` is the broker-connected, read-only SPY alpha test. Use paper
+IB Gateway `127.0.0.1:4002` or paper TWS `127.0.0.1:7497` with Read-Only API
+enabled and `ALLOW_PAPER_ORDERS=false`. It runs broker/account checks, captures
+the current completed live-bar prefix, then assembles it with complete cached
+XNYS sessions. The warmup stage fails closed on forming bars, gaps, conflicting
+overlaps, missing prior-session evidence, or stale current data; the freshness
+gate applies only to the newest current bar. Data quality, the shared SPY policy,
+dry-run risk, and simulator routing use that assembled feed. Reports include
+masked account evidence, source/data/strategy fingerprints, and
+`submitted_orders=false`, `paper_orders_enabled=false`, and
+`order_api_invoked=false`.
 
 `paper-order-smoke` is the first gated paper-only order lifecycle command. Run it
-only after a passing `alpha-shadow-run`, with TWS paper on `127.0.0.1:7497` and
-Read-Only API disabled only for the smoke window. It requires
+only after a passing `alpha-shadow-run`, with paper Gateway on
+`127.0.0.1:4002` or paper TWS on `127.0.0.1:7497` and Read-Only API disabled
+only for the smoke window. It requires
 `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`, `ALLOW_LIVE_ORDERS=false`,
 `IBKR_CLIENT_ID=21`, `MAX_TRADE_NOTIONAL=1000`, and
 `--confirm PAPER_SMOKE_SPY_1`. It is SPY-only, quantity `1`, STK/SMART/USD,
@@ -348,8 +381,8 @@ cancels it if unfilled:
 python -m trader.cli paper-order-smoke --symbol SPY --quantity 1 --transmit true --allow-fill false --cancel-after-seconds 30 --confirm PAPER_SMOKE_SPY_1
 ```
 
-After the smoke run, set `ALLOW_PAPER_ORDERS=false` again and re-enable TWS
-Read-Only API unless actively running the gated paper execution command.
+After the smoke run, set `ALLOW_PAPER_ORDERS=false` again and re-enable the
+Gateway/TWS Read-Only API unless actively running the gated paper execution command.
 Reports are written to `reports/paper_order_smoke_<timestamp>.json` plus `.md`
 with masked account IDs, order/cancel callback evidence, and no secrets.
 
@@ -422,10 +455,12 @@ defaults to a wider `30` minute freshness gate, reports
 and marks reports `graduation_eligible=false`.
 
 `alpha-shadow-daemon` is the first controlled autonomous mode. It repeats the
-existing read-only SPY shadow path for a bounded number of cycles, writes
-heartbeat evidence under ignored local `state/`, and halts failed on stale
-source bars or safety violations. Keep IBKR Read-Only API enabled and
-`ALLOW_PAPER_ORDERS=false`; the daemon never invokes broker order APIs:
+existing read-only SPY shadow path for a bounded number of cycles, atomically
+updates a latest heartbeat, writes a campaign-specific immutable heartbeat under
+ignored local `state/`, and halts failed on stale source bars or safety
+violations. Use a unique campaign ID from a clean committed worktree. Keep IBKR
+Read-Only API enabled and `ALLOW_PAPER_ORDERS=false`; the daemon never invokes
+broker order APIs:
 
 ```bash
 python -m trader.cli alpha-shadow-daemon --campaign-id campaign-YYYYMMDD-spy-shadow-daemon-001 --max-cycles 5 --interval-seconds 300 --stale-after-minutes 15
@@ -444,15 +479,21 @@ Create the configured kill-switch file, default
 `state/alpha_shadow_daemon.kill`, to stop before the next cycle. The daemon
 reports `submitted_orders=false`, `paper_orders_enabled=false`,
 `order_routing_enabled=false`, `order_api_invoked=false`, stale-data status,
-clean-cycle count, heartbeat path, and whether the configured clean-session
-threshold is met. Paper execution daemons remain out of scope until repeated
-shadow sessions and ledger-backed broker truth are stable.
+clean-cycle count, heartbeat path, trading date, coverage window, release/config/
+strategy/data fingerprints, and per-session evidence status. A single daemon
+report never grants graduation. Paper execution daemons remain out of scope
+until the offline multi-session gate and ledger-backed broker truth are stable.
 
 `alpha-shadow-daemon-summary` is the offline drift gate for those sessions. It
-reads ignored local `alpha_shadow_daemon` reports, checks report age,
-same-commit evidence, heartbeat presence, stale-data flags, broker/account
-verification counts, and order-safety flags, then writes JSON/Markdown summary
-evidence. It does not contact IBKR and keeps `submitted_orders=false`:
+checks report age, same-commit evidence, heartbeat presence, strict-live policy,
+broker/account counts, release/config/strategy fingerprints, unique data
+fingerprints, a clean committed release, campaign/heartbeat identity, distinct
+XNYS trading dates, coverage windows, and all order-safety flags. Five clean
+strict-live sessions on five dates set
+`graduation_ready=true`; ten clean sessions over at least five dates with
+opening, midday, and closing coverage set `engineering_pilot_ready=true`.
+Delayed sessions never count. The summary does not contact IBKR and keeps
+`submitted_orders=false`:
 
 ```bash
 python -m trader.cli alpha-shadow-daemon-summary --report-glob='reports/alpha_shadow_daemon_*.json' --min-clean-sessions 5 --max-report-age-hours 168 --require-same-commit true
@@ -474,7 +515,15 @@ signals, simulate orders or fills, perform portfolio accounting, or compute P&L.
 - IBKR order submission and transmit behavior: https://interactivebrokers.github.io/tws-api/order_submission.html
 - IBKR placing-order callbacks: https://www.interactivebrokers.com/campus/trading-lessons/python-placing-orders/
 - IBKR order types and paper-trading notes: https://www.interactivebrokers.com/campus/ibkr-api-page/order-types/
+- IBKR API market-data requirements: https://www.interactivebrokers.com/campus/ibkr-api-page/market-data-subscriptions/
+- IBKR paper-account simulation limitations: https://www.interactivebrokers.com/campus/glossary-terms/paper-trading-account/
 - IBKR contracts API reference: https://www.interactivebrokers.com/campus/ibkr-api-page/contracts/
+- Massive stock flat-file specification: https://massive.com/docs/flat-files/stocks/overview
+- Norgate U.S. stock package history: https://norgatedata.com/stockmarketpackages.php
+- Probability of Backtest Overfitting: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253
+- Deflated Sharpe Ratio: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551
+- FINRA algorithmic testing guidance: https://www.finra.org/rules-guidance/notices/15-09
+- SEC market-access risk-control FAQ: https://www.sec.gov/rules-regulations/staff-guidance/trading-markets-frequently-asked-questions/divisionsmarketregfaq-0
 - CFTC futures market basics: https://www.cftc.gov/LearnAndProtect/AdvisoriesAndArticles/FuturesMarketBasics/index.htm
 - CFTC commodity ETP advisory: https://www.cftc.gov/LearnAndProtect/AdvisoriesAndArticles/CustomerAdvisory_CommodityETPs.htm
 - GitHub status checks: https://docs.github.com/articles/about-status-checks

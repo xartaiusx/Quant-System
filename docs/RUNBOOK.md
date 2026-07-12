@@ -487,7 +487,11 @@ python -m trader.cli alpha-shadow-daemon-delayed --campaign-id "$CAMPAIGN_ID" --
 Normal `alpha-shadow-daemon-summary` intentionally rejects delayed reports as
 non-graduating evidence. Keep delayed reports for engineering drift review only.
 
-When the strict precheck passes:
+When live permission/current-feed diagnostics pass, run the strict daemon. The
+daemon's own `alpha-shadow-run` warmup stage is authoritative for the 50-bar
+requirement: it combines prior complete local XNYS sessions with the current
+completed live prefix, proves boundary agreement, and applies freshness only to
+the newest current bar.
 
 ```bash
 
@@ -498,13 +502,19 @@ Expected behavior:
 
 - runs bounded read-only SPY shadow cycles through the existing
   `alpha-shadow-run` path
-- writes per-cycle shadow reports and an ignored heartbeat file at
-  `state/alpha_shadow_daemon_heartbeat.json`
+- assembles complete cached sessions with the current completed live prefix and
+  fails on forming bars, gaps, conflicting overlap, stale data, or missing prior
+  session evidence
+- atomically updates `state/alpha_shadow_daemon_heartbeat.json` for monitoring
+  and writes a campaign-specific ignored heartbeat that cannot be reused
 - stops failed on stale source bars, broker/account failures, or safety
   violations
 - halts safely before a cycle when `state/alpha_shadow_daemon.kill` exists
-- reports clean-cycle count and `graduation_ready=true` only after the
-  configured clean-session threshold is met
+- requires a clean committed worktree and records release/config/strategy/data
+  fingerprints, one XNYS trading date, and observed opening/midday/closing
+  coverage
+- never grants graduation from one daemon report; multi-session graduation is
+  computed only by `alpha-shadow-daemon-summary`
 - reports `submitted_orders=false`, `paper_orders_enabled=false`,
   `order_routing_enabled=false`, and `order_api_invoked=false`
 
@@ -518,10 +528,14 @@ python -m trader.cli alpha-shadow-daemon-summary --report-glob='reports/alpha_sh
 Expected behavior:
 
 - reads ignored local daemon reports only and does not contact IBKR
-- fails closed on missing reports, commit mismatch, stale data,
-  broker/account gaps, missing heartbeat evidence, or order-safety flags
-- reports `graduation_ready=true` only when the clean-session threshold is met
-  with same-commit broker/account and heartbeat evidence
+- fails closed on missing reports, commit mismatch, stale data, delayed policy,
+  broker/account gaps, unclean releases, heartbeat absence or campaign mismatch,
+  fingerprint drift, duplicate data fingerprints, invalid XNYS dates, or
+  order-safety flags
+- reports `graduation_ready=true` only after five clean strict-live sessions on
+  five distinct XNYS dates
+- reports `engineering_pilot_ready=true` only after ten clean sessions across at
+  least five dates with opening, midday, and closing coverage
 - keeps `submitted_orders=false`, `paper_orders_enabled=false`,
   `order_routing_enabled=false`, and `order_api_invoked=false`
 
@@ -772,83 +786,124 @@ offline local-file workflows. Common failures:
 
 ## Canonical SPY Research Data
 
-Install the isolated research dependency group and ingest only licensed files
-that the operator downloaded explicitly through the vendor-supported S3 path:
+Install the isolated research dependency group. Before purchase or bulk import,
+run the offline vendor bake-off against manually supplied trial/export files and
+written rights evidence:
 
 ```powershell
 python -m pip install -e ".[dev,research]"
-python -m trader.cli research-data-ingest `
-  --source-file D:\MarketData\incoming\2026-07-10.csv.gz `
+
+python -m trader.cli research-data-bakeoff `
+  --manifest D:\MarketData\bakeoff\spy-vendors.json
+```
+
+The manifest must cover a normal session, early close, ex-dividend date,
+before/after correction, cross-vendor daily overlap, synthetic split, expected
+checksums, and written rights for storage, training, derived data, corrections,
+and retention after cancellation. The command reads no credentials and performs
+no network request.
+
+After a vendor passes procurement review, batch-import local licensed files in
+deterministic filename order, import complete actions, derive views, and audit:
+
+```powershell
+python -m trader.cli research-data-import-batch `
+  --source-dir D:\MarketData\incoming\massive `
+  --vendor massive `
+  --kind minute_bars `
   --root D:\MarketData\Quant-System
+
+python -m trader.cli research-data-import-batch `
+  --source-dir D:\MarketData\incoming\daily `
+  --vendor norgate `
+  --kind daily_bars `
+  --root D:\MarketData\Quant-System
+
+python -m trader.cli research-data-import-batch `
+  --source-dir D:\MarketData\incoming\actions `
+  --vendor norgate `
+  --kind corporate_actions `
+  --coverage-start 1993-01-22 `
+  --coverage-end 2025-12-31 `
+  --root D:\MarketData\Quant-System
+
+python -m trader.cli research-data-derive --root D:\MarketData\Quant-System
+python -m trader.cli research-catalog-load `
+  --root D:\MarketData\Quant-System `
+  --price-view split_adjusted_signal `
+  --bar-size "5 mins"
 python -m trader.cli research-data-audit --root D:\MarketData\Quant-System
 ```
 
-The commands are SPY-only and offline-only. They do not read vendor
-credentials, download files, contact IBKR, evaluate a strategy, or calculate
-P&L. A failed file remains in the immutable raw archive but cannot activate a
-Parquet partition. Stop on any failed audit. Keep raw data, Parquet files, the
-SQLite catalog, and generated reports out of Git. Full provenance and revision
-rules are in `docs/RESEARCH_DATA_SPEC.md`.
+The commands are SPY-only and offline-only. They do not download files, read
+credentials, contact IBKR, or route orders. A correction creates a new immutable
+revision and invalidates descendants. Stop on any failed load/audit. Keep raw
+data, Parquet files, SQLite catalogs, and reports out of Git. Full provenance,
+coverage, and revision rules are in `docs/RESEARCH_DATA_SPEC.md`.
 
 ## SPY Research Backtest
 
 ```bash
-python -m trader.cli research-backtest --symbol SPY --short-window 5 --long-window 20
-python -m trader.cli research-backtest --symbol SPY --spread-bps 2 --slippage-bps 1 --minimum-commission 1.00
+python -m trader.cli research-backtest --symbol SPY --catalog-root D:\MarketData\Quant-System --short-window 5 --long-window 20
+python -m trader.cli research-backtest --symbol SPY --catalog-root D:\MarketData\Quant-System --sizing-mode target_allocation --target-allocation-pct 100
 ```
 
 Expected behavior:
 
 - opens no broker socket and imports no broker or execution module
-- remains SPY-only, long-only, fixed positive integer quantity
-- evaluates crossover signals only after completed bar closes
-- simulates each strategy fill at the next bar open
-- applies explicit spread, slippage, and commission assumptions
-- records fills, closed trades, cash, position, equity, P&L, drawdown, turnover,
-  benchmark return, win rate, and exposure
+- loads only passing active catalog revisions: split-adjusted five-minute signals,
+  raw five-minute execution bars, and daily total-return benchmark
+- uses the same versioned FLAT/LONG SPY policy as alpha shadow
+- emits a shadow BUY only on the policy's `ENTER_LONG` transition; `HOLD_LONG`
+  stays HOLD and cannot create a repeated shadow trade plan
+- remains SPY-only and long-only; supports fixed integer or unlevered target sizing
+- creates price-protected `LMT DAY` simulations on the next bar, then applies
+  trade-through, tick, participation, partial-fill, and DAY-cancel rules
+- applies splits/dividends and explicit spread, slippage, and commission costs
+- records orders, fills, trades, capital events, daily returns, portfolio state,
+  base/2x/3x costs, P&L, risk metrics, turnover, exposure, and benchmark-relative
+  results
+- leaves annualized metrics unavailable until at least 30 completed daily
+  observations exist
 - writes `reports/research_backtest_<timestamp>.json` and `.md`
 - updates `reports/latest_research_backtest.json` and `.md`
 - reports `promotion_eligible=false`, `submitted_orders=false`, and
   `order_api_invoked=false`
 
-This command is an in-sample simulation core. Do not use it to promote a signal
-or unlock paper automation. Review `docs/RESEARCH_BACKTEST_SPEC.md` and use the
-separate chronological validation command below.
+Do not use a standalone result to promote a signal or unlock paper automation.
+Review `docs/RESEARCH_BACKTEST_SPEC.md`.
 
-## SPY Walk-forward Research
+## Preregistered SPY Experiment
 
-Use a dataset long enough to keep training, each next-period validation fold,
-and the final holdout non-overlapping. The defaults require at least `1,000`
-bars (`500 + 3*100 + 200`):
+The committed specification declares candidates `5:20,10:30,20:50`, training
+2016-2018, annual validation 2019-2023, and untouched holdout 2024-2025. Run only
+development first:
 
-```bash
-python -m trader.cli research-walk-forward \
-  --symbol SPY \
-  --window-pairs 5:20,10:30,20:50 \
-  --fold-count 3 \
-  --minimum-train-bars 500 \
-  --validation-bars 100 \
-  --holdout-bars 200 \
-  --minimum-closed-trades 1
+```powershell
+python -m trader.cli research-experiment-run `
+  --spec research/experiments/spy_sma_2016_2025_v1.json `
+  --phase development `
+  --catalog-root D:\MarketData\Quant-System
 ```
 
-Acceptance evidence:
+Development must not load 2024-2025 or create holdout-access evidence. Review all
+folds, trials, costs, lineage, and selected parameters before the one-time final
+phase. When explicitly authorized to consume the holdout:
 
-- every fold is anchored and trains only on bars before its validation segment
-- each fold retains every predeclared training candidate and selects without
-  using its next-period validation bars
-- indicator warmup bars may precede a validation segment, but cannot generate
-  fills or equity observations
-- the final holdout is fingerprinted before selection, excluded from the full
-  development selection, and evaluated once per report
-- dataset, development, holdout, and research-spec fingerprints are recorded
-- `broker_contacted=false`, `submitted_orders=false`,
-  `order_api_invoked=false`, and `promotion_eligible=false`
+```powershell
+python -m trader.cli research-experiment-run `
+  --spec research/experiments/spy_sma_2016_2025_v1.json `
+  --phase final_holdout `
+  --confirmation ACCESS_FINAL_HOLDOUT_ONCE `
+  --catalog-root D:\MarketData\Quant-System
+```
 
-Treat the holdout as consumed after the first recorded evaluation. The program
-cannot prevent deletion of evidence or operator reruns, so even a completed
-report requires independent research review and cannot unlock paper execution.
-See `docs/RESEARCH_VALIDATION_SPEC.md`.
+The catalog records access before reading the final period. Any access attempt
+consumes that experiment, including data or simulation failure. A passing report
+may set `research_review_ready=true` only when all preregistered validation,
+2x-cost, holdout-return, Deflated Sharpe, drawdown, and lineage gates pass. It
+still reports `promotion_eligible=false`. See
+`docs/RESEARCH_VALIDATION_SPEC.md` and `docs/FLAGSHIP_SPY_AUTONOMY.md`.
 
 ## Offline Strategy Contract
 

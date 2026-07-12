@@ -22,9 +22,9 @@ The current project is infrastructure only. It must support research, signal gen
 - Offline data commands must not import broker clients or contact IBKR.
 - Backtest data adapter commands must remain broker-free and must not evaluate strategies, simulate orders, or compute P&L.
 - Backtest engine skeleton commands must remain broker-free and must not evaluate strategies, simulate orders, or calculate P&L until explicitly approved in a future milestone.
-- `research-backtest` is the separately approved broker-free SPY research simulator. It may evaluate the documented moving-average crossover, simulate next-bar fills, apply explicit costs, maintain portfolio accounting, and calculate P&L. It must not import broker or execution modules, contact IBKR, invoke order APIs, expand beyond SPY, or report promotion eligibility before walk-forward and sealed out-of-sample validation are implemented.
-- `research-walk-forward` may run predeclared SPY parameter candidates over anchored chronological folds and one logically sealed final holdout. It must retain every training trial, keep validation and holdout data out of their respective selection steps, evaluate the holdout at most once per report, disclose that operator reruns cannot be prevented, and remain non-promoting.
-- Research data-store commands must remain offline-only, SPY-only, and broker-free. They may archive licensed Massive aggregate flat files, create immutable Parquet revisions, maintain a local SQLite lineage catalog, and audit active partitions. They must never download data implicitly, read credentials, contact IBKR, evaluate strategies, calculate P&L, or route orders. Failed quality gates must not activate curated partitions.
+- `research-backtest` is the approved broker-free SPY simulator. Operator runs must load passing active catalog revisions: split-adjusted five-minute bars for signals, raw five-minute bars for simulated execution, and the daily total-return benchmark. It may use the shared SPY target-state policy, simulate price-protected `LMT DAY` orders, partial fills, cancellations, capital events, explicit costs, portfolio accounting, and P&L. It must not import broker or execution modules, contact IBKR, invoke order APIs, expand beyond SPY, or report automatic promotion eligibility.
+- `research-walk-forward` may run predeclared SPY candidates over chronological folds, but tracked `research-experiment-run` is the authoritative final-holdout gate. Development must not load holdout dates. Final-holdout access requires the exact preregistered confirmation and creates one append-only catalog access row. A consumed experiment must never be rerun or tuned against.
+- Research data-store commands must remain offline-only, SPY-only, and broker-free. They may run an operator-supplied vendor bake-off, archive licensed Massive or approved daily/action exports, create immutable raw and derived Parquet revisions, maintain catalog-v2 lineage and experiment records, and load only passing active revisions. They must never download data implicitly, read credentials, contact IBKR, route orders, or activate failed/incomplete partitions.
 - Strategy interface scaffold commands must remain broker-free and must not generate real signals, simulate orders, or calculate P&L until explicitly approved in a future milestone.
 - Strategy runner commands must remain inert/no-op until a future milestone explicitly approves real signal generation. They must not generate orders, simulate fills, calculate P&L, or contact brokers.
 - Offline stress tests may generate synthetic fixture data only and must remain broker-free.
@@ -35,8 +35,10 @@ The current project is infrastructure only. It must support research, signal gen
 - Paper readiness orchestration may contact IBKR through read-only broker, account-summary, and historical-data requests only. It must run stages sequentially, require a real broker account summary, reject mock fallback as readiness success, keep `ALLOW_PAPER_ORDERS=false`, report `submitted_orders=false`, and keep direct futures out of scope.
 - Data-quality gate commands must remain broker-free and local-file-only. They may fail or warn on snapshot quality, but they must not contact IBKR, evaluate signals, generate order intents, simulate fills, compute P&L, or enable direct futures.
 - Evaluator comparison commands must remain broker-free and diagnostic-only. They may compare approved analytical condition counts across parameter candidates, but they must not rank trade recommendations, optimize P&L, generate trading signals, create order intents, simulate fills, route orders, or contact brokers.
-- `paper-order-smoke` is the only current production command allowed to call IBKR paper order APIs. It must require `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`, `ALLOW_LIVE_ORDERS=false`, `IBKR_HOST=127.0.0.1`, `IBKR_PORT=7497`, `IBKR_CLIENT_ID=21`, explicit confirmation, SPY only, quantity `1`, STK/SMART/USD, `LMT`, `DAY`, max notional `$1,000`, and no live route. Keep the existing `PaperExecutor` refusing submissions for all normal router paths.
-- `alpha-shadow-daemon-summary` must remain offline-only. It may read ignored local `alpha_shadow_daemon` reports and heartbeat files, but it must not contact IBKR, enable paper orders, invoke order APIs, generate order intents, calculate P&L, or expand commodity execution.
+- `paper-order-smoke` is the only current production module allowed to call IBKR paper order APIs. It must require `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`, `ALLOW_LIVE_ORDERS=false`, localhost, paper port `7497` or `4002`, its dedicated client ID, explicit confirmation, SPY only, quantity `1`, STK/SMART/USD, `LMT`, `DAY`, max notional `$1,000`, and no live route. Keep the normal `PaperExecutor` refusing submissions.
+- `alpha-shadow-run` must assemble complete cached XNYS sessions with the current completed live-bar prefix, prove overlap or structural boundary agreement, and apply freshness only to the newest current-live bar. It must fail closed on forming bars, gaps, conflicting overlaps, stale current data, or missing prior-session evidence.
+- `alpha-shadow-daemon-summary` must remain offline-only. Five clean strict-live sessions on five distinct XNYS dates with stable release/config/strategy fingerprints unlock paper-daemon implementation work. Ten clean sessions across at least five dates and opening, midday, and closing windows unlock engineering-pilot eligibility. Delayed sessions never count.
+- Production `placeOrder` and `cancelOrder` text is allowlisted only to `src/trader/execution/paper_order_smoke.py`; `reqGlobalCancel` is forbidden throughout `src`.
 - Do not commit `.env`, secrets, account numbers, API credentials, tokens, or sensitive logs.
 - Missing or invalid config must fail closed.
 
@@ -50,7 +52,7 @@ signal -> trade plan -> risk validation -> execution router -> simulator or pape
 
 Strategy modules may emit `Signal` objects only. Strategy code must not import from `trader.broker` or `trader.execution`, and it must never call broker execution code directly.
 
-All execution attempts must pass through risk and `trader.execution.router`. The router may use the simulator in this phase. The paper executor is a refusing stub. There is no live executor.
+Normal execution attempts must pass through risk and `trader.execution.router`. The router may use the simulator in this phase and its paper executor remains a refusing stub. The separately gated `paper-order-smoke` module is the only production order-API exception. There is no live executor or autonomous paper daemon.
 
 ## Layout
 
@@ -77,19 +79,19 @@ python -m pip install -e ".[dev]"
 Run tests:
 
 ```bash
-pytest
+python -m pytest -p no:cacheprovider
 ```
 
 Run lint:
 
 ```bash
-ruff check .
+python -m ruff check --no-cache src tests scripts
 ```
 
 Optional type check:
 
 ```bash
-mypy src
+python -m mypy src
 ```
 
 Run safety preflight:
@@ -142,6 +144,24 @@ scripts/run-alpha-shadow-run.sh
 python -m trader.cli alpha-shadow-daemon-summary --report-glob='reports/alpha_shadow_daemon_*.json' --min-clean-sessions 5 --max-report-age-hours 168 --require-same-commit true
 ```
 
+Run broker-free SPY research infrastructure only with local licensed files:
+
+```bash
+python -m trader.cli research-data-bakeoff --manifest <local-manifest.json>
+python -m trader.cli research-data-import-batch --source-dir <licensed-files> --vendor massive --kind minute_bars
+python -m trader.cli research-data-derive
+python -m trader.cli research-catalog-load --price-view split_adjusted_signal
+python -m trader.cli research-backtest --symbol SPY
+python -m trader.cli research-experiment-run --spec research/experiments/spy_sma_2016_2025_v1.json --phase development
+```
+
+Run repository safety scans:
+
+```bash
+python scripts/check_order_api_allowlist.py
+python scripts/check_no_sensitive_artifacts.py
+```
+
 Run the gated paper-order smoke rehearsal only after a passing alpha shadow run:
 
 ```bash
@@ -155,8 +175,11 @@ ALLOW_PAPER_ORDERS=true scripts/run-paper-order-smoke.sh
 - Safety boundaries remain intact.
 - Strategy code stays pure and broker-free.
 - Tests are added or updated for changed behavior.
-- `pytest` passes.
-- `ruff check .` passes.
+- `python -m pytest -p no:cacheprovider` passes.
+- `python -m ruff check --no-cache src tests scripts` passes.
+- `python -m mypy src` passes.
+- `git diff --check` passes.
+- Global order-API and sensitive-artifact scans pass.
 - CLI commands touched by the change are run.
 - Docs are updated when workflow, config, or safety behavior changes.
 - Broker connectivity changes prove clean disconnects, masked account output, no order routing, and continued paper-executor refusal.
