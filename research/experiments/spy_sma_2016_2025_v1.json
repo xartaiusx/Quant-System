@@ -1,0 +1,48 @@
+{
+  "experiment_id": "spy-sma-2016-2025-v1",
+  "hypothesis_version": "1.0.0",
+  "symbol": "SPY",
+  "strategy_name": "spy_sma_target_state",
+  "strategy_version": "1.0.0",
+  "candidates": [
+    {
+      "short_window": 5,
+      "long_window": 20
+    },
+    {
+      "short_window": 10,
+      "long_window": 30
+    },
+    {
+      "short_window": 20,
+      "long_window": 50
+    }
+  ],
+  "training_start": "2016-01-01",
+  "training_end": "2018-12-31",
+  "validation_years": [
+    2019,
+    2020,
+    2021,
+    2022,
+    2023
+  ],
+  "holdout_start": "2024-01-01",
+  "holdout_end": "2025-12-31",
+  "minimum_closed_trades": 1,
+  "sizing_mode": "target_allocation",
+  "quantity": 1,
+  "target_allocation_pct": 100,
+  "starting_cash": 100000,
+  "spread_bps": 2,
+  "slippage_bps": 1,
+  "commission_per_share": 0.005,
+  "minimum_commission": 1.0,
+  "tick_size": 0.01,
+  "limit_buffer_bps": 0,
+  "max_volume_participation": 0.01,
+  "required_positive_validation_years": 4,
+  "minimum_dsr_probability": 0.95,
+  "selection_rule": "total_return_minus_drawdown",
+  "final_holdout_confirmation": "ACCESS_FINAL_HOLDOUT_ONCE"
+}

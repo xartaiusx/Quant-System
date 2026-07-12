@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -76,6 +77,7 @@ def shadow_report(
         history_snapshot_written=True,
         history_load_completed=True,
         data_quality_completed=True,
+        data_quality_status_by_symbol={"SPY": "passed"},
         signal_evaluation_completed=True,
         trade_plan_completed=True,
         risk_completed=True,
@@ -83,6 +85,7 @@ def shadow_report(
         source_bar_timestamp_by_symbol={
             "SPY": (timestamp or now()).isoformat(),
         },
+        strategy_parameter_fingerprint="sha256:strategy",
         broker_contacted=True,
         simulator_routed=True,
         final_status=AlphaShadowRunStatus.COMPLETED
@@ -95,8 +98,10 @@ def shadow_report(
 
 def test_alpha_shadow_daemon_runs_clean_cycles(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("trader.alpha_shadow_daemon._current_commit_sha", lambda: "abc123")
+    monkeypatch.setattr("trader.alpha_shadow_daemon._git_worktree_clean", lambda: True)
     seen_campaigns: list[str | None] = []
     sleeps: list[float] = []
+    selected_request = request(tmp_path)
 
     def fake_shadow(
         _config: TraderConfig,
@@ -107,7 +112,7 @@ def test_alpha_shadow_daemon_runs_clean_cycles(tmp_path: Path, monkeypatch) -> N
 
     report = run_alpha_shadow_daemon(
         config(),
-        request(tmp_path),
+        selected_request,
         journal=Journal(tmp_path / "reports"),
         alpha_shadow_runner=fake_shadow,
         sleep_fn=sleeps.append,
@@ -118,7 +123,15 @@ def test_alpha_shadow_daemon_runs_clean_cycles(tmp_path: Path, monkeypatch) -> N
     assert report.final_status == AlphaShadowDaemonStatus.COMPLETED_WITH_WARNINGS
     assert report.cycle_count == 2
     assert report.clean_cycle_count == 2
-    assert report.graduation_ready is True
+    assert report.session_evidence_ready is True
+    assert report.graduation_ready is False
+    assert report.release_fingerprint == "git:abc123"
+    assert report.release_worktree_clean is True
+    assert report.config_fingerprint is not None
+    assert report.strategy_fingerprint is not None
+    assert report.data_fingerprint is not None
+    assert report.trading_dates == ["2026-07-06"]
+    assert report.coverage_windows == ["opening"]
     assert report.submitted_orders is False
     assert report.paper_orders_enabled is False
     assert report.order_api_invoked is False
@@ -128,6 +141,34 @@ def test_alpha_shadow_daemon_runs_clean_cycles(tmp_path: Path, monkeypatch) -> N
     ]
     assert sleeps == [1.0]
     assert Path(report.heartbeat_path).exists()
+    assert Path(selected_request.heartbeat_path).exists()
+    assert report.heartbeat_path != selected_request.heartbeat_path
+    assert json.loads(Path(report.heartbeat_path).read_text())["campaign_id"] == CAMPAIGN_ID
+
+
+def test_alpha_shadow_daemon_rejects_reused_campaign_heartbeat(tmp_path: Path) -> None:
+    selected_request = request(tmp_path, max_cycles=1)
+    Path(selected_request.heartbeat_path).parent.mkdir(parents=True, exist_ok=True)
+    first = run_alpha_shadow_daemon(
+        config(),
+        selected_request,
+        journal=Journal(tmp_path / "reports"),
+        alpha_shadow_runner=lambda _config, item: shadow_report(item),
+        now_fn=now,
+    )
+
+    second = run_alpha_shadow_daemon(
+        config(),
+        selected_request,
+        journal=Journal(tmp_path / "reports"),
+        alpha_shadow_runner=lambda _config, item: shadow_report(item),
+        now_fn=now,
+    )
+
+    assert first.cycle_count == 1
+    assert second.ok is False
+    assert second.cycle_count == 0
+    assert "campaign-specific heartbeat already exists" in " ".join(second.errors)
 
 
 def test_alpha_shadow_daemon_halts_on_kill_switch(tmp_path: Path) -> None:
@@ -234,7 +275,8 @@ def test_alpha_shadow_daemon_markdown_rendering(tmp_path: Path) -> None:
 
     assert "# Read-only IBKR Alpha Shadow Daemon" in markdown
     assert "alpha-shadow-daemon" in markdown
-    assert "Graduation ready: `True`" in markdown
+    assert "Session evidence ready: `True`" in markdown
+    assert "Graduation ready: `False`" in markdown
     assert "Order API invoked: `False`" in markdown
 
 

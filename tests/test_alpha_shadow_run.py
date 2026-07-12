@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
-from trader.alpha_shadow import run_alpha_shadow_run
+from trader.alpha_shadow import _shadow_signals, run_alpha_shadow_run
 from trader.backtest.data_adapter import build_backtest_feed
 from trader.config import TraderConfig
 from trader.models import (
@@ -28,6 +28,9 @@ from trader.models import (
     ManagedAccountInfo,
     PaperReadinessRunStage,
     PaperReadinessStageStatus,
+    ShadowWarmupAssemblyReport,
+    SignalDirection,
+    SPYPolicyTransition,
 )
 from trader.reporting.reports import markdown_summary
 from trader.strategy.signal_evaluation import build_analytical_signal_evaluation_report
@@ -96,11 +99,16 @@ def account_report(*, verified: bool = True) -> BrokerDiagnosticReport:
     return report.model_copy(update={"account_snapshot": snapshot})
 
 
-def bars(*, rising: bool = True) -> list[HistoricalLoadedBar]:
+def bars(*, rising: bool = True, steady_long: bool = False) -> list[HistoricalLoadedBar]:
     start = datetime(2026, 5, 18, 13, tzinfo=UTC)
     loaded: list[HistoricalLoadedBar] = []
     for index in range(25):
-        price = Decimal("500") + Decimal(index if rising else 25 - index)
+        if steady_long:
+            price = Decimal("500") + Decimal(index)
+        elif rising:
+            price = Decimal("520") if index == 24 else Decimal("500")
+        else:
+            price = Decimal("480") if index == 24 else Decimal("500")
         timestamp = start + timedelta(minutes=5 * index)
         loaded.append(
             HistoricalLoadedBar(
@@ -124,8 +132,12 @@ def bars(*, rising: bool = True) -> list[HistoricalLoadedBar]:
     return loaded
 
 
-def loader_report(*, rising: bool = True) -> HistoricalLoaderReport:
-    loaded_bars = bars(rising=rising)
+def loader_report(
+    *,
+    rising: bool = True,
+    steady_long: bool = False,
+) -> HistoricalLoaderReport:
+    loaded_bars = bars(rising=rising, steady_long=steady_long)
     load_request = HistoricalSnapshotLoadRequest(
         symbols=["SPY"],
         bar_size="5 mins",
@@ -255,6 +267,23 @@ def patch_success_stages(monkeypatch, *, rising: bool = True) -> HistoricalLoade
         lambda *args, **kwargs: (stage("history_load"), source_loader),
     )
     monkeypatch.setattr(
+        "trader.alpha_shadow._run_warmup_stage",
+        lambda *args, **kwargs: (
+            stage("shadow_warmup_assembly"),
+            ShadowWarmupAssemblyReport(
+                ok=True,
+                prior_complete_session_dates=["2026-05-15"],
+                current_session_date="2026-05-18",
+                current_live_bar_count=25,
+                assembled_bar_count=103,
+                boundary_agreement_passed=True,
+                data_fingerprint="sha256:warmup",
+                final_status="completed",
+            ),
+            source_loader,
+        ),
+    )
+    monkeypatch.setattr(
         "trader.alpha_shadow._run_data_quality_stage",
         lambda *args, **kwargs: (stage("data_quality_gate"), data_quality_report()),
     )
@@ -275,8 +304,16 @@ def test_alpha_shadow_run_completed_with_simulated_fill(monkeypatch) -> None:
     assert report.broker_connected is True
     assert report.account_summary_verified is True
     assert report.data_quality_completed is True
+    assert report.warmup_assembly_completed is True
+    assert report.warmup_boundary_agreement_passed is True
+    assert report.warmup_data_fingerprint == "sha256:warmup"
     assert report.signal_evaluation_completed is True
     assert report.shadow_signal_count == 1
+    assert report.strategy_name == "spy_sma_target_state"
+    assert report.strategy_version == "1.0.0"
+    assert report.strategy_parameter_fingerprint is not None
+    assert report.strategy_decision is not None
+    assert report.target_state == "long"
     assert report.trade_plan_count == 1
     assert report.risk_approved_count == 1
     assert report.simulated_fill_count == 1
@@ -296,6 +333,18 @@ def test_alpha_shadow_run_completed_with_warning_for_hold_signal(monkeypatch) ->
     assert report.trade_plan_count == 0
     assert report.simulation_result_count == 0
     assert "shadow signal did not produce a trade plan" in report.warnings
+
+
+def test_alpha_shadow_steady_long_state_does_not_repeat_buy() -> None:
+    signals, decision = _shadow_signals(
+        loader_report(steady_long=True),
+        request(),
+    )
+
+    assert decision is not None
+    assert decision.transition == SPYPolicyTransition.HOLD_LONG
+    assert decision.target_state == "long"
+    assert signals[0].direction == SignalDirection.HOLD
 
 
 def test_alpha_shadow_run_rejects_enabled_paper_orders_before_broker(monkeypatch) -> None:

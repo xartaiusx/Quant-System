@@ -18,6 +18,7 @@ from trader.models import (
     HistoricalLoaderReport,
     HistoricalLoadResult,
     HistoricalReadinessReport,
+    HistoricalReadinessStatus,
     HistoricalReadinessSummary,
     HistoricalSnapshotLoadRequest,
 )
@@ -80,6 +81,127 @@ def build_data_quality_gate_report(
         warnings=warnings,
         errors=list(dict.fromkeys(errors)),
         final_status=final_status,
+    )
+
+
+def build_data_quality_gate_from_loader(
+    request: DataQualityGateRequest,
+    loader_report: HistoricalLoaderReport,
+) -> DataQualityGateReport:
+    """Evaluate an already assembled offline loader report without rereading snapshots."""
+
+    results: list[DataQualityGateSymbolResult] = []
+    for symbol in request.symbols:
+        load_result = next(
+            (item for item in loader_report.results if item.symbol == symbol),
+            None,
+        )
+        summary = load_result.summary if load_result is not None else None
+        readiness_summary = _assembled_readiness_summary(symbol, request, summary)
+        issues = _quality_issues(symbol, request, summary, readiness_summary)
+        errors = [issue.message for issue in issues if issue.severity == "error"]
+        warnings = [issue.message for issue in issues if issue.severity == "warning"]
+        status = (
+            DataQualityGateStatus.FAILED
+            if errors
+            else DataQualityGateStatus.PASSED_WITH_WARNINGS
+            if warnings
+            else DataQualityGateStatus.PASSED
+        )
+        results.append(
+            DataQualityGateSymbolResult(
+                symbol=symbol,
+                status=status,
+                bars_count=summary.bars_count if summary else 0,
+                zero_volume_bars=readiness_summary.zero_volume_bars,
+                zero_volume_sample_timestamps=(
+                    readiness_summary.zero_volume_sample_timestamps
+                ),
+                average_volume=summary.average_volume if summary else None,
+                average_dollar_volume=(
+                    summary.average_dollar_volume if summary else None
+                ),
+                duplicate_timestamps_count=(
+                    summary.duplicate_timestamps_count if summary else 0
+                ),
+                missing_gap_count=summary.missing_gap_count if summary else 0,
+                malformed_line_count=summary.malformed_line_count if summary else 0,
+                invalid_ohlc_count=summary.invalid_ohlc_count if summary else 0,
+                negative_volume_count=summary.negative_volume_count if summary else 0,
+                stale_snapshot=False,
+                load_status=str(load_result.load_status) if load_result else "missing",
+                readiness_status=str(readiness_summary.readiness_status),
+                snapshot_path=summary.bars_path if summary else None,
+                manifest_path=summary.manifest_path if summary else None,
+                issues=issues,
+                warnings=warnings,
+                errors=errors,
+            )
+        )
+    errors = [error for result in results for error in result.errors]
+    warnings = list(
+        dict.fromkeys(
+            [
+                "No broker contacted; assembled warmup data-quality gate only",
+                *loader_report.warnings,
+                *[warning for result in results for warning in result.warnings],
+            ]
+        )
+    )
+    final_status = _final_status(results)
+    return DataQualityGateReport(
+        ok=final_status != DataQualityGateStatus.FAILED,
+        request=request,
+        symbols_requested=request.symbols,
+        results=results,
+        readiness_final_status="assembled",
+        loader_final_status=loader_report.final_status,
+        warnings=warnings,
+        errors=list(dict.fromkeys(errors)),
+        final_status=final_status,
+    )
+
+
+def _assembled_readiness_summary(
+    symbol: str,
+    request: DataQualityGateRequest,
+    summary: HistoricalDatasetSummary | None,
+) -> HistoricalReadinessSummary:
+    return HistoricalReadinessSummary(
+        symbol=symbol,
+        requested_duration="assembled_prior_plus_current",
+        requested_bar_size=request.bar_size or "5 mins",
+        requested_what_to_show=request.what_to_show or "TRADES",
+        use_rth=1,
+        bars_count=summary.bars_count if summary else 0,
+        first_timestamp=(
+            summary.first_timestamp.isoformat()
+            if summary and summary.first_timestamp
+            else None
+        ),
+        last_timestamp=(
+            summary.last_timestamp.isoformat()
+            if summary and summary.last_timestamp
+            else None
+        ),
+        sorted_timestamps=True,
+        duplicate_timestamps_count=(
+            summary.duplicate_timestamps_count if summary else 0
+        ),
+        zero_volume_bars=summary.zero_volume_count if summary else 0,
+        zero_volume_sample_timestamps=(
+            summary.zero_volume_sample_timestamps if summary else []
+        ),
+        negative_volume_bars=summary.negative_volume_count if summary else 0,
+        invalid_ohlc_bars=summary.invalid_ohlc_count if summary else 0,
+        stale_snapshot=False,
+        readiness_status=(
+            HistoricalReadinessStatus.READY
+            if summary is not None
+            else HistoricalReadinessStatus.FAILED
+        ),
+        snapshot_path=summary.bars_path if summary else None,
+        manifest_path=summary.manifest_path if summary else None,
     )
 
 

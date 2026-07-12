@@ -2,79 +2,114 @@
 
 ## Scope
 
-`research-backtest` is a broker-free SPY-only research simulator. It reads
-ignored local historical snapshots and never imports broker or execution
-modules, opens an IBKR socket, invokes order APIs, or submits an order.
+`research-backtest` is a broker-free, SPY-only simulation command. It loads only
+passing active catalog-v2 revisions and never imports broker/execution modules,
+opens an IBKR socket, invokes an order API, or submits an order. It is an
+accounting and hypothesis-testing tool, not proof of profitability.
 
-This milestone is an accounting and simulation foundation, not evidence that a
-strategy is profitable. `research-walk-forward` supplies the next validation
-layer, but neither command promotes a strategy automatically.
+## Shared Strategy Policy
 
-## Signal And Timing
+Backtest and alpha shadow use the same versioned `SPYSmaPolicy`. The policy
+reads completed split-adjusted bars and returns a target state:
 
-- Strategy: long-only fast/slow simple moving-average crossover.
-- Entry signal: fast average crosses from at or below the slow average to above it.
-- Exit signal: fast average crosses from at or above the slow average to below it.
-- Signals use completed bar closes only.
-- A strategy signal can fill no earlier than the next bar open.
-- The final bar cannot fill a new signal because no next bar exists.
-- Optional end-of-test liquidation is labeled separately and uses the final close.
-- Shorts, leverage, pyramiding, fractional quantity, and multi-symbol portfolios
-  are out of scope.
+- `LONG` when the fast simple moving average is above the slow average;
+- `FLAT` otherwise.
 
-## Fill And Cost Model
+The policy reports its strategy version and parameter fingerprint. It does not
+emit broker orders. The simulator trades only when current simulated position
+differs from the target, removing the former mismatch where research traded
+crossings while shadow emitted BUY on every `fast > slow` observation.
 
-The input is OHLCV bar data, not a quote or order-book feed. The spread is
-therefore an explicit model assumption rather than observed bid/ask evidence.
+## Data And Timing
 
-- Buy fill: next open plus half the configured spread plus configured slippage.
-- Sell fill: next open minus half the configured spread and configured slippage.
-- Commission: maximum of per-share commission and minimum commission per fill.
-- Quantity: fixed positive integer, default `1`.
-- Default full spread: `2` basis points.
-- Default slippage: `1` basis point per side.
-- Default commission: `$0.005` per share with a conservative `$1.00` minimum.
+Every run loads three independent catalog views for the same requested dates:
 
-These defaults are reproducible research assumptions, not a claim about the
-operator's actual IBKR pricing tier or future execution quality.
+- split-adjusted five-minute bars for signals;
+- raw five-minute bars for simulated execution;
+- split-and-dividend-adjusted daily benchmark observations.
 
-## Accounting
+Signal and execution timestamps must align exactly. Policy decisions use a
+completed bar close. A new order may be evaluated no earlier than the next raw
+bar, and the final-bar signal cannot fill. Warmup observations may initialize
+indicators but cannot create fills, positions, P&L, or equity records for an
+evaluation segment.
 
-The simulator records:
+## Limit-Order Model
 
-- every signal and next-bar fill;
-- cash and integer SPY position after each fill;
-- mark-to-market equity after each bar;
-- closed-trade gross and net P&L;
-- commissions, modeled spread cost, and modeled slippage cost;
-- total return, SPY buy-and-hold benchmark return, maximum drawdown, turnover,
-  win rate, and market exposure;
-- full JSON and Markdown evidence under ignored `reports/` paths.
+The intended paper order is SPY `LMT DAY`, so the simulator does not assume an
+unconditional market-like next-open fill. It constructs a synthetic quote from
+the configured spread around the raw reference price, adds the configured limit
+buffer, rounds to the one-cent tick, and fills only when the bar trades through
+the limit. Available fill size is capped by configured bar-volume participation.
 
-Short samples are not annualized and do not receive Sharpe-ratio claims. A
-single in-sample result must not be used to select or promote parameters.
+The model records:
+
+- submitted, filled, partially filled, canceled, and DAY-expired order states;
+- reference, limit, and fill prices;
+- spread, slippage, tick-rounding, and commission costs;
+- remaining quantity and cancellation reason;
+- an end-of-test accounting liquidation labeled separately when enabled.
+
+OHLCV bars cannot reconstruct quote sequence, queue position, hidden liquidity,
+or the intrabar path. Fill results are deterministic assumptions and must be
+stress-tested rather than treated as observed execution quality.
+
+## Sizing And Accounting
+
+Two sizing modes are supported:
+
+- `fixed_quantity`: positive integer quantity, default `1`, for engineering
+  tests and parity fixtures;
+- `target_allocation`: an unlevered integer share target using at most 100% of
+  available simulated equity.
+
+The simulator is long-only and maintains cash, integer quantity, cost basis,
+mark-to-market equity, and closed trades. Splits change quantity and per-share
+cost basis without creating economic P&L. Cash dividends are credited explicitly
+for positions held into the ex-date. Shorts, leverage, fractional shares,
+multi-symbol portfolios, options, futures, and broker execution are out of scope.
+
+## Cost Scenarios And Metrics
+
+Each report includes base, 2x, and 3x spread/slippage/commission scenarios. The
+default base assumptions remain reproducible inputs, not claims about an IBKR
+pricing tier or future fills:
+
+- full spread: 2 basis points;
+- slippage: 1 basis point per side;
+- commission: $0.005 per share with a $1.00 minimum;
+- tick size: $0.01;
+- maximum volume participation: 1%.
+
+Reports include orders, fills, trades, capital events, daily returns, cash,
+position, equity, net/gross P&L, CAGR when supported, annualized volatility,
+Sharpe, Sortino, Calmar, maximum drawdown and duration, turnover, exposure,
+win rate, trial count, and benchmark-relative results. Unsupported statistics
+remain unavailable rather than being manufactured from short samples. CAGR,
+annualized volatility, Sharpe, Sortino, and Calmar require at least 30 completed
+daily observations.
 
 ## Promotion Boundary
 
-Core reports must contain:
+Every report preserves:
 
 ```text
 promotion_eligible=false
-evaluation_scope=in_sample_core
-non_promotion_reason=walk_forward_and_sealed_oos_not_completed
 broker_contacted=false
 order_routing_enabled=false
 submitted_orders=false
 order_api_invoked=false
 ```
 
-Chronological selection and final-holdout rules are specified in
-`docs/RESEARCH_VALIDATION_SPEC.md`. Paper-daemon design remains blocked by
-independent research review and the separate strict-live shadow-session gate.
+A standalone result cannot select or promote parameters. The authoritative
+chronological and final-holdout controls are in
+`docs/RESEARCH_VALIDATION_SPEC.md`. Strategy-driven paper alpha remains blocked
+until both `research_review_ready=true` and the independent strict-live
+operational gate are satisfied.
 
 ## References
 
-- Backtest-overfitting framework: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253
-- FINRA algorithmic testing and validation guidance: https://www.finra.org/rules-guidance/notices/15-09
-- SEC automated pre-trade risk-control principles: https://www.sec.gov/rules-regulations/staff-guidance/trading-markets-frequently-asked-questions/divisionsmarketregfaq-0
-- IBKR historical-data API guidance: https://www.interactivebrokers.com/campus/ibkr-quant-news/how-to-retrieve-equity-data-through-the-python-api/
+- Probability of Backtest Overfitting: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253
+- Deflated Sharpe Ratio: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551
+- FINRA testing and validation practices: https://www.finra.org/rules-guidance/notices/15-09
+- IBKR paper-account limitations: https://www.interactivebrokers.com/campus/glossary-terms/paper-trading-account/

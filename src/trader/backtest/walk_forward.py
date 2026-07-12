@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
 from trader.backtest.data_adapter import summarize_backtest_feed
@@ -16,6 +17,7 @@ from trader.models import (
     ResearchBacktestReport,
     ResearchBacktestRequest,
     ResearchCandidateTrial,
+    ResearchCorporateAction,
     ResearchWalkForwardFold,
     ResearchWalkForwardReport,
     ResearchWalkForwardRequest,
@@ -61,18 +63,31 @@ def parse_research_candidates(raw: str) -> list[ResearchWindowCandidate]:
 def build_research_walk_forward_report(
     feed: BacktestDataFeed,
     request: ResearchWalkForwardRequest,
+    *,
+    execution_feed: BacktestDataFeed | None = None,
+    benchmark_feed: BacktestDataFeed | None = None,
+    corporate_actions: list[ResearchCorporateAction] | None = None,
 ) -> ResearchWalkForwardReport:
     """Run anchored folds, select on development data, then touch holdout once."""
 
-    warnings = list(feed.warnings)
-    errors = list(feed.errors)
+    selected_execution_feed = execution_feed or feed
+    warnings = list(dict.fromkeys([*feed.warnings, *selected_execution_feed.warnings]))
+    errors = list(dict.fromkeys([*feed.errors, *selected_execution_feed.errors]))
     bars = _symbol_bars(feed, request.symbol)
+    execution_bars = _symbol_bars(selected_execution_feed, request.symbol)
+    timestamps_aligned = [bar.timestamp for bar in bars] == [
+        bar.timestamp for bar in execution_bars
+    ]
     if feed.feed_status != BacktestFeedStatus.READY:
         errors.append("source feed status must be ready")
+    if selected_execution_feed.feed_status != BacktestFeedStatus.READY:
+        errors.append("source execution feed status must be ready")
     if feed.symbols != [request.symbol]:
         errors.append("walk-forward research requires a SPY-only feed")
     if len(bars) != len(feed.frames):
         errors.append("every walk-forward frame must contain one SPY bar")
+    if not timestamps_aligned:
+        errors.append("SPY signal and raw execution timestamps must align exactly")
 
     required_bars = (
         request.minimum_train_bars
@@ -85,7 +100,15 @@ def build_research_walk_forward_report(
             "for train, validation folds, and holdout"
         )
     if errors:
-        return _failed_report(feed, request, warnings=warnings, errors=errors)
+        return _failed_report(
+            feed,
+            request,
+            execution_feed=selected_execution_feed,
+            benchmark_feed=benchmark_feed,
+            timestamps_aligned=timestamps_aligned,
+            warnings=warnings,
+            errors=errors,
+        )
 
     holdout_start = len(bars) - request.holdout_bars
     initial_train_end = holdout_start - request.fold_count * request.validation_bars
@@ -107,6 +130,9 @@ def build_research_walk_forward_report(
                 feed,
                 request,
                 candidate,
+                execution_feed=selected_execution_feed,
+                benchmark_feed=benchmark_feed,
+                corporate_actions=corporate_actions or [],
                 start=0,
                 end=train_end,
                 phase="fold_train",
@@ -136,6 +162,9 @@ def build_research_walk_forward_report(
             feed,
             request,
             selected_training.trial.candidate,
+            execution_feed=selected_execution_feed,
+            benchmark_feed=benchmark_feed,
+            corporate_actions=corporate_actions or [],
             start=validation_start,
             end=validation_end,
             phase="fold_validation",
@@ -166,6 +195,13 @@ def build_research_walk_forward_report(
             ok=False,
             request=request,
             feed_summary=summarize_backtest_feed(feed),
+            execution_feed_summary=summarize_backtest_feed(selected_execution_feed),
+            benchmark_feed_summary=(
+                summarize_backtest_feed(benchmark_feed)
+                if benchmark_feed is not None
+                else None
+            ),
+            signal_execution_timestamps_aligned=timestamps_aligned,
             dataset_fingerprint=dataset_fingerprint,
             development_fingerprint=development_fingerprint,
             holdout_fingerprint=holdout_fingerprint,
@@ -185,6 +221,9 @@ def build_research_walk_forward_report(
             feed,
             request,
             candidate,
+            execution_feed=selected_execution_feed,
+            benchmark_feed=benchmark_feed,
+            corporate_actions=corporate_actions or [],
             start=0,
             end=holdout_start,
             phase="full_development",
@@ -199,6 +238,13 @@ def build_research_walk_forward_report(
             ok=False,
             request=request,
             feed_summary=summarize_backtest_feed(feed),
+            execution_feed_summary=summarize_backtest_feed(selected_execution_feed),
+            benchmark_feed_summary=(
+                summarize_backtest_feed(benchmark_feed)
+                if benchmark_feed is not None
+                else None
+            ),
+            signal_execution_timestamps_aligned=timestamps_aligned,
             dataset_fingerprint=dataset_fingerprint,
             development_fingerprint=development_fingerprint,
             holdout_fingerprint=holdout_fingerprint,
@@ -220,6 +266,9 @@ def build_research_walk_forward_report(
         feed,
         request,
         selected_development.trial.candidate,
+        execution_feed=selected_execution_feed,
+        benchmark_feed=benchmark_feed,
+        corporate_actions=corporate_actions or [],
         start=holdout_start,
         end=len(bars),
         phase="sealed_holdout",
@@ -236,6 +285,13 @@ def build_research_walk_forward_report(
         ok=completed,
         request=request,
         feed_summary=summarize_backtest_feed(feed),
+        execution_feed_summary=summarize_backtest_feed(selected_execution_feed),
+        benchmark_feed_summary=(
+            summarize_backtest_feed(benchmark_feed)
+            if benchmark_feed is not None
+            else None
+        ),
+        signal_execution_timestamps_aligned=timestamps_aligned,
         dataset_fingerprint=dataset_fingerprint,
         development_fingerprint=development_fingerprint,
         holdout_fingerprint=holdout_fingerprint,
@@ -269,6 +325,9 @@ def _run_trial(
     request: ResearchWalkForwardRequest,
     candidate: ResearchWindowCandidate,
     *,
+    execution_feed: BacktestDataFeed,
+    benchmark_feed: BacktestDataFeed | None,
+    corporate_actions: list[ResearchCorporateAction],
     start: int,
     end: int,
     phase: str,
@@ -276,17 +335,30 @@ def _run_trial(
 ) -> _TrialExecution:
     warmup_start = 0 if start == 0 else max(0, start - candidate.long_window - 1)
     segment_feed = _slice_feed(feed, warmup_start, end)
+    segment_execution_feed = _slice_feed(execution_feed, warmup_start, end)
+    segment_benchmark_feed = _slice_benchmark_feed(
+        benchmark_feed,
+        start=feed.frames[start].timestamp,
+        end=feed.frames[end - 1].timestamp,
+    )
     evaluation_start_index = start - warmup_start
     backtest_request = ResearchBacktestRequest(
         symbol=request.symbol,
         short_window=candidate.short_window,
         long_window=candidate.long_window,
         quantity=request.quantity,
+        sizing_mode=request.sizing_mode,
+        target_allocation_pct=request.target_allocation_pct,
         starting_cash=request.starting_cash,
         spread_bps=request.spread_bps,
         slippage_bps=request.slippage_bps,
         commission_per_share=request.commission_per_share,
         minimum_commission=request.minimum_commission,
+        tick_size=request.tick_size,
+        limit_buffer_bps=request.limit_buffer_bps,
+        max_volume_participation=request.max_volume_participation,
+        annualization_factor=request.annualization_factor,
+        execution_model=request.execution_model,
         force_close_at_end=True,
         requested_bar_size=request.requested_bar_size,
         requested_what_to_show=request.requested_what_to_show,
@@ -298,6 +370,9 @@ def _run_trial(
     report = build_research_backtest_report(
         segment_feed,
         backtest_request,
+        execution_feed=segment_execution_feed,
+        benchmark_feed=segment_benchmark_feed,
+        corporate_actions=corporate_actions,
         evaluation_start_index=evaluation_start_index,
     )
     metrics = report.metrics
@@ -453,6 +528,35 @@ def _slice_feed(feed: BacktestDataFeed, start: int, end: int) -> BacktestDataFee
     )
 
 
+def _slice_benchmark_feed(
+    feed: BacktestDataFeed | None,
+    *,
+    start: datetime,
+    end: datetime,
+) -> BacktestDataFeed | None:
+    if feed is None:
+        return None
+    start_date = start.date()
+    end_date = end.date()
+    frames = [
+        frame
+        for frame in feed.frames
+        if start_date <= frame.timestamp.date() <= end_date
+    ]
+    if not frames:
+        return None
+    return feed.model_copy(
+        update={
+            "frames": frames,
+            "total_bars": len(frames),
+            "frame_count": len(frames),
+            "first_timestamp": frames[0].timestamp,
+            "last_timestamp": frames[-1].timestamp,
+            "missing_bars_by_symbol": {"SPY": 0},
+        }
+    )
+
+
 def _symbol_bars(feed: BacktestDataFeed, symbol: str) -> list[BacktestBar]:
     return [
         bar
@@ -490,6 +594,9 @@ def _failed_report(
     feed: BacktestDataFeed,
     request: ResearchWalkForwardRequest,
     *,
+    execution_feed: BacktestDataFeed,
+    benchmark_feed: BacktestDataFeed | None,
+    timestamps_aligned: bool,
     warnings: list[str],
     errors: list[str],
 ) -> ResearchWalkForwardReport:
@@ -497,6 +604,11 @@ def _failed_report(
         ok=False,
         request=request,
         feed_summary=summarize_backtest_feed(feed),
+        execution_feed_summary=summarize_backtest_feed(execution_feed),
+        benchmark_feed_summary=(
+            summarize_backtest_feed(benchmark_feed) if benchmark_feed is not None else None
+        ),
+        signal_execution_timestamps_aligned=timestamps_aligned,
         warnings=list(dict.fromkeys(warnings)),
         errors=list(dict.fromkeys(errors)),
         final_status=ResearchWalkForwardStatus.FAILED,

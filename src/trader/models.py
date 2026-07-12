@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, TypeVar
@@ -74,6 +74,24 @@ class SignalDirection(StrEnum):
     BUY = "buy"
     SELL = "sell"
     HOLD = "hold"
+
+
+class SPYTargetState(StrEnum):
+    """Desired long-only SPY exposure emitted by the shared SMA policy."""
+
+    FLAT = "flat"
+    LONG = "long"
+
+
+class SPYPolicyTransition(StrEnum):
+    """State transition described by one completed-bar policy decision."""
+
+    WARMUP = "warmup"
+    HOLD_FLAT = "hold_flat"
+    ENTER_LONG = "enter_long"
+    HOLD_LONG = "hold_long"
+    EXIT_LONG = "exit_long"
+    INVALID = "invalid"
 
 
 class TradeAction(StrEnum):
@@ -172,6 +190,21 @@ class ResearchBacktestStatus(StrEnum):
     FAILED = "failed"
 
 
+class ResearchSizingMode(StrEnum):
+    """Position sizing modes supported by the broker-free simulator."""
+
+    FIXED_QUANTITY = "fixed_quantity"
+    TARGET_ALLOCATION = "target_allocation"
+
+
+class ResearchOrderStatus(StrEnum):
+    """Deterministic lifecycle states for simulated LMT DAY orders."""
+
+    FILLED = "filled"
+    PARTIALLY_FILLED = "partially_filled"
+    CANCELED = "canceled"
+
+
 class ResearchWalkForwardStatus(StrEnum):
     """Broker-free walk-forward research completion states."""
 
@@ -179,11 +212,34 @@ class ResearchWalkForwardStatus(StrEnum):
     FAILED = "failed"
 
 
+class ResearchExperimentPhase(StrEnum):
+    """Preregistered research phases with distinct data-access boundaries."""
+
+    DEVELOPMENT = "development"
+    FINAL_HOLDOUT = "final_holdout"
+
+
 class ResearchDataQualityStatus(StrEnum):
     """Curated research-partition quality states."""
 
     PASSED = "passed"
     FAILED = "failed"
+
+
+class ResearchSampleFormat(StrEnum):
+    """Explicit offline file formats accepted by the vendor bake-off."""
+
+    MASSIVE_MINUTE = "massive_minute"
+    CANONICAL_OHLCV = "canonical_ohlcv"
+    CANONICAL_ACTIONS = "canonical_actions"
+
+
+class ResearchSampleKind(StrEnum):
+    """Research sample roles used by the bake-off."""
+
+    MINUTE_BARS = "minute_bars"
+    DAILY_BARS = "daily_bars"
+    CORPORATE_ACTIONS = "corporate_actions"
 
 
 class InertStrategyRunnerStatus(StrEnum):
@@ -1206,6 +1262,51 @@ class HistoricalLoaderReport(SerializableModel):
     timestamp: datetime = Field(default_factory=utc_now)
 
 
+class ShadowWarmupAssemblyReport(SerializableModel):
+    """Offline prior-session plus current-live SPY warmup evidence."""
+
+    title: str = "SPY Strict-live Warmup Assembly"
+    report_type: str = "shadow_warmup_assembly"
+    command: str = "shadow-warmup-assemble"
+    ok: bool
+    symbol: str = "SPY"
+    bar_size: str = "5 mins"
+    source_snapshot_count: int = 0
+    prior_complete_session_dates: list[str] = Field(default_factory=list)
+    current_session_date: str | None = None
+    current_live_bar_count: int = 0
+    assembled_bar_count: int = 0
+    minimum_bar_count: int = 50
+    newest_live_bar_timestamp: datetime | None = None
+    newest_live_bar_age_minutes: Decimal | None = None
+    freshness_threshold_minutes: int = 15
+    overlap_bar_count: int = 0
+    overlap_values_agree: bool = False
+    structural_boundary_agrees: bool = False
+    boundary_agreement_passed: bool = False
+    current_session_starts_at_open: bool = False
+    current_session_contiguous: bool = False
+    completed_bars_only: bool = False
+    freshness_applied_to_current_live_only: bool = True
+    data_fingerprint: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_warmup_safety(self) -> ShadowWarmupAssemblyReport:
+        if self.broker_contacted or self.order_routing_enabled:
+            raise ValueError("warmup assembly must remain offline and broker-free")
+        if self.submitted_orders or self.order_api_invoked:
+            raise ValueError("warmup assembly must not invoke order APIs")
+        return self
+
+
 class BacktestBar(SerializableModel):
     """Normalized bar prepared for future backtest data feeds."""
 
@@ -1228,6 +1329,46 @@ class BacktestBar(SerializableModel):
         if not normalized:
             raise ValueError("symbol is required")
         return normalized
+
+
+class SPYSmaDecision(SerializableModel):
+    """Broker-free completed-bar decision shared by research and shadow paths."""
+
+    symbol: str = "SPY"
+    strategy_name: str = "spy_sma_target_state"
+    strategy_version: str = "1.0.0"
+    parameter_fingerprint: str
+    short_window: int = Field(gt=0)
+    long_window: int = Field(gt=1)
+    as_of: datetime | None = None
+    available_bars: int = Field(default=0, ge=0)
+    required_bars: int = Field(default=0, ge=0)
+    warmup_complete: bool = False
+    data_valid: bool = False
+    previous_target_state: SPYTargetState | None = None
+    target_state: SPYTargetState = SPYTargetState.FLAT
+    transition: SPYPolicyTransition = SPYPolicyTransition.WARMUP
+    previous_fast_average: Decimal | None = None
+    previous_slow_average: Decimal | None = None
+    fast_average: Decimal | None = None
+    slow_average: Decimal | None = None
+    reason: str
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_spy_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized != "SPY":
+            raise ValueError("SPY SMA policy is SPY-only")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_policy_decision(self) -> SPYSmaDecision:
+        if self.short_window >= self.long_window:
+            raise ValueError("short_window must be less than long_window")
+        if self.warmup_complete and self.available_bars < self.required_bars:
+            raise ValueError("warmup_complete requires all policy bars")
+        return self
 
 
 class BacktestFeedPoint(SerializableModel):
@@ -1654,18 +1795,576 @@ class ResearchDataAuditReport(SerializableModel):
     timestamp: datetime = Field(default_factory=utc_now)
 
 
+class ResearchDataRightsEvidence(SerializableModel):
+    """No-secret operator attestation for vendor license due diligence."""
+
+    model_config = ConfigDict(frozen=True, use_enum_values=True, extra="forbid")
+
+    vendor: str
+    evidence_reference: str
+    internal_storage_allowed: bool = False
+    model_training_allowed: bool = False
+    derived_data_allowed: bool = False
+    correction_replay_available: bool = False
+    retention_after_termination_allowed: bool = False
+
+    @field_validator("vendor", "evidence_reference")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("rights evidence text fields must not be empty")
+        return normalized
+
+    @property
+    def passed(self) -> bool:
+        return all(
+            (
+                self.internal_storage_allowed,
+                self.model_training_allowed,
+                self.derived_data_allowed,
+                self.correction_replay_available,
+                self.retention_after_termination_allowed,
+            )
+        )
+
+
+class ResearchDataBakeoffSample(SerializableModel):
+    """One operator-supplied local vendor sample."""
+
+    model_config = ConfigDict(frozen=True, use_enum_values=True, extra="forbid")
+
+    sample_id: str
+    vendor: str
+    path: str
+    kind: ResearchSampleKind
+    source_format: ResearchSampleFormat
+    case_tags: list[str] = Field(default_factory=list)
+    expected_sha256: str | None = None
+    expected_rows: int | None = Field(default=None, ge=0)
+
+    @field_validator("sample_id", "vendor", "path")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("bake-off sample text fields must not be empty")
+        return normalized
+
+    @field_validator("case_tags")
+    @classmethod
+    def normalize_case_tags(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(tag.strip().lower() for tag in value if tag.strip()))
+
+
+class ResearchDataBakeoffManifest(SerializableModel):
+    """Versioned offline vendor bake-off manifest."""
+
+    model_config = ConfigDict(frozen=True, use_enum_values=True, extra="forbid")
+
+    manifest_version: int = 1
+    symbol: str = "SPY"
+    samples: list[ResearchDataBakeoffSample]
+    rights: list[ResearchDataRightsEvidence]
+    required_case_tags: list[str] = Field(
+        default_factory=lambda: [
+            "normal_session",
+            "early_close",
+            "ex_dividend",
+            "correction_before",
+            "correction_after",
+            "daily_overlap",
+            "synthetic_split",
+        ]
+    )
+    max_price_difference_bps: Decimal = Field(default=Decimal("5"), ge=0)
+    max_volume_difference_pct: Decimal = Field(default=Decimal("5"), ge=0)
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_spy_only(cls, value: str) -> str:
+        if value.strip().upper() != "SPY":
+            raise ValueError("research data bake-off is SPY-only")
+        return "SPY"
+
+    @field_validator("samples")
+    @classmethod
+    def validate_samples(
+        cls,
+        value: list[ResearchDataBakeoffSample],
+    ) -> list[ResearchDataBakeoffSample]:
+        if not value:
+            raise ValueError("bake-off requires at least one sample")
+        sample_ids = [sample.sample_id for sample in value]
+        if len(sample_ids) != len(set(sample_ids)):
+            raise ValueError("bake-off sample_id values must be unique")
+        return value
+
+    @field_validator("rights")
+    @classmethod
+    def validate_rights(
+        cls,
+        value: list[ResearchDataRightsEvidence],
+    ) -> list[ResearchDataRightsEvidence]:
+        if not value:
+            raise ValueError("bake-off requires vendor rights evidence")
+        vendors = [item.vendor.strip().lower() for item in value]
+        if len(vendors) != len(set(vendors)):
+            raise ValueError("bake-off rights evidence must be unique per vendor")
+        return value
+
+    @field_validator("required_case_tags")
+    @classmethod
+    def normalize_required_tags(cls, value: list[str]) -> list[str]:
+        tags = list(dict.fromkeys(tag.strip().lower() for tag in value if tag.strip()))
+        if not tags:
+            raise ValueError("at least one required bake-off case tag is required")
+        return tags
+
+    @model_validator(mode="after")
+    def validate_manifest(self) -> ResearchDataBakeoffManifest:
+        if self.manifest_version != 1:
+            raise ValueError("unsupported research bake-off manifest version")
+        sample_vendors = {sample.vendor.strip().lower() for sample in self.samples}
+        rights_vendors = {item.vendor.strip().lower() for item in self.rights}
+        missing = sorted(sample_vendors - rights_vendors)
+        if missing:
+            raise ValueError(f"missing rights evidence for vendors: {', '.join(missing)}")
+        return self
+
+
+class ResearchDataBakeoffSampleResult(SerializableModel):
+    """Deterministic validation evidence for one local sample."""
+
+    sample_id: str
+    vendor: str
+    path: str
+    kind: ResearchSampleKind
+    source_format: ResearchSampleFormat
+    case_tags: list[str] = Field(default_factory=list)
+    ok: bool
+    sha256: str | None = None
+    row_count: int = Field(default=0, ge=0)
+    first_timestamp: datetime | None = None
+    last_timestamp: datetime | None = None
+    duplicate_count: int = Field(default=0, ge=0)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class ResearchDataBakeoffComparison(SerializableModel):
+    """Cross-vendor overlap or correction comparison evidence."""
+
+    comparison_type: str
+    left_sample_id: str
+    right_sample_id: str
+    overlap_count: int = Field(default=0, ge=0)
+    price_mismatch_count: int = Field(default=0, ge=0)
+    volume_mismatch_count: int = Field(default=0, ge=0)
+    ok: bool
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class ResearchDataBakeoffReport(SerializableModel):
+    """No-secret, broker-free vendor due-diligence report."""
+
+    title: str = "SPY Research Data Vendor Bake-off"
+    report_type: str = "research_data_bakeoff"
+    command: str = "research-data-bakeoff"
+    ok: bool
+    manifest_path: str
+    manifest: ResearchDataBakeoffManifest | None = None
+    sample_results: list[ResearchDataBakeoffSampleResult] = Field(default_factory=list)
+    comparisons: list[ResearchDataBakeoffComparison] = Field(default_factory=list)
+    observed_case_tags: list[str] = Field(default_factory=list)
+    missing_case_tags: list[str] = Field(default_factory=list)
+    rights_verified_vendors: list[str] = Field(default_factory=list)
+    rights_failed_vendors: list[str] = Field(default_factory=list)
+    procurement_ready_vendors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    credentials_read: bool = False
+    network_accessed: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    promotion_eligible: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_offline_safety(self) -> ResearchDataBakeoffReport:
+        if self.broker_contacted or self.network_accessed or self.credentials_read:
+            raise ValueError("research data bake-off must remain offline and credential-free")
+        if self.order_routing_enabled or self.submitted_orders or self.order_api_invoked:
+            raise ValueError("research data bake-off must not invoke order routing")
+        if self.promotion_eligible:
+            raise ValueError("vendor bake-off cannot promote a strategy")
+        return self
+
+
+class ResearchCanonicalDailyIngestRequest(SerializableModel):
+    """Offline canonical SPY daily-bar import request."""
+
+    source_path: str
+    root_path: str
+    source_name: str = "norgate"
+    dataset: str = "daily_bars_v1"
+    symbol: str = "SPY"
+    price_view: str = "raw"
+
+    @field_validator("source_path", "root_path", "source_name", "dataset")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("daily ingestion text fields must not be empty")
+        return normalized
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_spy(cls, value: str) -> str:
+        if value.strip().upper() != "SPY":
+            raise ValueError("canonical daily ingestion is SPY-only")
+        return "SPY"
+
+    @field_validator("price_view")
+    @classmethod
+    def validate_raw(cls, value: str) -> str:
+        if value.strip().lower() != "raw":
+            raise ValueError("canonical daily ingestion must preserve raw prices")
+        return "raw"
+
+
+class ResearchCanonicalDailyIngestReport(SerializableModel):
+    """Immutable canonical daily-bar import evidence."""
+
+    title: str = "SPY Canonical Daily Research Data Ingestion"
+    report_type: str = "research_daily_ingest"
+    command: str = "research-data-import-batch"
+    ok: bool
+    request: ResearchCanonicalDailyIngestRequest
+    root_path: str
+    catalog_path: str
+    artifact: ResearchDataArtifact | None = None
+    rows_scanned: int = 0
+    partitions: list[ResearchDataPartition] = Field(default_factory=list)
+    missing_session_dates: list[str] = Field(default_factory=list)
+    idempotent_replay: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    promotion_eligible: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class ResearchCorporateAction(SerializableModel):
+    """One normalized split or cash-dividend action."""
+
+    symbol: str = "SPY"
+    action_type: str
+    ex_date: str
+    factor: Decimal | None = None
+    cash_amount: Decimal | None = None
+    currency: str | None = None
+    revision: str
+
+
+class ResearchCorporateActionIngestRequest(SerializableModel):
+    """Offline complete-coverage corporate-action import request."""
+
+    source_path: str
+    root_path: str
+    source_name: str = "norgate"
+    dataset: str = "corporate_actions_v1"
+    symbol: str = "SPY"
+    coverage_start: str
+    coverage_end: str
+    complete: bool = True
+
+    @field_validator(
+        "source_path",
+        "root_path",
+        "source_name",
+        "dataset",
+        "coverage_start",
+        "coverage_end",
+    )
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("corporate-action ingestion text fields must not be empty")
+        return normalized
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_spy(cls, value: str) -> str:
+        if value.strip().upper() != "SPY":
+            raise ValueError("corporate-action ingestion is SPY-only")
+        return "SPY"
+
+    @model_validator(mode="after")
+    def validate_coverage(self) -> ResearchCorporateActionIngestRequest:
+        start = datetime.fromisoformat(self.coverage_start).date()
+        end = datetime.fromisoformat(self.coverage_end).date()
+        if start > end:
+            raise ValueError("corporate-action coverage_start must not exceed coverage_end")
+        if not self.complete:
+            raise ValueError("derived views require a complete corporate-action set")
+        return self
+
+
+class ResearchCorporateActionIngestReport(SerializableModel):
+    """Immutable corporate-action coverage evidence."""
+
+    title: str = "SPY Corporate Action Ingestion"
+    report_type: str = "research_corporate_action_ingest"
+    command: str = "research-data-import-batch"
+    ok: bool
+    request: ResearchCorporateActionIngestRequest
+    root_path: str
+    catalog_path: str
+    artifact: ResearchDataArtifact | None = None
+    action_set_id: str | None = None
+    actions: list[ResearchCorporateAction] = Field(default_factory=list)
+    idempotent_replay: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    promotion_eligible: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class ResearchDataBatchImportRequest(SerializableModel):
+    """Offline local-directory batch import request."""
+
+    source_dir: str
+    root_path: str
+    vendor: str
+    kind: ResearchSampleKind
+    pattern: str = "*.csv*"
+    coverage_start: str | None = None
+    coverage_end: str | None = None
+
+    @field_validator("source_dir", "root_path", "vendor", "pattern")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("batch import text fields must not be empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_vendor_kind(self) -> ResearchDataBatchImportRequest:
+        kind = str(self.kind)
+        vendor = self.vendor.strip().lower()
+        if kind == ResearchSampleKind.MINUTE_BARS and vendor != "massive":
+            raise ValueError("minute-bar batch import currently requires Massive")
+        if kind == ResearchSampleKind.CORPORATE_ACTIONS and (
+            not self.coverage_start or not self.coverage_end
+        ):
+            raise ValueError("corporate-action batch import requires coverage dates")
+        return self
+
+
+class ResearchDataBatchImportItem(SerializableModel):
+    """One source-file result from a batch import."""
+
+    source_path: str
+    report_type: str
+    ok: bool
+    final_status: str
+    partition_count: int = 0
+    action_count: int = 0
+    idempotent_replay: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class ResearchDataBatchImportReport(SerializableModel):
+    """No-secret report for deterministic local batch ingestion."""
+
+    title: str = "SPY Research Data Batch Import"
+    report_type: str = "research_data_batch_import"
+    command: str = "research-data-import-batch"
+    ok: bool
+    request: ResearchDataBatchImportRequest
+    source_files: list[str] = Field(default_factory=list)
+    items: list[ResearchDataBatchImportItem] = Field(default_factory=list)
+    succeeded_count: int = 0
+    failed_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    credentials_read: bool = False
+    network_accessed: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    promotion_eligible: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class ResearchDerivedPartition(SerializableModel):
+    """One active or superseded source-hashed derived partition."""
+
+    session_date: str
+    dataset: str
+    price_view: str
+    bar_size: str
+    revision: int
+    active: bool
+    row_count: int
+    expected_row_count: int
+    first_timestamp: datetime | None = None
+    last_timestamp: datetime | None = None
+    parquet_path: str
+    parquet_sha256: str
+    action_fingerprint: str
+    input_fingerprint: str
+    algorithm_version: str
+    parent_partition_ids: list[int] = Field(default_factory=list)
+    quality_status: ResearchDataQualityStatus
+
+
+class ResearchDerivedViewRequest(SerializableModel):
+    """Offline request to derive approved SPY research views."""
+
+    root_path: str
+    symbol: str = "SPY"
+    algorithm_version: str = "spy_views_v1"
+
+    @field_validator("root_path", "algorithm_version")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("derived-view text fields must not be empty")
+        return normalized
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_spy(cls, value: str) -> str:
+        if value.strip().upper() != "SPY":
+            raise ValueError("research derived views are SPY-only")
+        return "SPY"
+
+
+class ResearchDerivedViewReport(SerializableModel):
+    """Lineage-complete evidence for SPY derived research views."""
+
+    title: str = "SPY Derived Research Views"
+    report_type: str = "research_derived_views"
+    command: str = "research-data-derive"
+    ok: bool
+    request: ResearchDerivedViewRequest
+    root_path: str
+    catalog_path: str
+    action_fingerprint: str | None = None
+    partitions: list[ResearchDerivedPartition] = Field(default_factory=list)
+    stale_partitions_superseded: int = 0
+    idempotent_partition_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    promotion_eligible: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class ResearchCatalogLoadRequest(SerializableModel):
+    """Offline active-derived-partition load request."""
+
+    root_path: str
+    symbol: str = "SPY"
+    price_view: str = "split_adjusted_signal"
+    bar_size: str = "5 mins"
+    start_date: str | None = None
+    end_date: str | None = None
+
+    @field_validator("root_path", "price_view", "bar_size")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("catalog-load text fields must not be empty")
+        return normalized
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_spy(cls, value: str) -> str:
+        if value.strip().upper() != "SPY":
+            raise ValueError("research catalog loader is SPY-only")
+        return "SPY"
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> ResearchCatalogLoadRequest:
+        start = date.fromisoformat(self.start_date) if self.start_date else None
+        end = date.fromisoformat(self.end_date) if self.end_date else None
+        if start is not None and end is not None and start > end:
+            raise ValueError("catalog start_date must not exceed end_date")
+        return self
+
+
+class ResearchCatalogLoadReport(SerializableModel):
+    """Broker-free active catalog load and fingerprint evidence."""
+
+    title: str = "SPY Research Catalog Load"
+    report_type: str = "research_catalog_load"
+    command: str = "research-catalog-load"
+    ok: bool
+    request: ResearchCatalogLoadRequest
+    catalog_path: str
+    partitions: list[ResearchDerivedPartition] = Field(default_factory=list)
+    corporate_actions: list[ResearchCorporateAction] = Field(default_factory=list)
+    action_fingerprint: str | None = None
+    feed: BacktestDataFeed | None = None
+    dataset_fingerprint: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    promotion_eligible: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
 class ResearchBacktestRequest(SerializableModel):
     """SPY-only broker-free research simulation request."""
 
     symbol: str = "SPY"
     short_window: int = Field(default=5, gt=0)
     long_window: int = Field(default=20, gt=1)
+    sizing_mode: ResearchSizingMode = ResearchSizingMode.FIXED_QUANTITY
     quantity: int = Field(default=1, gt=0)
+    target_allocation_pct: Decimal = Field(default=Decimal("100"), gt=0, le=100)
     starting_cash: Decimal = Field(default=Decimal("100000"), gt=0)
     spread_bps: Decimal = Field(default=Decimal("2"), ge=0)
     slippage_bps: Decimal = Field(default=Decimal("1"), ge=0)
     commission_per_share: Decimal = Field(default=Decimal("0.005"), ge=0)
     minimum_commission: Decimal = Field(default=Decimal("1.00"), ge=0)
+    tick_size: Decimal = Field(default=Decimal("0.01"), gt=0)
+    limit_buffer_bps: Decimal = Field(default=Decimal("0"), ge=0)
+    max_volume_participation: Decimal = Field(default=Decimal("0.01"), gt=0, le=1)
+    annualization_factor: int = Field(default=252, gt=0)
+    execution_model: str = "spy_lmt_day_trade_through_v1"
     force_close_at_end: bool = True
     requested_bar_size: str | None = "5 mins"
     requested_what_to_show: str | None = "TRADES"
@@ -1699,7 +2398,25 @@ class ResearchBacktestRequest(SerializableModel):
     def validate_window_order(self) -> ResearchBacktestRequest:
         if self.short_window >= self.long_window:
             raise ValueError("short_window must be less than long_window")
+        if self.execution_model != "spy_lmt_day_trade_through_v1":
+            raise ValueError("unsupported research execution model")
         return self
+
+
+class ResearchBacktestOrder(SerializableModel):
+    """One simulated price-protected SPY LMT DAY order lifecycle."""
+
+    order_id: str
+    action: TradeAction
+    requested_quantity: Decimal
+    filled_quantity: Decimal
+    remaining_quantity: Decimal
+    submitted_timestamp: datetime
+    submitted_frame_index: int
+    limit_price: Decimal
+    status: ResearchOrderStatus
+    completed_timestamp: datetime
+    canceled_reason: str | None = None
 
 
 class ResearchBacktestFill(SerializableModel):
@@ -1707,19 +2424,25 @@ class ResearchBacktestFill(SerializableModel):
 
     symbol: str
     action: TradeAction
-    quantity: int
+    order_id: str
+    quantity: Decimal
     signal_timestamp: datetime
     fill_timestamp: datetime
     signal_frame_index: int
     fill_frame_index: int
     reference_price: Decimal
+    limit_price: Decimal
     fill_price: Decimal
     commission: Decimal
     spread_cost: Decimal
     slippage_cost: Decimal
+    tick_rounding_cost: Decimal
     traded_notional: Decimal
     cash_after: Decimal
-    position_after: int
+    position_after: Decimal
+    partial_fill: bool = False
+    available_quantity: Decimal
+    cost_multiplier: Decimal = Decimal("1")
     reason: str
 
 
@@ -1727,7 +2450,7 @@ class ResearchBacktestTrade(SerializableModel):
     """One closed long-only SPY research trade."""
 
     symbol: str
-    quantity: int
+    quantity: Decimal
     entry_timestamp: datetime
     exit_timestamp: datetime
     entry_price: Decimal
@@ -1747,11 +2470,33 @@ class ResearchBacktestEquityPoint(SerializableModel):
     timestamp: datetime
     frame_index: int
     cash: Decimal
-    position_quantity: int
+    position_quantity: Decimal
     mark_price: Decimal
     position_value: Decimal
     equity: Decimal
     drawdown_pct: Decimal
+
+
+class ResearchCapitalEventRecord(SerializableModel):
+    """One split or cash-dividend event applied to simulated broker truth."""
+
+    action_type: str
+    ex_date: str
+    timestamp: datetime
+    factor: Decimal | None = None
+    cash_amount_per_share: Decimal | None = None
+    quantity_before: Decimal
+    quantity_after: Decimal
+    cash_delta: Decimal
+    revision: str
+
+
+class ResearchDailyReturn(SerializableModel):
+    """One end-of-session strategy return observation."""
+
+    session_date: str
+    ending_equity: Decimal
+    return_pct: Decimal
 
 
 class ResearchBacktestMetrics(SerializableModel):
@@ -1770,12 +2515,33 @@ class ResearchBacktestMetrics(SerializableModel):
     total_commissions: Decimal
     total_spread_cost: Decimal
     total_slippage_cost: Decimal
+    total_tick_rounding_cost: Decimal
     signal_count: int
     fill_count: int
     closed_trade_count: int
     winning_trade_count: int
     win_rate_pct: Decimal
     exposure_pct: Decimal
+    cagr_pct: Decimal | None = None
+    annualized_volatility_pct: Decimal | None = None
+    sharpe_ratio: Decimal | None = None
+    sortino_ratio: Decimal | None = None
+    calmar_ratio: Decimal | None = None
+    max_drawdown_duration_bars: int = 0
+    max_drawdown_duration_days: int = 0
+    benchmark_relative_return_pct: Decimal | None = None
+    daily_observation_count: int = 0
+    trial_count: int = 1
+
+
+class ResearchBacktestCostScenario(SerializableModel):
+    """Metrics produced by a predeclared transaction-cost multiplier."""
+
+    name: str
+    multiplier: Decimal
+    metrics: ResearchBacktestMetrics | None = None
+    ok: bool
+    errors: list[str] = Field(default_factory=list)
 
 
 class ResearchBacktestReport(SerializableModel):
@@ -1787,18 +2553,35 @@ class ResearchBacktestReport(SerializableModel):
     ok: bool
     request: ResearchBacktestRequest
     feed_summary: BacktestDataFeedSummary | None = None
+    source_catalog_path: str | None = None
+    source_price_view: str = "split_adjusted_signal"
+    catalog_dataset_fingerprint: str | None = None
+    execution_dataset_fingerprint: str | None = None
+    benchmark_dataset_fingerprint: str | None = None
+    action_fingerprint: str | None = None
+    catalog_partition_count: int = 0
+    execution_feed_summary: BacktestDataFeedSummary | None = None
+    benchmark_feed_summary: BacktestDataFeedSummary | None = None
     fills: list[ResearchBacktestFill] = Field(default_factory=list)
+    orders: list[ResearchBacktestOrder] = Field(default_factory=list)
     trades: list[ResearchBacktestTrade] = Field(default_factory=list)
     equity_curve: list[ResearchBacktestEquityPoint] = Field(default_factory=list)
+    capital_events: list[ResearchCapitalEventRecord] = Field(default_factory=list)
+    daily_returns: list[ResearchDailyReturn] = Field(default_factory=list)
+    cost_scenarios: list[ResearchBacktestCostScenario] = Field(default_factory=list)
     metrics: ResearchBacktestMetrics | None = None
     warnings: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     final_status: ResearchBacktestStatus = ResearchBacktestStatus.FAILED
-    strategy_name: str = "moving_average_crossover_research"
+    strategy_name: str = "spy_sma_target_state"
+    strategy_version: str = "1.0.0"
+    strategy_parameter_fingerprint: str | None = None
     evaluation_scope: str = "in_sample_core"
     promotion_eligible: bool = False
     non_promotion_reason: str = "walk_forward_and_sealed_oos_not_completed"
     lookahead_prevention: str = "signals_on_bar_close_fills_at_next_bar_open"
+    execution_assumption: str = "synthetic_quote_price_protected_lmt_day_trade_through"
+    signal_execution_timestamps_aligned: bool = False
     broker_contacted: bool = False
     order_routing_enabled: bool = False
     submitted_orders: bool = False
@@ -1853,12 +2636,19 @@ class ResearchWalkForwardRequest(SerializableModel):
     holdout_bars: int = Field(default=200, gt=1)
     minimum_closed_trades: int = Field(default=1, ge=0)
     drawdown_penalty: Decimal = Field(default=Decimal("1"), ge=0)
+    sizing_mode: ResearchSizingMode = ResearchSizingMode.FIXED_QUANTITY
     quantity: int = Field(default=1, gt=0)
+    target_allocation_pct: Decimal = Field(default=Decimal("100"), gt=0, le=100)
     starting_cash: Decimal = Field(default=Decimal("100000"), gt=0)
     spread_bps: Decimal = Field(default=Decimal("2"), ge=0)
     slippage_bps: Decimal = Field(default=Decimal("1"), ge=0)
     commission_per_share: Decimal = Field(default=Decimal("0.005"), ge=0)
     minimum_commission: Decimal = Field(default=Decimal("1.00"), ge=0)
+    tick_size: Decimal = Field(default=Decimal("0.01"), gt=0)
+    limit_buffer_bps: Decimal = Field(default=Decimal("0"), ge=0)
+    max_volume_participation: Decimal = Field(default=Decimal("0.01"), gt=0, le=1)
+    annualization_factor: int = Field(default=252, gt=0)
+    execution_model: str = "spy_lmt_day_trade_through_v1"
     requested_bar_size: str | None = "5 mins"
     requested_what_to_show: str | None = "TRADES"
     latest: bool = True
@@ -1899,6 +2689,12 @@ class ResearchWalkForwardRequest(SerializableModel):
         if len(pairs) != len(set(pairs)):
             raise ValueError("research candidates must be unique")
         return value
+
+    @model_validator(mode="after")
+    def validate_execution_model(self) -> ResearchWalkForwardRequest:
+        if self.execution_model != "spy_lmt_day_trade_through_v1":
+            raise ValueError("unsupported research execution model")
+        return self
 
     @model_validator(mode="after")
     def validate_training_size(self) -> ResearchWalkForwardRequest:
@@ -1968,6 +2764,15 @@ class ResearchWalkForwardReport(SerializableModel):
     ok: bool
     request: ResearchWalkForwardRequest
     feed_summary: BacktestDataFeedSummary | None = None
+    execution_feed_summary: BacktestDataFeedSummary | None = None
+    benchmark_feed_summary: BacktestDataFeedSummary | None = None
+    source_catalog_path: str | None = None
+    source_price_view: str = "split_adjusted_signal"
+    catalog_dataset_fingerprint: str | None = None
+    execution_dataset_fingerprint: str | None = None
+    benchmark_dataset_fingerprint: str | None = None
+    action_fingerprint: str | None = None
+    catalog_partition_count: int = 0
     dataset_fingerprint: str | None = None
     development_fingerprint: str | None = None
     holdout_fingerprint: str | None = None
@@ -1987,6 +2792,7 @@ class ResearchWalkForwardReport(SerializableModel):
     holdout_evaluation_count: int = 0
     sealed_holdout_completed: bool = False
     research_validation_completed: bool = False
+    signal_execution_timestamps_aligned: bool = False
     promotion_eligible: bool = False
     non_promotion_reason: str = (
         "requires_independent_research_review_and_strict_live_shadow_graduation"
@@ -2015,6 +2821,227 @@ class ResearchWalkForwardReport(SerializableModel):
             raise ValueError("completed sealed holdout requires exactly one evaluation")
         if self.promotion_eligible:
             raise ValueError("research validation cannot promote execution automatically")
+        return self
+
+
+class ResearchExperimentSpec(SerializableModel):
+    """Tracked preregistration for one SPY research hypothesis."""
+
+    model_config = ConfigDict(frozen=True, use_enum_values=True, extra="forbid")
+
+    experiment_id: str
+    hypothesis_version: str
+    symbol: str = "SPY"
+    strategy_name: str = "spy_sma_target_state"
+    strategy_version: str = "1.0.0"
+    candidates: list[ResearchWindowCandidate]
+    training_start: str
+    training_end: str
+    validation_years: list[int]
+    holdout_start: str
+    holdout_end: str
+    minimum_closed_trades: int = Field(default=1, ge=0)
+    sizing_mode: ResearchSizingMode = ResearchSizingMode.TARGET_ALLOCATION
+    quantity: int = Field(default=1, gt=0)
+    target_allocation_pct: Decimal = Field(default=Decimal("100"), gt=0, le=100)
+    starting_cash: Decimal = Field(default=Decimal("100000"), gt=0)
+    spread_bps: Decimal = Field(default=Decimal("2"), ge=0)
+    slippage_bps: Decimal = Field(default=Decimal("1"), ge=0)
+    commission_per_share: Decimal = Field(default=Decimal("0.005"), ge=0)
+    minimum_commission: Decimal = Field(default=Decimal("1.00"), ge=0)
+    tick_size: Decimal = Field(default=Decimal("0.01"), gt=0)
+    limit_buffer_bps: Decimal = Field(default=Decimal("0"), ge=0)
+    max_volume_participation: Decimal = Field(default=Decimal("0.01"), gt=0, le=1)
+    required_positive_validation_years: int = Field(default=4, gt=0)
+    minimum_dsr_probability: Decimal = Field(default=Decimal("0.95"), gt=0, le=1)
+    selection_rule: str = "total_return_minus_drawdown"
+    final_holdout_confirmation: str = "ACCESS_FINAL_HOLDOUT_ONCE"
+
+    @field_validator(
+        "experiment_id",
+        "hypothesis_version",
+        "strategy_name",
+        "strategy_version",
+        "training_start",
+        "training_end",
+        "holdout_start",
+        "holdout_end",
+        "selection_rule",
+        "final_holdout_confirmation",
+    )
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("experiment specification text fields must not be empty")
+        return normalized
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_spy(cls, value: str) -> str:
+        if value.strip().upper() != "SPY":
+            raise ValueError("research experiment is SPY-only")
+        return "SPY"
+
+    @field_validator("candidates")
+    @classmethod
+    def validate_candidate_grid(
+        cls,
+        value: list[ResearchWindowCandidate],
+    ) -> list[ResearchWindowCandidate]:
+        if len(value) < 2:
+            raise ValueError("research experiment requires at least two candidates")
+        pairs = [(item.short_window, item.long_window) for item in value]
+        if len(pairs) != len(set(pairs)):
+            raise ValueError("research experiment candidates must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_periods(self) -> ResearchExperimentSpec:
+        training_start = date.fromisoformat(self.training_start)
+        training_end = date.fromisoformat(self.training_end)
+        holdout_start = date.fromisoformat(self.holdout_start)
+        holdout_end = date.fromisoformat(self.holdout_end)
+        if training_start > training_end:
+            raise ValueError("experiment training period is invalid")
+        if holdout_start > holdout_end or holdout_start <= training_end:
+            raise ValueError("experiment holdout period must follow training")
+        if not self.validation_years:
+            raise ValueError("experiment requires validation years")
+        if self.validation_years != sorted(set(self.validation_years)):
+            raise ValueError("experiment validation years must be sorted and unique")
+        if self.validation_years[0] <= training_end.year:
+            raise ValueError("validation years must follow the initial training period")
+        if self.validation_years[-1] >= holdout_start.year:
+            raise ValueError("validation years must precede the holdout")
+        if self.required_positive_validation_years > len(self.validation_years):
+            raise ValueError("positive-year threshold exceeds validation fold count")
+        return self
+
+
+class ResearchExperimentRequest(SerializableModel):
+    """Offline request for one preregistered experiment phase."""
+
+    spec_path: str
+    root_path: str
+    phase: ResearchExperimentPhase = ResearchExperimentPhase.DEVELOPMENT
+    confirmation: str | None = None
+
+
+class ResearchExperimentCandidateResult(SerializableModel):
+    """Compact result for one candidate and one chronological period."""
+
+    candidate: ResearchWindowCandidate
+    period_start: str
+    period_end: str
+    eligible: bool
+    selection_score: Decimal | None = None
+    base_return_pct: Decimal | None = None
+    two_x_cost_return_pct: Decimal | None = None
+    max_drawdown_pct: Decimal | None = None
+    benchmark_return_pct: Decimal | None = None
+    closed_trade_count: int = 0
+    sharpe_ratio: Decimal | None = None
+    daily_returns_pct: list[Decimal] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class ResearchExperimentValidationFold(SerializableModel):
+    """One anchored training selection followed by an untouched calendar year."""
+
+    validation_year: int
+    training_start: str
+    training_end: str
+    validation_start: str
+    validation_end: str
+    training_candidates: list[ResearchExperimentCandidateResult] = Field(
+        default_factory=list
+    )
+    selected_candidate: ResearchWindowCandidate | None = None
+    validation_result: ResearchExperimentCandidateResult | None = None
+    ok: bool
+    errors: list[str] = Field(default_factory=list)
+
+
+class ResearchStatisticalDiagnostics(SerializableModel):
+    """Multiplicity diagnostics reported only when their assumptions are supported."""
+
+    trial_count: int = 0
+    holdout_observation_count: int = 0
+    deflated_sharpe_available: bool = False
+    deflated_sharpe_probability: Decimal | None = None
+    deflated_sharpe_threshold: Decimal | None = None
+    pbo_available: bool = False
+    pbo_probability: Decimal | None = None
+    unavailable_reasons: list[str] = Field(default_factory=list)
+
+
+class ResearchExperimentReport(SerializableModel):
+    """Append-only, broker-free preregistered research phase evidence."""
+
+    title: str = "SPY Preregistered Research Experiment"
+    report_type: str = "research_experiment"
+    command: str = "research-experiment-run"
+    ok: bool
+    request: ResearchExperimentRequest
+    spec: ResearchExperimentSpec | None = None
+    experiment_id: str | None = None
+    run_id: str | None = None
+    phase: ResearchExperimentPhase
+    spec_path: str
+    spec_fingerprint: str | None = None
+    spec_git_tracked: bool = False
+    commit_sha: str | None = None
+    catalog_path: str | None = None
+    signal_dataset_fingerprint: str | None = None
+    execution_dataset_fingerprint: str | None = None
+    benchmark_dataset_fingerprint: str | None = None
+    action_fingerprint: str | None = None
+    validation_folds: list[ResearchExperimentValidationFold] = Field(
+        default_factory=list
+    )
+    development_candidates: list[ResearchExperimentCandidateResult] = Field(
+        default_factory=list
+    )
+    selected_candidate: ResearchWindowCandidate | None = None
+    holdout_result: ResearchExperimentCandidateResult | None = None
+    holdout_access_recorded: bool = False
+    holdout_access_consumed: bool = False
+    positive_validation_year_count: int = 0
+    aggregate_validation_base_return_pct: Decimal | None = None
+    aggregate_validation_two_x_return_pct: Decimal | None = None
+    holdout_benchmark_drawdown_pct: Decimal | None = None
+    statistical_diagnostics: ResearchStatisticalDiagnostics | None = None
+    validation_year_gate_passed: bool = False
+    two_x_cost_gate_passed: bool = False
+    holdout_return_gate_passed: bool = False
+    deflated_sharpe_gate_passed: bool = False
+    holdout_drawdown_gate_passed: bool = False
+    research_review_ready: bool = False
+    promotion_eligible: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    credentials_read: bool = False
+    network_accessed: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_safety_and_promotion(self) -> ResearchExperimentReport:
+        if self.broker_contacted or self.network_accessed or self.credentials_read:
+            raise ValueError("research experiment must remain offline and credential-free")
+        if self.order_routing_enabled or self.submitted_orders or self.order_api_invoked:
+            raise ValueError("research experiment must not invoke order routing")
+        if self.promotion_eligible:
+            raise ValueError("research review readiness cannot promote execution automatically")
+        if self.phase == ResearchExperimentPhase.DEVELOPMENT and self.holdout_result:
+            raise ValueError("development phase must not contain holdout results")
+        if self.research_review_ready and self.phase != ResearchExperimentPhase.FINAL_HOLDOUT:
+            raise ValueError("only a final-holdout phase can become review ready")
         return self
 
 
@@ -2903,6 +3930,7 @@ class AlphaShadowRunRequest(SerializableModel):
     short_window: int = 5
     long_window: int = 20
     min_bars: int = 50
+    stale_after_minutes: int = 15
     max_zero_volume_bars: int = 0
     min_average_volume: Decimal = Decimal("100")
     min_average_dollar_volume: Decimal = Decimal("5000")
@@ -2948,7 +3976,13 @@ class AlphaShadowRunRequest(SerializableModel):
             raise ValueError("alpha shadow timing settings must be 0 through 120 seconds")
         return value
 
-    @field_validator("short_window", "long_window", "min_bars", "max_open_positions")
+    @field_validator(
+        "short_window",
+        "long_window",
+        "min_bars",
+        "stale_after_minutes",
+        "max_open_positions",
+    )
     @classmethod
     def validate_positive_ints(cls, value: int) -> int:
         if value <= 0:
@@ -3000,6 +4034,12 @@ class AlphaShadowRunReport(SerializableModel):
     account_ids_masked: list[str] = Field(default_factory=list)
     history_snapshot_written: bool = False
     history_load_completed: bool = False
+    warmup_assembly_completed: bool = False
+    warmup_prior_session_dates: list[str] = Field(default_factory=list)
+    warmup_current_live_bar_count: int = 0
+    warmup_assembled_bar_count: int = 0
+    warmup_boundary_agreement_passed: bool = False
+    warmup_data_fingerprint: str | None = None
     data_quality_completed: bool = False
     signal_evaluation_completed: bool = False
     trade_plan_completed: bool = False
@@ -3009,6 +4049,11 @@ class AlphaShadowRunReport(SerializableModel):
     shadow_quote_source: str = "historical_snapshot_shadow_quote"
     source_bar_timestamp_by_symbol: dict[str, str] = Field(default_factory=dict)
     data_quality_status_by_symbol: dict[str, str] = Field(default_factory=dict)
+    strategy_name: str = "spy_sma_target_state"
+    strategy_version: str = "1.0.0"
+    strategy_parameter_fingerprint: str | None = None
+    strategy_decision: SPYSmaDecision | None = None
+    target_state: SPYTargetState | None = None
     shadow_signals: list[Signal] = Field(default_factory=list)
     trade_plans: list[TradePlan] = Field(default_factory=list)
     risk_decisions: list[RiskDecision] = Field(default_factory=list)
@@ -3229,6 +4274,11 @@ class AlphaShadowDaemonCycle(SerializableModel):
     broker_connected: bool = False
     account_summary_verified: bool = False
     source_bar_timestamp_by_symbol: dict[str, str] = Field(default_factory=dict)
+    data_quality_status_by_symbol: dict[str, str] = Field(default_factory=dict)
+    strategy_name: str = "spy_sma_target_state"
+    strategy_version: str = "1.0.0"
+    strategy_parameter_fingerprint: str | None = None
+    data_fingerprint: str | None = None
     stale_data_detected: bool = False
     stale_symbols: list[str] = Field(default_factory=list)
     heartbeat_written: bool = False
@@ -3271,10 +4321,18 @@ class AlphaShadowDaemonReport(SerializableModel):
     ok: bool
     request: AlphaShadowDaemonRequest
     commit_sha: str | None = None
+    release_fingerprint: str | None = None
+    release_worktree_clean: bool = False
+    config_fingerprint: str | None = None
+    strategy_fingerprint: str | None = None
+    data_fingerprint: str | None = None
+    trading_dates: list[str] = Field(default_factory=list)
+    coverage_windows: list[str] = Field(default_factory=list)
     campaign_id: str | None = None
     cycles: list[AlphaShadowDaemonCycle] = Field(default_factory=list)
     cycle_count: int = 0
     clean_cycle_count: int = 0
+    session_evidence_ready: bool = False
     graduation_ready: bool = False
     market_data_policy: ShadowDataPolicy = ShadowDataPolicy.STRICT_LIVE
     delayed_data_mode: bool = False
@@ -3363,6 +4421,12 @@ class AlphaShadowDaemonSummaryRequest(SerializableModel):
 
     report_glob: str = "reports/alpha_shadow_daemon_*.json"
     min_clean_sessions: int = 5
+    min_distinct_trading_dates: int = 5
+    pilot_min_clean_sessions: int = 10
+    pilot_min_distinct_trading_dates: int = 5
+    required_coverage_windows: list[str] = Field(
+        default_factory=lambda: ["opening", "midday", "closing"]
+    )
     max_report_age_hours: int = 168
     require_same_commit: bool = True
 
@@ -3374,12 +4438,26 @@ class AlphaShadowDaemonSummaryRequest(SerializableModel):
             raise ValueError("report_glob must not be empty")
         return normalized
 
-    @field_validator("min_clean_sessions", "max_report_age_hours")
+    @field_validator(
+        "min_clean_sessions",
+        "min_distinct_trading_dates",
+        "pilot_min_clean_sessions",
+        "pilot_min_distinct_trading_dates",
+        "max_report_age_hours",
+    )
     @classmethod
     def validate_positive_ints(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("daemon summary integer settings must be positive")
         return value
+
+    @field_validator("required_coverage_windows")
+    @classmethod
+    def validate_coverage_windows(cls, value: list[str]) -> list[str]:
+        normalized = [item.strip().lower() for item in value if item.strip()]
+        if not normalized or set(normalized) - {"opening", "midday", "closing"}:
+            raise ValueError("daemon coverage windows must use opening, midday, or closing")
+        return list(dict.fromkeys(normalized))
 
 
 class AlphaShadowDaemonReportEvidence(SerializableModel):
@@ -3388,6 +4466,13 @@ class AlphaShadowDaemonReportEvidence(SerializableModel):
     source_report_path: str
     campaign_id: str | None = None
     commit_sha: str | None = None
+    release_fingerprint: str | None = None
+    release_worktree_clean: bool = False
+    config_fingerprint: str | None = None
+    strategy_fingerprint: str | None = None
+    data_fingerprint: str | None = None
+    trading_dates: list[str] = Field(default_factory=list)
+    coverage_windows: list[str] = Field(default_factory=list)
     timestamp: datetime | None = None
     final_status: str = "unknown"
     ok: bool = False
@@ -3443,6 +4528,9 @@ class AlphaShadowDaemonSummaryReport(SerializableModel):
     total_cycles: int = 0
     total_clean_cycles: int = 0
     clean_session_count: int = 0
+    distinct_trading_date_count: int = 0
+    trading_dates: list[str] = Field(default_factory=list)
+    coverage_windows: list[str] = Field(default_factory=list)
     stale_session_count: int = 0
     stale_cycle_count: int = 0
     broker_connected_cycles: int = 0
@@ -3451,12 +4539,18 @@ class AlphaShadowDaemonSummaryReport(SerializableModel):
     account_summary_verified_sessions: int = 0
     missing_heartbeat_count: int = 0
     heartbeat_mismatch_count: int = 0
+    unclean_release_count: int = 0
     safety_violation_count: int = 0
     commit_shas: list[str] = Field(default_factory=list)
+    release_fingerprints: list[str] = Field(default_factory=list)
+    config_fingerprints: list[str] = Field(default_factory=list)
+    strategy_fingerprints: list[str] = Field(default_factory=list)
+    data_fingerprints: list[str] = Field(default_factory=list)
     campaign_ids: list[str] = Field(default_factory=list)
     warning_fingerprints: list[str] = Field(default_factory=list)
     error_fingerprints: list[str] = Field(default_factory=list)
     graduation_ready: bool = False
+    engineering_pilot_ready: bool = False
     next_eligibility_reason: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
@@ -3504,6 +4598,8 @@ class AlphaShadowDaemonSummaryReport(SerializableModel):
             raise ValueError("broker contact must remain read-only")
         if self.paper_execution_enabled:
             raise ValueError("paper execution must remain disabled")
+        if self.engineering_pilot_ready and not self.graduation_ready:
+            raise ValueError("engineering pilot readiness requires shadow graduation")
         if self.generated_orders or self.order_intents_generated:
             raise ValueError("alpha-shadow-daemon-summary must not generate orders")
         if self.pnl_calculated or self.portfolio_accounting:

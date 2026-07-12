@@ -25,6 +25,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return history_index_markdown(payload)
     if payload.get("report_type") == "history_load":
         return history_load_markdown(payload)
+    if payload.get("report_type") == "shadow_warmup_assembly":
+        return shadow_warmup_assembly_markdown(payload)
     if payload.get("report_type") == "data_quality_gate":
         return data_quality_gate_markdown(payload)
     if payload.get("report_type") == "backtest_feed":
@@ -35,10 +37,20 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return research_data_ingest_markdown(payload)
     if payload.get("report_type") == "research_data_audit":
         return research_data_audit_markdown(payload)
+    if payload.get("report_type") == "research_data_bakeoff":
+        return research_data_bakeoff_markdown(payload)
+    if payload.get("report_type") == "research_data_batch_import":
+        return research_data_batch_import_markdown(payload)
+    if payload.get("report_type") == "research_derived_views":
+        return research_derived_views_markdown(payload)
+    if payload.get("report_type") == "research_catalog_load":
+        return research_catalog_load_markdown(payload)
     if payload.get("report_type") == "research_backtest":
         return research_backtest_markdown(payload)
     if payload.get("report_type") == "research_walk_forward":
         return research_walk_forward_markdown(payload)
+    if payload.get("report_type") == "research_experiment":
+        return research_experiment_markdown(payload)
     if payload.get("report_type") == "strategy_contract":
         return strategy_contract_markdown(payload)
     if payload.get("report_type") == "strategy_runner":
@@ -698,6 +710,45 @@ def history_load_markdown(payload: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def shadow_warmup_assembly_markdown(payload: Mapping[str, Any]) -> str:
+    """Render strict-live prior-session/current-live warmup evidence."""
+
+    lines = [
+        f"# {payload.get('title', 'SPY Strict-live Warmup Assembly')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Source snapshots: `{payload.get('source_snapshot_count', 0)}`",
+        f"- Prior complete sessions: "
+        f"`{_join_or_none(payload.get('prior_complete_session_dates', []))}`",
+        f"- Current session: `{payload.get('current_session_date')}`",
+        f"- Current live bars: `{payload.get('current_live_bar_count', 0)}`",
+        f"- Assembled bars: `{payload.get('assembled_bar_count', 0)}`",
+        f"- Minimum bars: `{payload.get('minimum_bar_count', 0)}`",
+        f"- Newest live bar: `{payload.get('newest_live_bar_timestamp')}`",
+        f"- Newest live bar age: "
+        f"`{payload.get('newest_live_bar_age_minutes')} minutes`",
+        f"- Freshness threshold: "
+        f"`{payload.get('freshness_threshold_minutes')} minutes`",
+        f"- Current session starts at open: "
+        f"`{payload.get('current_session_starts_at_open', False)}`",
+        f"- Current session contiguous: "
+        f"`{payload.get('current_session_contiguous', False)}`",
+        f"- Completed bars only: `{payload.get('completed_bars_only', False)}`",
+        f"- Overlap bars: `{payload.get('overlap_bar_count', 0)}`",
+        f"- Overlap values agree: `{payload.get('overlap_values_agree', False)}`",
+        f"- Structural boundary agrees: "
+        f"`{payload.get('structural_boundary_agrees', False)}`",
+        f"- Boundary agreement passed: "
+        f"`{payload.get('boundary_agreement_passed', False)}`",
+        f"- Data fingerprint: `{payload.get('data_fingerprint')}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+    ]
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
 def data_quality_gate_markdown(payload: Mapping[str, Any]) -> str:
     """Render an offline historical data-quality gate report."""
 
@@ -994,13 +1045,158 @@ def research_data_audit_markdown(payload: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def research_data_bakeoff_markdown(payload: Mapping[str, Any]) -> str:
+    """Render the offline vendor due-diligence bake-off report."""
+
+    samples = payload.get("sample_results", [])
+    comparisons = payload.get("comparisons", [])
+    lines = [
+        f"# {payload.get('title', 'SPY Research Data Vendor Bake-off')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Manifest: `{payload.get('manifest_path')}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Credentials read: `{payload.get('credentials_read', True)}`",
+        f"- Network accessed: `{payload.get('network_accessed', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        f"- Procurement-ready vendors: "
+        f"`{', '.join(payload.get('procurement_ready_vendors', [])) or 'none'}`",
+        f"- Missing case tags: `{', '.join(payload.get('missing_case_tags', [])) or 'none'}`",
+        "",
+        "## Samples",
+        "",
+    ]
+    if samples:
+        for sample in samples:
+            lines.append(
+                f"- `{sample.get('sample_id')}` vendor=`{sample.get('vendor')}` "
+                f"rows=`{sample.get('row_count', 0)}` ok=`{sample.get('ok', False)}`"
+            )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Comparisons", ""])
+    if comparisons:
+        for comparison in comparisons:
+            lines.append(
+                f"- `{comparison.get('comparison_type')}` "
+                f"left=`{comparison.get('left_sample_id')}` "
+                f"right=`{comparison.get('right_sample_id')}` "
+                f"overlap=`{comparison.get('overlap_count', 0)}` "
+                f"ok=`{comparison.get('ok', False)}`"
+            )
+    else:
+        lines.append("- None")
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
+def research_data_batch_import_markdown(payload: Mapping[str, Any]) -> str:
+    """Render deterministic local batch-import evidence."""
+
+    request = payload.get("request", {})
+    items = payload.get("items", [])
+    lines = [
+        f"# {payload.get('title', 'SPY Research Data Batch Import')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Vendor: `{request.get('vendor')}`",
+        f"- Kind: `{request.get('kind')}`",
+        f"- Source directory: `{request.get('source_dir')}`",
+        f"- Files passed: `{payload.get('succeeded_count', 0)}`",
+        f"- Files failed: `{payload.get('failed_count', 0)}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Credentials read: `{payload.get('credentials_read', True)}`",
+        f"- Network accessed: `{payload.get('network_accessed', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        "",
+        "## Files",
+        "",
+    ]
+    if items:
+        for item in items:
+            lines.append(
+                f"- `{item.get('source_path')}` type=`{item.get('report_type')}` "
+                f"partitions=`{item.get('partition_count', 0)}` "
+                f"actions=`{item.get('action_count', 0)}` ok=`{item.get('ok', False)}`"
+            )
+    else:
+        lines.append("- None")
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
+def research_derived_views_markdown(payload: Mapping[str, Any]) -> str:
+    """Render source-hashed derived-view lineage evidence."""
+
+    request = payload.get("request", {})
+    partitions = payload.get("partitions", [])
+    lines = [
+        f"# {payload.get('title', 'SPY Derived Research Views')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Algorithm version: `{request.get('algorithm_version')}`",
+        f"- Action fingerprint: `{payload.get('action_fingerprint')}`",
+        f"- Partitions: `{len(partitions)}`",
+        f"- Stale partitions superseded: "
+        f"`{payload.get('stale_partitions_superseded', 0)}`",
+        f"- Idempotent partitions: `{payload.get('idempotent_partition_count', 0)}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        "",
+        "## Active Evidence",
+        "",
+    ]
+    if partitions:
+        for partition in partitions:
+            lines.append(
+                f"- `{partition.get('session_date')}` "
+                f"view=`{partition.get('price_view')}` "
+                f"revision=`{partition.get('revision')}` "
+                f"rows=`{partition.get('row_count')}`"
+            )
+    else:
+        lines.append("- None")
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
+def research_catalog_load_markdown(payload: Mapping[str, Any]) -> str:
+    """Render active catalog loader and fingerprint evidence."""
+
+    request = payload.get("request", {})
+    feed = payload.get("feed") or {}
+    lines = [
+        f"# {payload.get('title', 'SPY Research Catalog Load')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Price view: `{request.get('price_view')}`",
+        f"- Bar size: `{request.get('bar_size')}`",
+        f"- Start date: `{request.get('start_date')}`",
+        f"- End date: `{request.get('end_date')}`",
+        f"- Partitions loaded: `{len(payload.get('partitions', []))}`",
+        f"- Bars loaded: `{feed.get('total_bars', 0)}`",
+        f"- Dataset fingerprint: `{payload.get('dataset_fingerprint')}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+    ]
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
 def research_backtest_markdown(payload: Mapping[str, Any]) -> str:
     """Render a cost-aware broker-free research backtest report."""
 
     request = payload.get("request", {})
     metrics = payload.get("metrics") or {}
     fills = payload.get("fills", [])
+    orders = payload.get("orders", [])
     trades = payload.get("trades", [])
+    capital_events = payload.get("capital_events", [])
+    cost_scenarios = payload.get("cost_scenarios", [])
     lines = [
         f"# {payload.get('title', 'SPY Broker-free Research Backtest')}",
         "",
@@ -1008,7 +1204,19 @@ def research_backtest_markdown(payload: Mapping[str, Any]) -> str:
         f"- Final status: `{payload.get('final_status', 'unknown')}`",
         f"- Symbol: `{request.get('symbol', 'SPY')}`",
         f"- Windows: `{request.get('short_window')}/{request.get('long_window')}`",
+        f"- Sizing mode: `{request.get('sizing_mode')}`",
         f"- Quantity: `{request.get('quantity')}`",
+        f"- Target allocation: `{request.get('target_allocation_pct')}%`",
+        f"- Execution model: `{request.get('execution_model')}`",
+        f"- Signal/execution timestamps aligned: "
+        f"`{payload.get('signal_execution_timestamps_aligned', False)}`",
+        f"- Signal dataset fingerprint: "
+        f"`{payload.get('catalog_dataset_fingerprint')}`",
+        f"- Execution dataset fingerprint: "
+        f"`{payload.get('execution_dataset_fingerprint')}`",
+        f"- Benchmark dataset fingerprint: "
+        f"`{payload.get('benchmark_dataset_fingerprint')}`",
+        f"- Corporate-action fingerprint: `{payload.get('action_fingerprint')}`",
         f"- Promotion eligible: `{payload.get('promotion_eligible', False)}`",
         f"- Non-promotion reason: `{payload.get('non_promotion_reason')}`",
         f"- Lookahead prevention: `{payload.get('lookahead_prevention')}`",
@@ -1023,6 +1231,10 @@ def research_backtest_markdown(payload: Mapping[str, Any]) -> str:
         f"- Slippage per side: `{request.get('slippage_bps')} bps`",
         f"- Commission per share: `{request.get('commission_per_share')}`",
         f"- Minimum commission: `{request.get('minimum_commission')}`",
+        f"- Tick size: `{request.get('tick_size')}`",
+        f"- Limit buffer: `{request.get('limit_buffer_bps')} bps`",
+        f"- Maximum volume participation: "
+        f"`{request.get('max_volume_participation')}`",
         "",
         "## Metrics",
         "",
@@ -1036,6 +1248,17 @@ def research_backtest_markdown(payload: Mapping[str, Any]) -> str:
         f"- Commissions: `{metrics.get('total_commissions')}`",
         f"- Spread cost: `{metrics.get('total_spread_cost')}`",
         f"- Slippage cost: `{metrics.get('total_slippage_cost')}`",
+        f"- Tick-rounding cost: `{metrics.get('total_tick_rounding_cost')}`",
+        f"- CAGR: `{metrics.get('cagr_pct')}%`",
+        f"- Annualized volatility: `{metrics.get('annualized_volatility_pct')}%`",
+        f"- Sharpe / Sortino / Calmar: "
+        f"`{metrics.get('sharpe_ratio')} / {metrics.get('sortino_ratio')} / "
+        f"{metrics.get('calmar_ratio')}`",
+        f"- Drawdown duration bars / days: "
+        f"`{metrics.get('max_drawdown_duration_bars', 0)} / "
+        f"{metrics.get('max_drawdown_duration_days', 0)}`",
+        f"- Benchmark-relative return: "
+        f"`{metrics.get('benchmark_relative_return_pct')}%`",
         f"- Signals / fills / closed trades: "
         f"`{metrics.get('signal_count', 0)} / {metrics.get('fill_count', 0)} / "
         f"{metrics.get('closed_trade_count', 0)}`",
@@ -1056,6 +1279,18 @@ def research_backtest_markdown(payload: Mapping[str, Any]) -> str:
     else:
         lines.append("- None")
 
+    lines.extend(["", "## Simulated LMT DAY Orders", ""])
+    if orders:
+        for order in orders:
+            lines.append(
+                f"- `{order.get('order_id')}` {order.get('action')} "
+                f"requested=`{order.get('requested_quantity')}` "
+                f"filled=`{order.get('filled_quantity')}` "
+                f"limit=`{order.get('limit_price')}` status=`{order.get('status')}`"
+            )
+    else:
+        lines.append("- None")
+
     lines.extend(["", "## Closed Trades", ""])
     if trades:
         for trade in trades:
@@ -1064,6 +1299,30 @@ def research_backtest_markdown(payload: Mapping[str, Any]) -> str:
                 f"entry=`{trade.get('entry_timestamp')}` exit=`{trade.get('exit_timestamp')}` "
                 f"net_pnl=`{trade.get('net_pnl')}` holding_bars=`{trade.get('holding_bars')}` "
                 f"reason=`{trade.get('exit_reason')}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Capital Events", ""])
+    if capital_events:
+        for event in capital_events:
+            lines.append(
+                f"- `{event.get('ex_date')}` {event.get('action_type')} "
+                f"quantity=`{event.get('quantity_before')} -> "
+                f"{event.get('quantity_after')}` cash=`{event.get('cash_delta')}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Cost Scenarios", ""])
+    if cost_scenarios:
+        for scenario in cost_scenarios:
+            scenario_metrics = scenario.get("metrics") or {}
+            lines.append(
+                f"- `{scenario.get('name')}` multiplier=`{scenario.get('multiplier')}` "
+                f"return=`{scenario_metrics.get('total_return_pct')}%` "
+                f"drawdown=`{scenario_metrics.get('max_drawdown_pct')}%` "
+                f"ok=`{scenario.get('ok', False)}`"
             )
     else:
         lines.append("- None")
@@ -1078,12 +1337,23 @@ def research_walk_forward_markdown(payload: Mapping[str, Any]) -> str:
     selected = payload.get("selected_candidate") or {}
     summary = payload.get("walk_forward_summary") or {}
     holdout = payload.get("holdout_trial") or {}
+    request = payload.get("request", {})
     lines = [
         f"# {payload.get('title', 'SPY Walk-forward And Sealed Holdout Research')}",
         "",
         f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
         f"- Final status: `{payload.get('final_status', 'unknown')}`",
         f"- Dataset fingerprint: `{payload.get('dataset_fingerprint')}`",
+        f"- Catalog signal fingerprint: "
+        f"`{payload.get('catalog_dataset_fingerprint')}`",
+        f"- Catalog execution fingerprint: "
+        f"`{payload.get('execution_dataset_fingerprint')}`",
+        f"- Catalog benchmark fingerprint: "
+        f"`{payload.get('benchmark_dataset_fingerprint')}`",
+        f"- Corporate-action fingerprint: `{payload.get('action_fingerprint')}`",
+        f"- Sizing mode: `{request.get('sizing_mode')}`",
+        f"- Signal/execution timestamps aligned: "
+        f"`{payload.get('signal_execution_timestamps_aligned', False)}`",
         f"- Development fingerprint: `{payload.get('development_fingerprint')}`",
         f"- Holdout fingerprint: `{payload.get('holdout_fingerprint')}`",
         f"- Candidate specification fingerprint: "
@@ -1150,6 +1420,74 @@ def research_walk_forward_markdown(payload: Mapping[str, Any]) -> str:
             "holdout as consumed after its first recorded evaluation.",
         ]
     )
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
+def research_experiment_markdown(payload: Mapping[str, Any]) -> str:
+    """Render preregistration, annual validation, and holdout-access evidence."""
+
+    diagnostics = payload.get("statistical_diagnostics") or {}
+    holdout = payload.get("holdout_result") or {}
+    lines = [
+        f"# {payload.get('title', 'SPY Preregistered Research Experiment')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Experiment ID: `{payload.get('experiment_id')}`",
+        f"- Phase: `{payload.get('phase')}`",
+        f"- Spec fingerprint: `{payload.get('spec_fingerprint')}`",
+        f"- Spec tracked in Git: `{payload.get('spec_git_tracked', False)}`",
+        f"- Commit SHA: `{payload.get('commit_sha')}`",
+        f"- Signal dataset: `{payload.get('signal_dataset_fingerprint')}`",
+        f"- Execution dataset: `{payload.get('execution_dataset_fingerprint')}`",
+        f"- Benchmark dataset: `{payload.get('benchmark_dataset_fingerprint')}`",
+        f"- Corporate actions: `{payload.get('action_fingerprint')}`",
+        f"- Holdout access recorded: "
+        f"`{payload.get('holdout_access_recorded', False)}`",
+        f"- Holdout consumed: `{payload.get('holdout_access_consumed', False)}`",
+        f"- Research review ready: `{payload.get('research_review_ready', False)}`",
+        f"- Promotion eligible: `{payload.get('promotion_eligible', False)}`",
+        "",
+        "## Acceptance Gates",
+        "",
+        f"- Positive validation years: "
+        f"`{payload.get('positive_validation_year_count', 0)}`",
+        f"- Aggregate validation base return: "
+        f"`{payload.get('aggregate_validation_base_return_pct')}%`",
+        f"- Aggregate validation 2x-cost return: "
+        f"`{payload.get('aggregate_validation_two_x_return_pct')}%`",
+        f"- Validation-year gate: `{payload.get('validation_year_gate_passed', False)}`",
+        f"- 2x-cost gate: `{payload.get('two_x_cost_gate_passed', False)}`",
+        f"- Holdout return: `{holdout.get('base_return_pct')}%`",
+        f"- Holdout return gate: `{payload.get('holdout_return_gate_passed', False)}`",
+        f"- Deflated Sharpe probability: "
+        f"`{diagnostics.get('deflated_sharpe_probability')}`",
+        f"- Deflated Sharpe gate: "
+        f"`{payload.get('deflated_sharpe_gate_passed', False)}`",
+        f"- Holdout drawdown: `{holdout.get('max_drawdown_pct')}%`",
+        f"- Holdout benchmark drawdown: "
+        f"`{payload.get('holdout_benchmark_drawdown_pct')}%`",
+        f"- Holdout drawdown gate: "
+        f"`{payload.get('holdout_drawdown_gate_passed', False)}`",
+        "",
+        "## Annual Validation",
+        "",
+    ]
+    folds = payload.get("validation_folds", [])
+    if folds:
+        for fold in folds:
+            candidate = fold.get("selected_candidate") or {}
+            result = fold.get("validation_result") or {}
+            lines.append(
+                f"- `{fold.get('validation_year')}` selected="
+                f"`{candidate.get('short_window')}:{candidate.get('long_window')}` "
+                f"base=`{result.get('base_return_pct')}%` "
+                f"2x=`{result.get('two_x_cost_return_pct')}%` "
+                f"ok=`{fold.get('ok', False)}`"
+            )
+    else:
+        lines.append("- None")
     lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
     return "\n".join(lines) + "\n"
 
@@ -1748,6 +2086,16 @@ def paper_readiness_run_markdown(payload: Mapping[str, Any]) -> str:
         f"- Account summary verified: `{payload.get('account_summary_verified', False)}`",
         f"- History snapshot written: `{payload.get('history_snapshot_written', False)}`",
         f"- History load completed: `{payload.get('history_load_completed', False)}`",
+        f"- Warmup assembly completed: "
+        f"`{payload.get('warmup_assembly_completed', False)}`",
+        f"- Warmup prior sessions: "
+        f"`{_join_or_none(payload.get('warmup_prior_session_dates', []))}`",
+        f"- Warmup current live bars: "
+        f"`{payload.get('warmup_current_live_bar_count', 0)}`",
+        f"- Warmup assembled bars: `{payload.get('warmup_assembled_bar_count', 0)}`",
+        f"- Warmup boundary agreement: "
+        f"`{payload.get('warmup_boundary_agreement_passed', False)}`",
+        f"- Warmup data fingerprint: `{payload.get('warmup_data_fingerprint')}`",
         f"- Commodity universe verified: `{payload.get('commodity_universe_verified', False)}`",
         f"- Signal evaluation completed: `{payload.get('signal_evaluation_completed', False)}`",
         f"- Submitted orders: `{payload.get('submitted_orders', True)}`",
@@ -1936,11 +2284,19 @@ def alpha_shadow_daemon_markdown(payload: Mapping[str, Any]) -> str:
         f"- Campaign ID: `{payload.get('campaign_id', 'n/a')}`",
         f"- Final status: `{payload.get('final_status', 'unknown')}`",
         f"- Commit SHA: `{payload.get('commit_sha', 'unknown')}`",
+        f"- Release fingerprint: `{payload.get('release_fingerprint')}`",
+        f"- Release worktree clean: `{payload.get('release_worktree_clean', False)}`",
+        f"- Config fingerprint: `{payload.get('config_fingerprint')}`",
+        f"- Strategy fingerprint: `{payload.get('strategy_fingerprint')}`",
+        f"- Data fingerprint: `{payload.get('data_fingerprint')}`",
+        f"- Trading dates: `{_join_or_none(payload.get('trading_dates', []))}`",
+        f"- Coverage windows: `{_join_or_none(payload.get('coverage_windows', []))}`",
         f"- Cycles: `{payload.get('cycle_count', 0)}`",
         f"- Clean cycles: `{payload.get('clean_cycle_count', 0)}`",
         f"- Data policy: `{payload.get('market_data_policy', 'strict_live')}`",
         f"- Delayed data mode: `{payload.get('delayed_data_mode', False)}`",
         f"- Graduation eligible: `{payload.get('graduation_eligible', True)}`",
+        f"- Session evidence ready: `{payload.get('session_evidence_ready', False)}`",
         f"- Graduation ready: `{payload.get('graduation_ready', False)}`",
         "- Non-graduating reason: "
         f"`{payload.get('non_graduating_reason') or 'n/a'}`",
@@ -2024,6 +2380,12 @@ def alpha_shadow_daemon_summary_markdown(payload: Mapping[str, Any]) -> str:
         f"- Sessions: `{payload.get('session_count', 0)}`",
         f"- Clean sessions: `{payload.get('clean_session_count', 0)}`",
         f"- Minimum clean sessions: `{_request_value(payload, 'min_clean_sessions', 5)}`",
+        f"- Distinct trading dates: "
+        f"`{payload.get('distinct_trading_date_count', 0)}`",
+        f"- Minimum distinct trading dates: "
+        f"`{_request_value(payload, 'min_distinct_trading_dates', 5)}`",
+        f"- Trading dates: `{_join_or_none(payload.get('trading_dates', []))}`",
+        f"- Coverage windows: `{_join_or_none(payload.get('coverage_windows', []))}`",
         f"- Total cycles: `{payload.get('total_cycles', 0)}`",
         f"- Total clean cycles: `{payload.get('total_clean_cycles', 0)}`",
         f"- Stale sessions: `{payload.get('stale_session_count', 0)}`",
@@ -2033,8 +2395,11 @@ def alpha_shadow_daemon_summary_markdown(payload: Mapping[str, Any]) -> str:
         f"`{payload.get('account_summary_verified_cycles', 0)}`",
         f"- Missing heartbeats: `{payload.get('missing_heartbeat_count', 0)}`",
         f"- Heartbeat mismatches: `{payload.get('heartbeat_mismatch_count', 0)}`",
+        f"- Unclean releases: `{payload.get('unclean_release_count', 0)}`",
         f"- Safety violations: `{payload.get('safety_violation_count', 0)}`",
         f"- Graduation ready: `{payload.get('graduation_ready', False)}`",
+        f"- Engineering pilot ready: "
+        f"`{payload.get('engineering_pilot_ready', False)}`",
         f"- Submitted orders: `{payload.get('submitted_orders', True)}`",
         f"- Paper orders enabled: `{payload.get('paper_orders_enabled', True)}`",
         f"- Live orders enabled: `{payload.get('live_orders_enabled', True)}`",
@@ -2068,6 +2433,7 @@ def alpha_shadow_daemon_summary_markdown(payload: Mapping[str, Any]) -> str:
                 f"account=`{source.get('account_summary_verified_cycles', 0)}` "
                 f"stale=`{source.get('stale_data_detected', False)}` "
                 f"heartbeat=`{source.get('heartbeat_present', False)}` "
+                f"release_clean=`{source.get('release_worktree_clean', False)}` "
                 f"safety_flag=`{_source_safety_flag(source)}`"
             )
     else:
@@ -2078,6 +2444,22 @@ def alpha_shadow_daemon_summary_markdown(payload: Mapping[str, Any]) -> str:
     campaign_ids = payload.get("campaign_ids", [])
     lines.append(f"- Source commits: `{_join_or_none(commit_shas)}`")
     lines.append(f"- Source campaigns: `{_join_or_none(campaign_ids)}`")
+    lines.append(
+        f"- Release fingerprints: "
+        f"`{_join_or_none(payload.get('release_fingerprints', []))}`"
+    )
+    lines.append(
+        f"- Config fingerprints: "
+        f"`{_join_or_none(payload.get('config_fingerprints', []))}`"
+    )
+    lines.append(
+        f"- Strategy fingerprints: "
+        f"`{_join_or_none(payload.get('strategy_fingerprints', []))}`"
+    )
+    lines.append(
+        f"- Data fingerprints: "
+        f"`{_join_or_none(payload.get('data_fingerprints', []))}`"
+    )
 
     lines.extend(["", "## Next Eligibility", ""])
     if isinstance(next_reasons, list) and next_reasons:

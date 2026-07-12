@@ -9,6 +9,9 @@ from datetime import datetime, timedelta
 from glob import glob
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
+
+import exchange_calendars as xcals  # type: ignore[import-untyped]
 
 from trader.models import (
     AlphaShadowDaemonReport,
@@ -18,6 +21,8 @@ from trader.models import (
     AlphaShadowDaemonSummaryStatus,
     utc_now,
 )
+
+_EASTERN = ZoneInfo("America/New_York")
 
 
 def run_alpha_shadow_daemon_summary(
@@ -75,16 +80,38 @@ def run_alpha_shadow_daemon_summary(
         errors.extend(validation_errors)
         errors.extend(report_errors)
 
+    drift_errors = _fingerprint_drift_errors(source_reports)
+    errors.extend(drift_errors)
+    trading_dates = sorted(
+        {trading_date for report in source_reports for trading_date in report.trading_dates}
+    )
+    coverage_windows = [
+        name
+        for name in ("opening", "midday", "closing")
+        if any(name in report.coverage_windows for report in source_reports)
+    ]
     clean_session_count = sum(1 for report in source_reports if _clean_session(report))
     graduation_ready = (
         clean_session_count >= summary_request.min_clean_sessions
+        and len(trading_dates) >= summary_request.min_distinct_trading_dates
         and not errors
         and bool(source_reports)
+    )
+    engineering_pilot_ready = (
+        graduation_ready
+        and clean_session_count >= summary_request.pilot_min_clean_sessions
+        and len(trading_dates) >= summary_request.pilot_min_distinct_trading_dates
+        and set(summary_request.required_coverage_windows) <= set(coverage_windows)
     )
     next_reasons = _next_eligibility_reasons(
         errors=errors,
         clean_session_count=clean_session_count,
         min_clean_sessions=summary_request.min_clean_sessions,
+        distinct_trading_date_count=len(trading_dates),
+        min_distinct_trading_dates=summary_request.min_distinct_trading_dates,
+        engineering_pilot_ready=engineering_pilot_ready,
+        coverage_windows=coverage_windows,
+        request=summary_request,
     )
     final_status = _final_status(
         errors=errors,
@@ -101,6 +128,9 @@ def run_alpha_shadow_daemon_summary(
         total_cycles=sum(report.cycle_count for report in source_reports),
         total_clean_cycles=sum(report.clean_cycle_count for report in source_reports),
         clean_session_count=clean_session_count,
+        distinct_trading_date_count=len(trading_dates),
+        trading_dates=trading_dates,
+        coverage_windows=coverage_windows,
         stale_session_count=sum(1 for report in source_reports if report.stale_data_detected),
         stale_cycle_count=sum(report.stale_cycle_count for report in source_reports),
         broker_connected_cycles=sum(
@@ -126,9 +156,40 @@ def run_alpha_shadow_daemon_summary(
         heartbeat_mismatch_count=sum(
             1 for report in source_reports if report.heartbeat_campaign_matches is False
         ),
+        unclean_release_count=sum(
+            1 for report in source_reports if not report.release_worktree_clean
+        ),
         safety_violation_count=sum(1 for report in source_reports if _safety_violation(report)),
         commit_shas=sorted(
             {report.commit_sha for report in source_reports if report.commit_sha}
+        ),
+        release_fingerprints=sorted(
+            {
+                report.release_fingerprint
+                for report in source_reports
+                if report.release_fingerprint
+            }
+        ),
+        config_fingerprints=sorted(
+            {
+                report.config_fingerprint
+                for report in source_reports
+                if report.config_fingerprint
+            }
+        ),
+        strategy_fingerprints=sorted(
+            {
+                report.strategy_fingerprint
+                for report in source_reports
+                if report.strategy_fingerprint
+            }
+        ),
+        data_fingerprints=sorted(
+            {
+                report.data_fingerprint
+                for report in source_reports
+                if report.data_fingerprint
+            }
         ),
         campaign_ids=sorted(
             {report.campaign_id for report in source_reports if report.campaign_id}
@@ -139,6 +200,7 @@ def run_alpha_shadow_daemon_summary(
         ),
         error_fingerprints=_fingerprints(errors),
         graduation_ready=graduation_ready,
+        engineering_pilot_ready=engineering_pilot_ready,
         next_eligibility_reason=next_reasons,
         warnings=_unique(warnings),
         errors=_unique(errors),
@@ -167,11 +229,28 @@ def _load_mapping(path: Path) -> tuple[Mapping[str, Any] | None, list[str]]:
 
 
 def _validate_report_payload(path: Path, payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
     try:
         AlphaShadowDaemonReport.model_validate(payload)
     except ValueError as exc:
         return [f"{path.as_posix()} is not a valid alpha-shadow-daemon report: {exc}"]
-    return []
+    derived_dates, derived_windows = _coverage_from_payload(payload)
+    reported_dates = _string_list(payload.get("trading_dates"))
+    reported_windows = _string_list(payload.get("coverage_windows"))
+    if sorted(reported_dates) != derived_dates:
+        errors.append(f"{path.as_posix()} trading-date evidence does not match cycle bars")
+    if sorted(reported_windows) != sorted(derived_windows):
+        errors.append(f"{path.as_posix()} coverage-window evidence does not match cycle bars")
+    calendar = xcals.get_calendar("XNYS")
+    for value in reported_dates:
+        try:
+            trading_date = datetime.fromisoformat(value).date()
+        except ValueError:
+            errors.append(f"{path.as_posix()} has invalid trading date {value}")
+            continue
+        if not calendar.is_session(trading_date):
+            errors.append(f"{path.as_posix()} trading date {value} is not an XNYS session")
+    return errors
 
 
 def _evidence_from_payload(
@@ -196,6 +275,13 @@ def _evidence_from_payload(
         source_report_path=source_path.as_posix(),
         campaign_id=campaign_id,
         commit_sha=_optional_str(payload.get("commit_sha")),
+        release_fingerprint=_optional_str(payload.get("release_fingerprint")),
+        release_worktree_clean=_bool_value(payload.get("release_worktree_clean")),
+        config_fingerprint=_optional_str(payload.get("config_fingerprint")),
+        strategy_fingerprint=_optional_str(payload.get("strategy_fingerprint")),
+        data_fingerprint=_optional_str(payload.get("data_fingerprint")),
+        trading_dates=_string_list(payload.get("trading_dates")),
+        coverage_windows=_string_list(payload.get("coverage_windows")),
         timestamp=_parse_timestamp(payload.get("timestamp")),
         final_status=_optional_str(payload.get("final_status")) or "unknown",
         ok=_bool_value(payload.get("ok")),
@@ -252,13 +338,29 @@ def _source_report_errors(
         errors.append(f"{label} lacks account-summary evidence for every cycle")
     if not report.heartbeat_present:
         errors.append(f"{label} missing heartbeat evidence")
+    elif report.heartbeat_campaign_matches is not True:
+        errors.append(f"{label} heartbeat campaign_id does not match source report")
     if _safety_violation(report):
         errors.append(f"{label} contains an order-routing or execution safety flag")
     if not report.broker_contact_read_only:
         errors.append(f"{label} does not prove read-only broker contact")
+    if not report.release_worktree_clean:
+        errors.append(f"{label} was not generated from a clean committed worktree")
     if not report.graduation_eligible or report.delayed_data_mode:
         reason = report.non_graduating_reason or report.market_data_policy
         errors.append(f"{label} is non-graduating shadow evidence: {reason}")
+    for field_name, value in (
+        ("release_fingerprint", report.release_fingerprint),
+        ("config_fingerprint", report.config_fingerprint),
+        ("strategy_fingerprint", report.strategy_fingerprint),
+        ("data_fingerprint", report.data_fingerprint),
+    ):
+        if not value:
+            errors.append(f"{label} lacks {field_name}; rerun the daemon")
+    if len(report.trading_dates) != 1:
+        errors.append(f"{label} must prove exactly one strict-live trading date")
+    if not report.coverage_windows:
+        errors.append(f"{label} lacks opening, midday, or closing coverage evidence")
     if report.errors:
         errors.extend(f"{label} source error: {error}" for error in report.errors)
     errors.extend(
@@ -330,6 +432,8 @@ def _clean_session(report: AlphaShadowDaemonReportEvidence) -> bool:
         and report.broker_connected_cycles >= report.cycle_count
         and report.account_summary_verified_cycles >= report.cycle_count
         and report.heartbeat_present
+        and report.heartbeat_campaign_matches is True
+        and report.release_worktree_clean
         and report.graduation_eligible
         and not report.delayed_data_mode
         and not _safety_violation(report)
@@ -347,18 +451,74 @@ def _safety_violation(report: AlphaShadowDaemonReportEvidence) -> bool:
     )
 
 
+def _fingerprint_drift_errors(
+    reports: list[AlphaShadowDaemonReportEvidence],
+) -> list[str]:
+    errors: list[str] = []
+    for label, values in (
+        (
+            "release",
+            {report.release_fingerprint for report in reports if report.release_fingerprint},
+        ),
+        (
+            "config",
+            {report.config_fingerprint for report in reports if report.config_fingerprint},
+        ),
+        (
+            "strategy",
+            {
+                report.strategy_fingerprint
+                for report in reports
+                if report.strategy_fingerprint
+            },
+        ),
+    ):
+        if len(values) > 1:
+            errors.append(f"strict-live {label} fingerprint drift detected")
+    data_fingerprints = [
+        report.data_fingerprint for report in reports if report.data_fingerprint
+    ]
+    if len(data_fingerprints) != len(set(data_fingerprints)):
+        errors.append("duplicate strict-live data fingerprints detected")
+    return errors
+
+
 def _next_eligibility_reasons(
     *,
     errors: list[str],
     clean_session_count: int,
     min_clean_sessions: int,
+    distinct_trading_date_count: int,
+    min_distinct_trading_dates: int,
+    engineering_pilot_ready: bool,
+    coverage_windows: list[str],
+    request: AlphaShadowDaemonSummaryRequest,
 ) -> list[str]:
     if errors:
         return ["daemon summary blockers must be resolved"]
+    reasons: list[str] = []
     if clean_session_count < min_clean_sessions:
         remaining = min_clean_sessions - clean_session_count
-        return [f"{remaining} more clean daemon session(s) required"]
-    return ["graduation_ready_for_spy_paper_daemon_design"]
+        reasons.append(f"{remaining} more clean daemon session(s) required")
+    if distinct_trading_date_count < min_distinct_trading_dates:
+        remaining = min_distinct_trading_dates - distinct_trading_date_count
+        reasons.append(f"{remaining} more distinct strict-live trading date(s) required")
+    if reasons:
+        return reasons
+    if not engineering_pilot_ready:
+        if clean_session_count < request.pilot_min_clean_sessions:
+            remaining = request.pilot_min_clean_sessions - clean_session_count
+            reasons.append(f"{remaining} more clean session(s) required for pilot evidence")
+        missing_windows = sorted(
+            set(request.required_coverage_windows) - set(coverage_windows)
+        )
+        if missing_windows:
+            reasons.append("missing pilot coverage windows: " + ", ".join(missing_windows))
+        return [
+            "graduation_ready_for_spy_paper_daemon_implementation",
+            *reasons,
+        ]
+    return ["engineering_pilot_evidence_ready"]
 
 
 def _final_status(
@@ -372,6 +532,38 @@ def _final_status(
     if warnings or not graduation_ready:
         return AlphaShadowDaemonSummaryStatus.COMPLETED_WITH_WARNINGS
     return AlphaShadowDaemonSummaryStatus.COMPLETED
+
+
+def _coverage_from_payload(
+    payload: Mapping[str, Any],
+) -> tuple[list[str], list[str]]:
+    trading_dates: set[str] = set()
+    windows: set[str] = set()
+    cycles = payload.get("cycles", [])
+    if not isinstance(cycles, list):
+        return [], []
+    for cycle in cycles:
+        if not isinstance(cycle, Mapping):
+            continue
+        source_timestamps = cycle.get("source_bar_timestamp_by_symbol", {})
+        if not isinstance(source_timestamps, Mapping):
+            continue
+        parsed = _parse_timestamp(source_timestamps.get("SPY"))
+        if parsed is None:
+            continue
+        eastern = parsed.astimezone(_EASTERN)
+        trading_dates.add(eastern.date().isoformat())
+        clock = (eastern.hour, eastern.minute)
+        if clock < (11, 0):
+            windows.add("opening")
+        elif clock < (14, 30):
+            windows.add("midday")
+        else:
+            windows.add("closing")
+    ordered_windows = [
+        value for value in ("opening", "midday", "closing") if value in windows
+    ]
+    return sorted(trading_dates), ordered_windows
 
 
 def _parse_timestamp(value: object) -> datetime | None:

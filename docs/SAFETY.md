@@ -2,9 +2,13 @@
 
 ## Dry-Run First
 
-The first version is designed to be useful without a broker connection. CLI commands use deterministic mock data unless a later phase deliberately adds broker-backed reads.
+The system is designed to remain useful without a broker connection. Offline
+research commands read only local generated or licensed data, while broker-backed
+reads must be explicit.
 
-No command places orders.
+The only production module permitted to place or cancel an order is the manually
+gated paper-only `paper_order_smoke.py` lifecycle test. Normal routing uses a
+refusing paper executor. There is no live executor or autonomous paper daemon.
 
 Milestone 2 adds a broker socket probe, but it is read-only. It may request current server time, managed account identifiers, account summaries, or positions. It does not enable paper execution and does not send order submission, order modification, or order cancellation requests.
 
@@ -14,7 +18,7 @@ Milestone 5 adds read-only market-data diagnostics. `market-probe` may resolve
 contracts, request market-data type, collect quote ticks, and request a small
 historical-bar sample. It does not place, modify, or cancel orders. `cancelMktData`
 and `cancelHistoricalData` are permitted only as data-request cleanup operations;
-`cancelOrder` remains forbidden.
+`cancelOrder` remains forbidden outside the allowlisted paper-smoke module.
 
 Milestone 6 adds read-only historical snapshot ingestion. `history-fetch`,
 `history-readiness`, and `history-snapshot` may request, store, and validate
@@ -235,8 +239,9 @@ Milestone 26 adds `alpha-shadow-daemon`, the first controlled autonomous mode.
 It repeats the existing SPY-only `alpha-shadow-run` path for a finite number of
 cycles, requires `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=false`,
 `ALLOW_LIVE_ORDERS=false`, localhost, and paper port `7497` or `4002`, expects
-IBKR Read-Only API to remain enabled, writes ignored heartbeat evidence under
-`state/`, and halts on a kill-switch file before the next cycle. It fails closed
+IBKR Read-Only API to remain enabled, atomically updates the ignored latest
+heartbeat and writes one campaign-specific immutable heartbeat under `state/`,
+and halts on a kill-switch file before the next cycle. It fails closed
 on stale source bars or shadow-cycle errors and reports clean-cycle graduation
 evidence. It does not submit, modify, or cancel orders, does not invoke broker
 order APIs, does not enable live trading, does not calculate P&L, and does not
@@ -244,23 +249,29 @@ enable commodity execution.
 
 Milestone 27 adds `alpha-shadow-daemon-summary`, an offline-only drift and
 graduation gate for repeated daemon sessions. It reads ignored local daemon
-reports, requires fresh same-commit evidence when configured, checks heartbeat
-presence, stale-data flags, broker/account verification counts, and order-safety
-flags, then reports whether the session set is ready for SPY paper-daemon design.
-It fails closed on missing reports, commit mismatch, stale data, broker/account
-gaps, missing heartbeat evidence, source order flags, or order API evidence. It
+  reports, requires fresh same-commit evidence when configured, checks a clean
+  committed release, campaign-matching heartbeat, release/config/strategy/data
+  fingerprints, distinct XNYS dates, coverage
+  windows, stale-data flags, broker/account counts, and order-safety flags. Five
+  clean strict-live sessions on five dates unlock implementation work; ten clean
+  sessions with opening/midday/closing coverage unlock lifecycle-pilot evidence.
+  It fails closed on missing reports, drift, duplicate data evidence, delayed
+  mode, stale data, broker/account gaps, source order flags, or order API evidence. It
 does not contact IBKR, submit orders, route execution, enable paper orders,
 calculate P&L, or expand commodity execution.
 
-`ibkr-data-diagnostics` is an offline-only strict SPY shadow precheck for
+`ibkr-data-diagnostics` is an offline-only current-feed diagnostic for strict SPY
 market-hours daemon attempts. It reads ignored local `broker-probe`,
 `history-snapshot`, optional `market-probe`, and `history-readiness` reports,
 requires same-commit broker/account evidence, checks the strict `1 D`,
 `5 mins`, `TRADES`, `use_rth=1` snapshot settings, verifies at least `50` SPY
-bars, fails closed when the latest bar is older than `15` minutes, and treats
+bars in the current diagnostic snapshot, fails closed when the latest bar is
+older than `15` minutes, and treats
 IBKR live-market-data subscription errors such as `10089` as strict shadow
 blockers. It never contacts IBKR, submits orders, cancels orders, enables paper
-orders, enables live orders, or expands commodity execution.
+orders, enables live orders, or expands commodity execution. The daemon's
+authoritative warmup gate separately assembles prior complete sessions plus the
+current completed prefix and applies freshness only to the newest current bar.
 
 `ibkr-delayed-data-diagnostics` and `alpha-shadow-daemon-delayed` are
 engineering-only alternatives for unfunded or unsubscribed accounts. They must
@@ -278,9 +289,9 @@ milestone is approved.
 
 ## Quantitative Research Gate
 
-No current milestone supports profitability, performance, or tradability claims.
-Before any future real signal evaluation, simulation, fills, portfolio
-accounting, or P&L milestone is approved, the plan must explicitly address:
+The broker-free SPY research simulator now calculates explicit simulated
+performance, but no current milestone supports profitability or tradability
+claims. Research review must explicitly address:
 
 - look-ahead bias and point-in-time data availability;
 - survivorship bias and static-universe limitations;
@@ -288,8 +299,18 @@ accounting, or P&L milestone is approved, the plan must explicitly address:
   walk-forward validation;
 - transaction costs, slippage, latency, market-impact assumptions, and fill
   realism;
-- unsupported claims based on placeholder strategies, synthetic fixtures, or
+- immutable source/adjustment lineage and corporate actions;
+- preregistered chronological validation and one-time holdout access;
+- unsupported claims based on historical simulations, synthetic fixtures, or
   local diagnostic reports.
+
+Backtests load only passing catalog revisions and remain
+`promotion_eligible=false`. Strategy-driven paper alpha requires independent
+`research_review_ready=true` and strict-live operational gates.
+
+The global source scan permits `placeOrder` and `cancelOrder` text only in
+`src/trader/execution/paper_order_smoke.py`; `reqGlobalCancel` is forbidden in
+all production source.
 
 ## Sensitive Data
 
