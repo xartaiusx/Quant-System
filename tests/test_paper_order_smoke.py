@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +16,7 @@ from trader.execution.paper_order_smoke import (
     PaperBrokerOpenOrder,
     PaperBrokerPlacementResult,
     PaperOrderSmokeError,
+    _call_cancel_order,
     _make_limit_order,
     _PaperOrderIBKRApp,
     run_paper_order_smoke,
@@ -340,6 +342,53 @@ def test_ibkr_fractional_size_rules_notice_is_informational() -> None:
     assert app.warnings == [
         "IBKR 2176: Warning: Your API version does not support fractional share size rules."
     ]
+
+
+def test_ibkr_timestamped_error_callback_is_supported() -> None:
+    app = _PaperOrderIBKRApp()
+
+    app.error(-1, 1_720_000_000_000, 2104, "Market data farm connection is OK", "")
+
+    assert app.warnings == ["IBKR 2104: Market data farm connection is OK"]
+    assert app.errors == []
+
+
+def test_current_commission_and_fees_callback_is_recorded() -> None:
+    app = _PaperOrderIBKRApp()
+
+    app.commissionAndFeesReport(
+        SimpleNamespace(
+            execId="exec-1",
+            commissionAndFees=0.35,
+            currency="USD",
+            realizedPNL=1.25,
+            yield_=0.0,
+            yieldRedemptionDate=0,
+        )
+    )
+
+    assert app.commission_reports[0].exec_id == "exec-1"
+    assert app.commission_reports[0].commission == Decimal("0.35")
+
+
+def test_cancel_order_uses_current_order_cancel_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeOrderCancel:
+        pass
+
+    class CapturingApp:
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, object]] = []
+
+        def cancelOrder(self, orderId: int, orderCancel: object) -> None:  # noqa: N802
+            self.calls.append((orderId, orderCancel))
+
+    app = CapturingApp()
+    monkeypatch.setattr(paper_order_smoke, "_IBAPI_ORDER_CANCEL", FakeOrderCancel)
+
+    _call_cancel_order(app, 42)  # type: ignore[arg-type]
+
+    assert app.calls[0][0] == 42
+    assert isinstance(app.calls[0][1], FakeOrderCancel)
 
 
 def test_ibkr_market_data_cancel_notice_is_informational_for_quote_request() -> None:

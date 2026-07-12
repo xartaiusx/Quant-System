@@ -103,9 +103,12 @@
 ## Current Local Validation
 
 - `ibapi` is installed and importable in this checkout's `.venv`.
-- The currently installed legacy `ibapi 9.81.1-1` supports protocol `157` and
-  fails the new compatibility check; install the current official IBKR API
-  before strict-live shadow graduation or paper-order testing.
+- Official `ibapi 10.48.1` is installed in this checkout's `.venv`, supports
+  server protocol `225`, and passes the minimum protocol `163` compatibility
+  check.
+- The IBKR adapters accept both legacy and current timestamped error callbacks,
+  use the current `OrderCancel` payload, and capture current
+  `commissionAndFeesReport` callbacks.
 - IB Gateway paper on `127.0.0.1:4002` accepted a read-only broker probe.
 - Latest successful broker-probe returned current server time, masked managed-account output, `order_routing_enabled=false`, and `no_order_guarantee=true`.
 - Before market-data diagnostics in a new environment, rerun a successful read-only current-time broker probe.

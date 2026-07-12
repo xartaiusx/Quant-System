@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
 from typing import Any, Protocol, cast
 
+from trader.broker.ibapi_callbacks import normalize_ibkr_error_args
 from trader.config import LIVE_PORTS, PAPER_PORTS, TraderConfig, TradingMode, mask_account_id
 from trader.models import (
     OrderType,
@@ -36,12 +37,14 @@ try:
     _contract_module = importlib.import_module("ibapi.contract")
     _execution_module = importlib.import_module("ibapi.execution")
     _order_module = importlib.import_module("ibapi.order")
+    _order_cancel_module = importlib.import_module("ibapi.order_cancel")
     _wrapper_module = importlib.import_module("ibapi.wrapper")
     _IBAPI_IMPORT_ERROR: BaseException | None = None
     _IBAPI_ECLIENT: Any = _client_module.EClient
     _IBAPI_CONTRACT: Any = _contract_module.Contract
     _IBAPI_EXECUTION_FILTER: Any = _execution_module.ExecutionFilter
     _IBAPI_ORDER: Any = _order_module.Order
+    _IBAPI_ORDER_CANCEL: Any = _order_cancel_module.OrderCancel
     _IBAPI_EWRAPPER: Any = _wrapper_module.EWrapper
 except Exception as exc:  # pragma: no cover - exercised through availability injection
     _IBAPI_IMPORT_ERROR = exc
@@ -71,6 +74,7 @@ except Exception as exc:  # pragma: no cover - exercised through availability in
     _IBAPI_CONTRACT = None
     _IBAPI_EXECUTION_FILTER = None
     _IBAPI_ORDER = None
+    _IBAPI_ORDER_CANCEL = None
     _IBAPI_EWRAPPER = _MissingEWrapper
 
 
@@ -284,7 +288,7 @@ class PaperOrderAppProtocol(Protocol):
     def placeOrder(self, orderId: int, contract: object, order: object) -> None:
         raise NotImplementedError
 
-    def cancelOrder(self, orderId: int, manualCancelOrderTime: str = "") -> None:
+    def cancelOrder(self, orderId: int, orderCancel: object) -> None:
         raise NotImplementedError
 
 
@@ -470,16 +474,25 @@ class _PaperOrderIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
         self.execution_details_end_event.set()
 
     def commissionReport(self, commissionReport: object) -> None:  # noqa: N802
+        self._record_commission_and_fees(commissionReport)
+
+    def commissionAndFeesReport(self, commissionAndFeesReport: object) -> None:  # noqa: N802
+        self._record_commission_and_fees(commissionAndFeesReport)
+
+    def _record_commission_and_fees(self, report: object) -> None:
+        commission = getattr(report, "commission", None)
+        if commission is None:
+            commission = getattr(report, "commissionAndFees", None)
         with self._lock:
             self.commission_reports.append(
                 PaperBrokerCommissionReport(
-                    exec_id=_safe_str(getattr(commissionReport, "execId", None)),
-                    commission=_safe_decimal(getattr(commissionReport, "commission", None)),
-                    currency=_safe_str(getattr(commissionReport, "currency", None)),
-                    realized_pnl=_safe_decimal(getattr(commissionReport, "realizedPNL", None)),
-                    yield_value=_safe_decimal(getattr(commissionReport, "yield_", None)),
+                    exec_id=_safe_str(getattr(report, "execId", None)),
+                    commission=_safe_decimal(commission),
+                    currency=_safe_str(getattr(report, "currency", None)),
+                    realized_pnl=_safe_decimal(getattr(report, "realizedPNL", None)),
+                    yield_value=_safe_decimal(getattr(report, "yield_", None)),
                     yield_redemption_date=_safe_int(
-                        getattr(commissionReport, "yieldRedemptionDate", None)
+                        getattr(report, "yieldRedemptionDate", None)
                     ),
                 )
             )
@@ -501,36 +514,43 @@ class _PaperOrderIBKRApp(_IBAPI_EWRAPPER, _IBAPI_ECLIENT):  # type: ignore[misc]
     def error(  # noqa: N802
         self,
         reqId: int,
-        errorCode: int,
-        errorString: str,
-        advancedOrderRejectJson: str = "",
+        *args: object,
     ) -> None:
-        message = errorString
-        if advancedOrderRejectJson:
-            message = f"{message} ({advancedOrderRejectJson})"
+        try:
+            normalized = normalize_ibkr_error_args(args)
+        except ValueError as exc:
+            with self._lock:
+                self.errors.append(str(exc))
+            self._release_events(reqId)
+            return
+
+        error_code = normalized.error_code
+        message = normalized.error_string
+        if normalized.advanced_order_reject_json:
+            message = f"{message} ({normalized.advanced_order_reject_json})"
         event = PaperOrderCallbackEvent(
             event_type="error",
             order_id=reqId if reqId >= 0 else None,
-            status=str(errorCode),
+            status=str(error_code),
             message=message,
         )
-        informational_error = errorCode in _INFORMATIONAL_ERROR_CODES or (
-            errorCode == 300
+        informational_error = error_code in _INFORMATIONAL_ERROR_CODES or (
+            error_code == 300
             and reqId in self.market_data_events
             and "tickerId" in message
         ) or (
-            errorCode == 399
+            error_code == 399
             and message.startswith("Order Message:")
         ) or (
-            errorCode == 202
+            error_code == 202
             and message.startswith("Order Canceled")
         )
         with self._lock:
             self.callback_events.append(event)
             if informational_error:
-                self.warnings.append(f"IBKR {errorCode}: {message}")
+                self.warnings.append(f"IBKR {error_code}: {message}")
             else:
-                self.errors.append(f"IBKR {errorCode}: {message}")
+                self.errors.append(f"IBKR {error_code}: {message}")
         if not informational_error:
             self._release_events(reqId)
 
@@ -1357,10 +1377,8 @@ def _make_limit_order(
 
 
 def _call_cancel_order(app: PaperOrderAppProtocol, order_id: int) -> None:
-    try:
-        app.cancelOrder(order_id, "")
-    except TypeError:
-        app.cancelOrder(order_id)
+    order_cancel = _IBAPI_ORDER_CANCEL() if _IBAPI_ORDER_CANCEL is not None else ""
+    app.cancelOrder(order_id, order_cancel)
 
 
 def _probe_socket(host: str, port: int, timeout: float) -> None:
