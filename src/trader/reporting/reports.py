@@ -31,6 +31,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return backtest_feed_markdown(payload)
     if payload.get("report_type") == "backtest_run":
         return backtest_run_markdown(payload)
+    if payload.get("report_type") == "research_backtest":
+        return research_backtest_markdown(payload)
     if payload.get("report_type") == "strategy_contract":
         return strategy_contract_markdown(payload)
     if payload.get("report_type") == "strategy_runner":
@@ -923,6 +925,84 @@ def backtest_run_markdown(payload: Mapping[str, Any]) -> str:
         lines.append("- None")
 
     lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def research_backtest_markdown(payload: Mapping[str, Any]) -> str:
+    """Render a cost-aware broker-free research backtest report."""
+
+    request = payload.get("request", {})
+    metrics = payload.get("metrics") or {}
+    fills = payload.get("fills", [])
+    trades = payload.get("trades", [])
+    lines = [
+        f"# {payload.get('title', 'SPY Broker-free Research Backtest')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Symbol: `{request.get('symbol', 'SPY')}`",
+        f"- Windows: `{request.get('short_window')}/{request.get('long_window')}`",
+        f"- Quantity: `{request.get('quantity')}`",
+        f"- Promotion eligible: `{payload.get('promotion_eligible', False)}`",
+        f"- Non-promotion reason: `{payload.get('non_promotion_reason')}`",
+        f"- Lookahead prevention: `{payload.get('lookahead_prevention')}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Order routing enabled: `{payload.get('order_routing_enabled', True)}`",
+        f"- Submitted orders: `{payload.get('submitted_orders', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        "",
+        "## Cost Model",
+        "",
+        f"- Full spread: `{request.get('spread_bps')} bps`",
+        f"- Slippage per side: `{request.get('slippage_bps')} bps`",
+        f"- Commission per share: `{request.get('commission_per_share')}`",
+        f"- Minimum commission: `{request.get('minimum_commission')}`",
+        "",
+        "## Metrics",
+        "",
+        f"- Starting cash: `{metrics.get('starting_cash')}`",
+        f"- Ending equity: `{metrics.get('ending_equity')}`",
+        f"- Net P&L: `{metrics.get('net_pnl')}`",
+        f"- Total return: `{metrics.get('total_return_pct')}%`",
+        f"- SPY benchmark return: `{metrics.get('benchmark_return_pct')}%`",
+        f"- Maximum drawdown: `{metrics.get('max_drawdown_pct')}%`",
+        f"- Turnover ratio: `{metrics.get('turnover_ratio')}`",
+        f"- Commissions: `{metrics.get('total_commissions')}`",
+        f"- Spread cost: `{metrics.get('total_spread_cost')}`",
+        f"- Slippage cost: `{metrics.get('total_slippage_cost')}`",
+        f"- Signals / fills / closed trades: "
+        f"`{metrics.get('signal_count', 0)} / {metrics.get('fill_count', 0)} / "
+        f"{metrics.get('closed_trade_count', 0)}`",
+        f"- Win rate: `{metrics.get('win_rate_pct')}%`",
+        f"- Exposure: `{metrics.get('exposure_pct')}%`",
+        "",
+        "## Simulated Fills",
+        "",
+    ]
+    if fills:
+        for fill in fills:
+            lines.append(
+                "- "
+                f"`{fill.get('fill_timestamp')}` {fill.get('action')} "
+                f"{fill.get('quantity')} @ `{fill.get('fill_price')}` "
+                f"commission=`{fill.get('commission')}` reason=`{fill.get('reason')}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Closed Trades", ""])
+    if trades:
+        for trade in trades:
+            lines.append(
+                "- "
+                f"entry=`{trade.get('entry_timestamp')}` exit=`{trade.get('exit_timestamp')}` "
+                f"net_pnl=`{trade.get('net_pnl')}` holding_bars=`{trade.get('holding_bars')}` "
+                f"reason=`{trade.get('exit_reason')}`"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
     return "\n".join(lines) + "\n"
 
 

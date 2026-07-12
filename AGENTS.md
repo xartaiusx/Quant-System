@@ -22,6 +22,7 @@ The current project is infrastructure only. It must support research, signal gen
 - Offline data commands must not import broker clients or contact IBKR.
 - Backtest data adapter commands must remain broker-free and must not evaluate strategies, simulate orders, or compute P&L.
 - Backtest engine skeleton commands must remain broker-free and must not evaluate strategies, simulate orders, or calculate P&L until explicitly approved in a future milestone.
+- `research-backtest` is the separately approved broker-free SPY research simulator. It may evaluate the documented moving-average crossover, simulate next-bar fills, apply explicit costs, maintain portfolio accounting, and calculate P&L. It must not import broker or execution modules, contact IBKR, invoke order APIs, expand beyond SPY, or report promotion eligibility before walk-forward and sealed out-of-sample validation are implemented.
 - Strategy interface scaffold commands must remain broker-free and must not generate real signals, simulate orders, or calculate P&L until explicitly approved in a future milestone.
 - Strategy runner commands must remain inert/no-op until a future milestone explicitly approves real signal generation. They must not generate orders, simulate fills, calculate P&L, or contact brokers.
 - Offline stress tests may generate synthetic fixture data only and must remain broker-free.
