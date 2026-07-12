@@ -21,9 +21,12 @@ from trader.models import (
     AlphaPaperRunReport,
     AlphaPaperRunRequest,
     AlphaPaperRunStatus,
+    AlphaShadowDaemonSummaryReport,
     AlphaShadowRunReport,
     PaperOrderSmokeReport,
     PaperOrderSmokeRequest,
+    ResearchExperimentPhase,
+    ResearchExperimentReport,
     SignalDirection,
     utc_now,
 )
@@ -56,6 +59,8 @@ def run_alpha_paper_run(
     source_paths = {
         "alpha_shadow_report": alpha_request.alpha_shadow_report_path,
         "paper_smoke_report": alpha_request.paper_smoke_report_path,
+        "research_experiment_report": alpha_request.research_experiment_report_path,
+        "strict_shadow_summary_report": alpha_request.strict_shadow_summary_report_path,
     }
 
     if errors:
@@ -74,8 +79,16 @@ def run_alpha_paper_run(
         Path(alpha_request.alpha_shadow_report_path)
     )
     smoke_report, smoke_errors = _load_smoke_report(Path(alpha_request.paper_smoke_report_path))
+    research_report, research_errors = _load_research_report(
+        Path(alpha_request.research_experiment_report_path)
+    )
+    strict_summary, strict_errors = _load_strict_shadow_summary(
+        Path(alpha_request.strict_shadow_summary_report_path)
+    )
     errors.extend(shadow_errors)
     errors.extend(smoke_errors)
+    errors.extend(research_errors)
+    errors.extend(strict_errors)
     selected_campaign_id, campaign_errors = _source_campaign_context(
         alpha_request.campaign_id,
         {
@@ -105,6 +118,26 @@ def run_alpha_paper_run(
                 max_age_hours=alpha_request.max_report_age_hours,
             )
         )
+    if research_report is not None:
+        errors.extend(
+            _research_report_errors(
+                research_report,
+                source_path=alpha_request.research_experiment_report_path,
+                current_commit=current_commit,
+                now=current_time,
+                max_age_hours=alpha_request.max_report_age_hours,
+            )
+        )
+    if strict_summary is not None:
+        errors.extend(
+            _strict_shadow_summary_errors(
+                strict_summary,
+                source_path=alpha_request.strict_shadow_summary_report_path,
+                current_commit=current_commit,
+                now=current_time,
+                max_age_hours=alpha_request.max_report_age_hours,
+            )
+        )
 
     if errors:
         return _build_report(
@@ -115,6 +148,8 @@ def run_alpha_paper_run(
             source_report_paths=source_paths,
             shadow_report=shadow_report,
             smoke_report=smoke_report,
+            research_report=research_report,
+            strict_summary=strict_summary,
             warnings=warnings,
             errors=errors,
             final_status=AlphaPaperRunStatus.FAILED,
@@ -122,6 +157,8 @@ def run_alpha_paper_run(
 
     assert shadow_report is not None
     assert smoke_report is not None
+    assert research_report is not None
+    assert strict_summary is not None
     shadow_signal = _shadow_signal_direction(shadow_report)
     risk_approved = shadow_report.risk_approved_count > 0
     if shadow_signal != SignalDirection.BUY.value:
@@ -133,6 +170,8 @@ def run_alpha_paper_run(
             source_report_paths=source_paths,
             shadow_report=shadow_report,
             smoke_report=smoke_report,
+            research_report=research_report,
+            strict_summary=strict_summary,
             shadow_signal=shadow_signal,
             risk_approved=risk_approved,
             no_trade_reason="shadow_signal_not_buy",
@@ -149,6 +188,8 @@ def run_alpha_paper_run(
             source_report_paths=source_paths,
             shadow_report=shadow_report,
             smoke_report=smoke_report,
+            research_report=research_report,
+            strict_summary=strict_summary,
             shadow_signal=shadow_signal,
             risk_approved=False,
             no_trade_reason="shadow_risk_not_approved",
@@ -184,6 +225,8 @@ def run_alpha_paper_run(
         source_report_paths=source_paths,
         shadow_report=shadow_report,
         smoke_report=smoke_report,
+        research_report=research_report,
+        strict_summary=strict_summary,
         paper_order_report=paper_order_report,
         shadow_signal=shadow_signal,
         risk_approved=risk_approved,
@@ -235,6 +278,30 @@ def _load_smoke_report(path: Path) -> tuple[PaperOrderSmokeReport | None, list[s
         return PaperOrderSmokeReport.model_validate(payload), []
     except ValueError as exc:
         return None, [f"paper-order-smoke report is invalid: {exc}"]
+
+
+def _load_research_report(
+    path: Path,
+) -> tuple[ResearchExperimentReport | None, list[str]]:
+    payload, errors = _load_mapping(path, label="research-experiment report")
+    if payload is None:
+        return None, errors
+    try:
+        return ResearchExperimentReport.model_validate(payload), []
+    except ValueError as exc:
+        return None, [f"research-experiment report is invalid: {exc}"]
+
+
+def _load_strict_shadow_summary(
+    path: Path,
+) -> tuple[AlphaShadowDaemonSummaryReport | None, list[str]]:
+    payload, errors = _load_mapping(path, label="strict shadow daemon summary")
+    if payload is None:
+        return None, errors
+    try:
+        return AlphaShadowDaemonSummaryReport.model_validate(payload), []
+    except ValueError as exc:
+        return None, [f"strict shadow daemon summary is invalid: {exc}"]
 
 
 def _load_mapping(path: Path, *, label: str) -> tuple[Mapping[str, Any] | None, list[str]]:
@@ -304,6 +371,72 @@ def _paper_smoke_report_errors(
         errors.append("paper-order-smoke report filled while fills were disallowed")
     if report.fill_quantity == 0 and not report.canceled:
         errors.append("paper-order-smoke report did not prove cancel of unfilled order")
+    return errors
+
+
+def _research_report_errors(
+    report: ResearchExperimentReport,
+    *,
+    source_path: str,
+    current_commit: str | None,
+    now: datetime,
+    max_age_hours: int,
+) -> list[str]:
+    errors = _shared_report_errors(
+        report.model_dump(mode="json"),
+        source_path=source_path,
+        current_commit=current_commit,
+        now=now,
+        max_age_hours=max_age_hours,
+    )
+    if not report.ok:
+        errors.append("research-experiment report did not pass")
+    if report.phase != ResearchExperimentPhase.FINAL_HOLDOUT:
+        errors.append("research-experiment report is not a final-holdout phase")
+    if not report.holdout_access_consumed:
+        errors.append("research-experiment report does not prove consumed holdout access")
+    if not report.research_review_ready:
+        errors.append("research-experiment report is not research_review_ready")
+    if not report.spec_git_tracked or not report.worktree_clean:
+        errors.append("research-experiment report lacks clean tracked release evidence")
+    if report.environment_manifest is None or not report.environment_fingerprint:
+        errors.append("research-experiment report lacks reproducible environment evidence")
+    if report.promotion_eligible:
+        errors.append("research-experiment report attempted automatic promotion")
+    if report.broker_contacted or report.order_api_invoked or report.submitted_orders:
+        errors.append("research-experiment report violates broker-free safety evidence")
+    return errors
+
+
+def _strict_shadow_summary_errors(
+    report: AlphaShadowDaemonSummaryReport,
+    *,
+    source_path: str,
+    current_commit: str | None,
+    now: datetime,
+    max_age_hours: int,
+) -> list[str]:
+    errors = _shared_report_errors(
+        report.model_dump(mode="json"),
+        source_path=source_path,
+        current_commit=current_commit,
+        now=now,
+        max_age_hours=max_age_hours,
+    )
+    if not report.ok:
+        errors.append("strict shadow daemon summary did not pass")
+    if not report.graduation_ready:
+        errors.append("strict shadow daemon summary is not graduation_ready")
+    if not report.engineering_pilot_ready:
+        errors.append("strict shadow daemon summary is not engineering_pilot_ready")
+    if report.session_count < 10 or report.distinct_trading_date_count < 5:
+        errors.append("strict shadow daemon summary lacks ten sessions across five dates")
+    if not {"opening", "midday", "closing"}.issubset(set(report.coverage_windows)):
+        errors.append("strict shadow daemon summary lacks opening/midday/closing coverage")
+    if report.submitted_orders or report.paper_orders_enabled or report.order_api_invoked:
+        errors.append("strict shadow daemon summary contains paper-order safety flags")
+    if not report.broker_contact_read_only or not report.no_order_guarantee:
+        errors.append("strict shadow daemon summary lacks read-only no-order evidence")
     return errors
 
 
@@ -389,6 +522,8 @@ def _build_report(
     source_report_paths: dict[str, str],
     shadow_report: AlphaShadowRunReport | None = None,
     smoke_report: PaperOrderSmokeReport | None = None,
+    research_report: ResearchExperimentReport | None = None,
+    strict_summary: AlphaShadowDaemonSummaryReport | None = None,
     paper_order_report: PaperOrderSmokeReport | None = None,
     shadow_signal: str | None = None,
     risk_approved: bool = False,
@@ -420,10 +555,46 @@ def _build_report(
         },
         alpha_shadow_report_verified=_prerequisite_verified(shadow_report, current_commit),
         paper_smoke_report_verified=_prerequisite_verified(smoke_report, current_commit),
+        research_experiment_report_verified=bool(
+            research_report
+            and research_report.ok
+            and research_report.research_review_ready
+            and research_report.commit_sha == current_commit
+        ),
+        strict_shadow_summary_report_verified=bool(
+            strict_summary
+            and strict_summary.ok
+            and strict_summary.engineering_pilot_ready
+            and strict_summary.commit_sha == current_commit
+        ),
         alpha_shadow_commit_sha=_model_extra_commit(shadow_report),
         paper_smoke_commit_sha=_model_extra_commit(smoke_report),
+        research_experiment_commit_sha=(
+            research_report.commit_sha if research_report else None
+        ),
+        strict_shadow_summary_commit_sha=(
+            strict_summary.commit_sha if strict_summary else None
+        ),
         alpha_shadow_timestamp=shadow_report.timestamp if shadow_report else None,
         paper_smoke_timestamp=smoke_report.timestamp if smoke_report else None,
+        research_experiment_timestamp=(
+            research_report.timestamp if research_report else None
+        ),
+        strict_shadow_summary_timestamp=(
+            strict_summary.timestamp if strict_summary else None
+        ),
+        research_experiment_id=(
+            research_report.experiment_id if research_report else None
+        ),
+        research_review_ready=bool(
+            research_report and research_report.research_review_ready
+        ),
+        strict_shadow_graduation_ready=bool(
+            strict_summary and strict_summary.graduation_ready
+        ),
+        strict_shadow_engineering_pilot_ready=bool(
+            strict_summary and strict_summary.engineering_pilot_ready
+        ),
         shadow_signal=shadow_signal,
         risk_approved=risk_approved,
         no_trade_reason=no_trade_reason,

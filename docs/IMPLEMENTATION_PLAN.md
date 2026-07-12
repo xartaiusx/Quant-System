@@ -98,7 +98,8 @@ Baseline before edits:
 - Milestone 2 added a safe read-only broker probe with optional `ibapi` imports.
 - The default install remains broker-free. The supported `ibapi` client is
   installed separately from IBKR's official TWS API download.
-- Default `.venv/bin/python -m pip install -e ".[dev]"` remains the required baseline install path.
+- Default setup installs `requirements.lock` with hashes and binary-only wheels,
+  then installs the local package with `python -m pip install --no-deps -e .`.
 - `ibapi` is not currently available in the local venv, so broker-probe stops before opening a socket.
 - Paper execution remains blocked and live trading remains rejected.
 

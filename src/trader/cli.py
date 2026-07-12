@@ -25,7 +25,10 @@ from trader.alpha_summary import run_alpha_test_summary
 from trader.backtest.data_adapter import build_backtest_feed, build_backtest_feed_report
 from trader.backtest.engine import build_backtest_run_report
 from trader.backtest.research import build_research_backtest_report
-from trader.backtest.research_experiment import run_research_experiment
+from trader.backtest.research_experiment import (
+    register_research_experiment,
+    run_research_experiment,
+)
 from trader.backtest.walk_forward import (
     build_research_walk_forward_report,
     parse_research_candidates,
@@ -49,6 +52,8 @@ from trader.data.research_catalog import (
     import_research_data_batch,
     load_research_catalog,
 )
+from trader.data.research_instrument_master import register_research_instrument
+from trader.data.research_vendor_decision import run_research_vendor_decision
 from trader.data.snapshots import deterministic_history, deterministic_quotes, mock_positions
 from trader.data.universe import parse_symbols
 from trader.execution.paper_order_smoke import run_paper_order_smoke
@@ -118,10 +123,14 @@ from trader.models import (
     ResearchDerivedViewReport,
     ResearchDerivedViewRequest,
     ResearchExperimentPhase,
+    ResearchExperimentRegistrationReport,
+    ResearchExperimentRegistrationRequest,
     ResearchExperimentReport,
     ResearchExperimentRequest,
+    ResearchInstrumentMasterReport,
     ResearchSampleKind,
     ResearchSizingMode,
+    ResearchVendorDecisionReport,
     ResearchWalkForwardReport,
     ResearchWalkForwardRequest,
     ResearchWalkForwardStatus,
@@ -1002,6 +1011,67 @@ def research_data_bakeoff(
         raise typer.Exit(code=1)
 
 
+@app.command("research-vendor-decision")
+def research_vendor_decision(
+    manifest: Annotated[
+        Path,
+        typer.Option(
+            "--manifest",
+            help="Local no-secret vendor decision JSON manifest.",
+        ),
+    ],
+) -> None:
+    """Apply hard licensing gates and weighted vendor scoring offline."""
+
+    report = run_research_vendor_decision(manifest)
+    json_path, md_path = Journal().write_cycle(
+        "research_vendor_decision",
+        _report_dict(report),
+    )
+    console.print("[bold]SPY research-data vendor decision[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Credentials read: false.")
+    console.print("Network accessed: false.")
+    console.print(f"Selected vendor: {report.selected_vendor or 'none'}")
+    console.print(f"Procurement blocked: {str(report.procurement_blocked).lower()}")
+    console.print(f"Final status: {report.final_status}")
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("research-instrument-register")
+def research_instrument_register(
+    manifest: Annotated[
+        Path,
+        typer.Option("--manifest", help="Tracked versioned SPY identity manifest."),
+    ] = Path("research/instruments/spy_v1.json"),
+    catalog_root: Annotated[
+        Path,
+        typer.Option("--catalog-root", help="External immutable research catalog root."),
+    ] = Path("D:/MarketData/Quant-System"),
+) -> None:
+    """Register immutable SPY identity metadata without external access."""
+
+    report = register_research_instrument(manifest, catalog_root=catalog_root)
+    json_path, md_path = Journal().write_cycle(
+        "research_instrument_master",
+        _report_dict(report),
+    )
+    console.print("[bold]SPY research instrument master[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Credentials read: false.")
+    console.print("Network accessed: false.")
+    console.print(f"Internal ID: {report.record.internal_id if report.record else 'none'}")
+    console.print(f"Active version: {report.active_version or 'none'}")
+    console.print(f"Final status: {report.final_status}")
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("research-data-import-batch")
 def research_data_import_batch(
     source_dir: Annotated[
@@ -1543,6 +1613,61 @@ def research_walk_forward(
         raise typer.Exit(code=1)
 
 
+@app.command("research-experiment-register")
+def research_experiment_register(
+    spec: Annotated[
+        Path,
+        typer.Option("--spec", help="Tracked preregistered experiment JSON."),
+    ],
+    catalog_root: Annotated[
+        Path,
+        typer.Option("--catalog-root", help="External immutable research catalog root."),
+    ] = Path("D:/MarketData/Quant-System"),
+    dependency_lock: Annotated[
+        Path,
+        typer.Option(
+            "--dependency-lock",
+            help="Tracked hash-checked dependency lock relative to the repository root.",
+        ),
+    ] = Path("requirements.lock"),
+    supersedes_spec: Annotated[
+        Path | None,
+        typer.Option(
+            "--supersedes-spec",
+            help="Tracked unconsumed specification replaced by this experiment.",
+        ),
+    ] = None,
+) -> None:
+    """Register one committed SPY experiment and permanently seal its holdout."""
+
+    report = register_research_experiment(
+        ResearchExperimentRegistrationRequest(
+            spec_path=spec.as_posix(),
+            root_path=catalog_root.as_posix(),
+            dependency_lock_path=dependency_lock.as_posix(),
+            supersedes_spec_path=(
+                supersedes_spec.as_posix() if supersedes_spec is not None else None
+            ),
+        )
+    )
+    json_path, md_path = Journal().write_cycle(
+        "research_experiment_registration",
+        _report_dict(report),
+    )
+    console.print("[bold]SPY research experiment registration[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Credentials read: false.")
+    console.print("Network accessed: false.")
+    console.print(f"Experiment: {report.experiment_id or 'unavailable'}")
+    console.print(f"Worktree clean: {str(report.worktree_clean).lower()}")
+    console.print(f"Holdout sealed: {str(report.sealed_period is not None).lower()}")
+    console.print(f"Final status: {report.final_status}")
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("research-experiment-run")
 def research_experiment_run(
     spec: Annotated[
@@ -1561,6 +1686,13 @@ def research_experiment_run(
         str | None,
         typer.Option(help="Exact preregistered confirmation for final holdout access."),
     ] = None,
+    dependency_lock: Annotated[
+        Path,
+        typer.Option(
+            "--dependency-lock",
+            help="Tracked hash-checked dependency lock relative to the repository root.",
+        ),
+    ] = Path("requirements.lock"),
 ) -> None:
     """Run a tracked SPY experiment without broker or credential access."""
 
@@ -1570,6 +1702,7 @@ def research_experiment_run(
             root_path=catalog_root.as_posix(),
             phase=phase,
             confirmation=confirmation,
+            dependency_lock_path=dependency_lock.as_posix(),
         )
     )
     json_path, md_path = Journal().write_cycle(
@@ -2895,6 +3028,20 @@ def alpha_paper_run(
             help="Passing same-commit transmitted paper-order-smoke report path.",
         ),
     ] = Path("reports/latest_paper_order_smoke.json"),
+    research_experiment_report: Annotated[
+        Path,
+        typer.Option(
+            "--research-experiment-report",
+            help="Passing same-commit final-holdout research report path.",
+        ),
+    ] = Path("reports/latest_research_experiment.json"),
+    strict_shadow_summary_report: Annotated[
+        Path,
+        typer.Option(
+            "--strict-shadow-summary-report",
+            help="Passing same-commit strict-live daemon summary path.",
+        ),
+    ] = Path("reports/latest_alpha_shadow_daemon_summary.json"),
 ) -> None:
     """Run the first strategy-gated SPY paper alpha order."""
 
@@ -2917,6 +3064,8 @@ def alpha_paper_run(
         max_report_age_hours=max_report_age_hours,
         alpha_shadow_report_path=alpha_shadow_report.as_posix(),
         paper_smoke_report_path=paper_smoke_report.as_posix(),
+        research_experiment_report_path=research_experiment_report.as_posix(),
+        strict_shadow_summary_report_path=strict_shadow_summary_report.as_posix(),
     )
     report = run_alpha_paper_run(config, request)
     json_path, md_path = Journal().write_cycle("alpha_paper_run", _report_dict(report))
@@ -3142,6 +3291,20 @@ def alpha_campaign_run(
             help="Source transmitted paper-order-smoke report path for paper mode.",
         ),
     ] = Path("reports/latest_paper_order_smoke.json"),
+    research_experiment_report: Annotated[
+        Path,
+        typer.Option(
+            "--research-experiment-report",
+            help="Passing same-commit final-holdout research report for paper mode.",
+        ),
+    ] = Path("reports/latest_research_experiment.json"),
+    strict_shadow_summary_report: Annotated[
+        Path,
+        typer.Option(
+            "--strict-shadow-summary-report",
+            help="Passing same-commit strict-live daemon summary for paper mode.",
+        ),
+    ] = Path("reports/latest_alpha_shadow_daemon_summary.json"),
     read_only_off_confirm: Annotated[
         str,
         typer.Option(
@@ -3170,6 +3333,8 @@ def alpha_campaign_run(
         max_report_age_hours=max_report_age_hours,
         alpha_shadow_report_path=alpha_shadow_report.as_posix(),
         paper_smoke_report_path=paper_smoke_report.as_posix(),
+        research_experiment_report_path=research_experiment_report.as_posix(),
+        strict_shadow_summary_report_path=strict_shadow_summary_report.as_posix(),
         read_only_off_confirm=read_only_off_confirm,
     )
     report = run_alpha_campaign_run(config, request)
@@ -3519,7 +3684,10 @@ def _report_dict(
         | ResearchDataAuditReport
         | ResearchDataIngestReport
         | ResearchDerivedViewReport
+        | ResearchExperimentRegistrationReport
         | ResearchExperimentReport
+        | ResearchInstrumentMasterReport
+        | ResearchVendorDecisionReport
         | ResearchWalkForwardReport
         | SignalContractReport
         | StrategyContractReport

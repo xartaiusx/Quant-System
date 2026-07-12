@@ -17,9 +17,11 @@ This project is infrastructure-first. It is not a profitability claim or a live 
 - Shared broker-free SPY moving-average target-state policy used by research and shadow paths.
 - Catalog-backed SPY research simulation with dual price views, limit-order modeling,
   explicit costs, capital events, portfolio accounting, and daily performance evidence.
-- Preregistered chronological research experiments with append-only final-holdout access.
-- Offline vendor-data bake-off, immutable catalog-v2 lineage, batch import, derived views,
-  and checksum-valid catalog loading.
+- Permanently sealed chronological research experiments with clean-release and
+  hash-locked environment evidence plus append-only final-holdout access.
+- Offline vendor bake-off and rights-first vendor decision reports, immutable
+  catalog-v3 lineage, versioned SPY identity, batch import, derived views, and
+  checksum-valid catalog loading.
 - Read-only IBKR TWS / IB Gateway broker probe with current-time diagnostics.
 - Masked managed-account discovery when the broker API is reachable.
 - Read-only IBKR market-data diagnostics for contract resolution, delayed quote capture,
@@ -38,8 +40,10 @@ This project is infrastructure-first. It is not a profitability claim or a live 
 - Read-only paper readiness orchestration for the first broker-connected program run.
 - Broker-free data-quality gate for local historical snapshots.
 - Broker-free analytical evaluator comparison diagnostics for approved moving-average windows.
-- GitHub Actions CI for tests, lint, typecheck, whitespace, and safety scans.
-- Python 3.11 and 3.12 CI coverage plus global order-API and sensitive-artifact scans.
+- GitHub Actions CI for tests, lint, typecheck, dependency audit, whitespace,
+  branch coverage, and safety scans.
+- Linux Python 3.11/3.12 and Windows Python 3.12 CI plus global order-API and
+  sensitive-artifact scans.
 - Strict-live shadow warmup assembly and multi-session fingerprint/drift evidence.
 - JSON and Markdown reports under `reports/`.
 - Tests that require no TWS or IB Gateway.
@@ -91,7 +95,8 @@ The initial version rejects `TRADING_MODE=live`, rejects `ALLOW_LIVE_ORDERS=true
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[dev]"
+python -m pip install --only-binary=:all: --require-hashes -r requirements.lock
+python -m pip install --no-deps -e .
 ```
 
 The broker client is required only for real TWS / IB Gateway probes. Download
@@ -150,12 +155,15 @@ python -m trader.cli backtest-run --symbols SPY,AAPL --alignment intersection
 python -m trader.cli research-data-ingest --source-file <licensed-massive.csv.gz>
 python -m trader.cli research-data-audit
 python -m trader.cli research-data-bakeoff --manifest <local-manifest.json>
+python -m trader.cli research-vendor-decision --manifest <local-decision.json>
+python -m trader.cli research-instrument-register --manifest research/instruments/spy_v1.json
 python -m trader.cli research-data-import-batch --source-dir <licensed-files> --vendor massive --kind minute_bars
 python -m trader.cli research-data-derive
 python -m trader.cli research-catalog-load --price-view split_adjusted_signal
 python -m trader.cli research-backtest --symbol SPY --short-window 5 --long-window 20
 python -m trader.cli research-walk-forward --symbol SPY --window-pairs 5:20,10:30,20:50
-python -m trader.cli research-experiment-run --spec research/experiments/spy_sma_2016_2025_v1.json --phase development
+python -m trader.cli research-experiment-register --spec research/experiments/spy_sma_2016_2025_v2.json --supersedes-spec research/experiments/spy_sma_2016_2025_v1.json
+python -m trader.cli research-experiment-run --spec research/experiments/spy_sma_2016_2025_v2.json --phase development
 python -m trader.cli strategy-contract --symbols SPY,AAPL
 python -m trader.cli strategy-contract --symbols SPY,AAPL --alignment intersection
 python -m trader.cli strategy-runner --symbols SPY,AAPL
@@ -262,7 +270,8 @@ Orders are deterministic price-protected `LMT DAY` simulations with tick
 rounding, trade-through rules, configurable volume participation, partial fills,
 cancellations, spread, slippage, commissions, splits, and cash dividends. It
 supports fixed quantity for engineering tests and unlevered target allocation
-for return research. Reports include daily returns, cost scenarios, portfolio
+for return research. Reports include daily returns, base/2x/3x/5x crisis cost
+scenarios, portfolio
 accounting, P&L, drawdown duration, turnover, exposure, and benchmark-relative
 metrics. Annualized CAGR, volatility, Sharpe, Sortino, and Calmar remain
 unavailable until at least 30 completed daily observations exist. Every report
@@ -274,9 +283,13 @@ read-only shadow path emits BUY only for an `ENTER_LONG` transition. A
 `HOLD_LONG` observation remains HOLD and cannot create a repeated trade plan.
 
 `research-walk-forward` remains a non-promoting exploratory chronological tool.
-The authoritative final-holdout workflow is `research-experiment-run`, which
-requires a committed preregistration, loads only 2016-2023 in development, and
-records one append-only catalog access before loading the 2024-2025 holdout.
+The authoritative final-holdout workflow starts with
+`research-experiment-register`, which requires a clean committed release,
+records hash-locked Python/dependency/IBAPI/strategy/config evidence, and
+permanently seals 2024-2025 before import. Generic catalog loaders reject any
+sealed-period overlap. `research-experiment-run` loads only 2016-2023 in
+development and records one append-only access before its capability-scoped
+final loader reads the 2024-2025 holdout.
 Final access requires the exact confirmation in the tracked specification; a
 failed or interrupted access still consumes the experiment. Review readiness is
 reported separately from execution promotion and never routes orders.
@@ -284,8 +297,11 @@ reported separately from execution promotion and never routes orders.
 The research-data commands maintain an external, offline-only SPY store.
 `research-data-bakeoff` validates manually supplied vendor samples and written
 rights without downloading data or reading credentials. Import commands archive
-licensed raw files immutably; catalog v2 records revisions, corporate actions,
-derived lineage, and experiment access. `research-data-derive` creates raw
+licensed raw files immutably; catalog v3 records revisions, corporate actions,
+derived lineage, permanent seals, experiment access, and a versioned SPY
+instrument master. `research-vendor-decision` applies the rights hard gate and
+the fixed weighted score without reading contracts or credentials.
+`research-data-derive` creates raw
 execution, split-adjusted signal, and total-return benchmark views, while
 `research-catalog-load` accepts only active checksum-valid revisions with exact
 XNYS session coverage. Install `.[research]` first and keep licensed data,
@@ -430,8 +446,10 @@ runner, then it switches its post-run config view back to
 python -m trader.cli alpha-campaign-run --mode paper --campaign-id campaign-YYYYMMDD-spy-001 --read-only-off-confirm READ_ONLY_OFF_FOR_ALPHA_PAPER
 ```
 
-Paper mode still requires existing same-commit alpha shadow and transmitted
-paper smoke reports, `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`,
+Paper mode still requires existing fresh same-commit alpha shadow, transmitted
+paper smoke, final-holdout research (`research_review_ready=true`), and strict
+daemon-summary (`engineering_pilot_ready=true`) reports. It also requires
+`TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`,
 `ALLOW_LIVE_ORDERS=false`, localhost, paper port `7497` or `4002`, and
 `IBKR_CLIENT_ID=21`.
 

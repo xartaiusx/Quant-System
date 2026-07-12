@@ -139,6 +139,7 @@ def test_cost_model_reduces_net_pnl_and_reports_components() -> None:
         Decimal("1"),
         Decimal("2"),
         Decimal("3"),
+        Decimal("5"),
     ]
     assert report.cost_scenarios[1].metrics is not None
     assert report.cost_scenarios[1].metrics.net_pnl < report.metrics.net_pnl

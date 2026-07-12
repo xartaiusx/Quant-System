@@ -39,6 +39,10 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return research_data_audit_markdown(payload)
     if payload.get("report_type") == "research_data_bakeoff":
         return research_data_bakeoff_markdown(payload)
+    if payload.get("report_type") == "research_vendor_decision":
+        return research_vendor_decision_markdown(payload)
+    if payload.get("report_type") == "research_instrument_master":
+        return research_instrument_master_markdown(payload)
     if payload.get("report_type") == "research_data_batch_import":
         return research_data_batch_import_markdown(payload)
     if payload.get("report_type") == "research_derived_views":
@@ -51,6 +55,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return research_walk_forward_markdown(payload)
     if payload.get("report_type") == "research_experiment":
         return research_experiment_markdown(payload)
+    if payload.get("report_type") == "research_experiment_registration":
+        return research_experiment_registration_markdown(payload)
     if payload.get("report_type") == "strategy_contract":
         return strategy_contract_markdown(payload)
     if payload.get("report_type") == "strategy_runner":
@@ -1438,7 +1444,11 @@ def research_experiment_markdown(payload: Mapping[str, Any]) -> str:
         f"- Phase: `{payload.get('phase')}`",
         f"- Spec fingerprint: `{payload.get('spec_fingerprint')}`",
         f"- Spec tracked in Git: `{payload.get('spec_git_tracked', False)}`",
+        f"- Worktree clean: `{payload.get('worktree_clean', False)}`",
         f"- Commit SHA: `{payload.get('commit_sha')}`",
+        f"- Strategy fingerprint: `{payload.get('strategy_fingerprint')}`",
+        f"- Config fingerprint: `{payload.get('config_fingerprint')}`",
+        f"- Environment fingerprint: `{payload.get('environment_fingerprint')}`",
         f"- Signal dataset: `{payload.get('signal_dataset_fingerprint')}`",
         f"- Execution dataset: `{payload.get('execution_dataset_fingerprint')}`",
         f"- Benchmark dataset: `{payload.get('benchmark_dataset_fingerprint')}`",
@@ -1488,6 +1498,111 @@ def research_experiment_markdown(payload: Mapping[str, Any]) -> str:
             )
     else:
         lines.append("- None")
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
+def research_vendor_decision_markdown(payload: Mapping[str, Any]) -> str:
+    """Render rights-first vendor scoring and procurement evidence."""
+
+    results = payload.get("candidate_results", [])
+    lines = [
+        f"# {payload.get('title', 'SPY Research Data Vendor Decision')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Manifest: `{payload.get('manifest_path')}`",
+        f"- Selected vendor: `{payload.get('selected_vendor') or 'none'}`",
+        f"- Procurement blocked: `{payload.get('procurement_blocked', True)}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Credentials read: `{payload.get('credentials_read', True)}`",
+        f"- Network accessed: `{payload.get('network_accessed', True)}`",
+        "",
+        "## Candidates",
+        "",
+    ]
+    if results:
+        for result in results:
+            lines.append(
+                f"- `{result.get('vendor')}` score=`{result.get('weighted_score')}` "
+                f"TCO=`${result.get('three_year_tco_usd')}` "
+                f"rights=`{result.get('rights_gate_passed', False)}` "
+                f"bakeoff=`{result.get('bakeoff_gate_passed', False)}` "
+                f"budget=`{result.get('budget_gate_passed', False)}` "
+                f"selected=`{result.get('selected', False)}`"
+            )
+            for reason in result.get("reasons", []):
+                lines.append(f"  - Rejected: {reason}")
+    else:
+        lines.append("- None")
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
+def research_instrument_master_markdown(payload: Mapping[str, Any]) -> str:
+    """Render immutable SPY identity registration evidence."""
+
+    record = payload.get("record") or {}
+    lines = [
+        f"# {payload.get('title', 'SPY Research Instrument Master')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Manifest: `{payload.get('manifest_path')}`",
+        f"- Catalog: `{payload.get('catalog_path')}`",
+        f"- Internal ID: `{record.get('internal_id')}`",
+        f"- Version: `{record.get('version')}`",
+        f"- Symbol: `{record.get('symbol')}`",
+        f"- IBKR conId: `{record.get('ibkr_con_id')}`",
+        f"- Composite FIGI: `{record.get('composite_figi')}`",
+        f"- Primary/routing exchange: "
+        f"`{record.get('primary_exchange')}/{record.get('routing_exchange')}`",
+        f"- Record fingerprint: `{payload.get('record_fingerprint')}`",
+        f"- Idempotent replay: `{payload.get('idempotent_replay', False)}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Credentials read: `{payload.get('credentials_read', True)}`",
+        f"- Network accessed: `{payload.get('network_accessed', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        f"- Promotion eligible: `{payload.get('promotion_eligible', True)}`",
+    ]
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
+def research_experiment_registration_markdown(payload: Mapping[str, Any]) -> str:
+    """Render permanent experiment-registration and holdout-seal evidence."""
+
+    seal = payload.get("sealed_period") or {}
+    environment = payload.get("environment_manifest") or {}
+    lines = [
+        f"# {payload.get('title', 'SPY Research Experiment Registration')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Experiment ID: `{payload.get('experiment_id')}`",
+        f"- Superseded experiment: `{payload.get('superseded_experiment_id')}`",
+        f"- Spec fingerprint: `{payload.get('spec_fingerprint')}`",
+        f"- Spec tracked in Git: `{payload.get('spec_git_tracked', False)}`",
+        f"- Worktree clean: `{payload.get('worktree_clean', False)}`",
+        f"- Commit SHA: `{payload.get('commit_sha')}`",
+        f"- Idempotent replay: `{payload.get('idempotent_replay', False)}`",
+        f"- Catalog: `{payload.get('catalog_path')}`",
+        "",
+        "## Permanent Holdout Seal",
+        "",
+        f"- Symbol: `{seal.get('symbol')}`",
+        f"- Start: `{seal.get('start_date')}`",
+        f"- End: `{seal.get('end_date')}`",
+        f"- Purpose: `{seal.get('purpose')}`",
+        "",
+        "## Environment",
+        "",
+        f"- Dependency lock: `{environment.get('dependency_lock_path')}`",
+        f"- Dependency fingerprint: `{environment.get('dependency_lock_fingerprint')}`",
+        f"- Python: `{environment.get('python_version')}`",
+        f"- IBKR API: `{environment.get('ibapi_version')}`",
+        f"- Environment fingerprint: `{environment.get('environment_fingerprint')}`",
+    ]
     lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
     return "\n".join(lines) + "\n"
 
@@ -2615,6 +2730,15 @@ def alpha_paper_run_markdown(payload: Mapping[str, Any]) -> str:
         f"- Symbol: `{request_symbol}`",
         f"- Shadow report verified: `{payload.get('alpha_shadow_report_verified', False)}`",
         f"- Paper smoke report verified: `{payload.get('paper_smoke_report_verified', False)}`",
+        f"- Research report verified: "
+        f"`{payload.get('research_experiment_report_verified', False)}`",
+        f"- Research review ready: `{payload.get('research_review_ready', False)}`",
+        f"- Strict shadow summary verified: "
+        f"`{payload.get('strict_shadow_summary_report_verified', False)}`",
+        f"- Strict shadow graduation ready: "
+        f"`{payload.get('strict_shadow_graduation_ready', False)}`",
+        f"- Strict shadow engineering pilot ready: "
+        f"`{payload.get('strict_shadow_engineering_pilot_ready', False)}`",
         f"- Shadow signal: `{payload.get('shadow_signal', 'n/a')}`",
         f"- Risk approved: `{payload.get('risk_approved', False)}`",
         f"- No-trade reason: `{payload.get('no_trade_reason', 'n/a')}`",

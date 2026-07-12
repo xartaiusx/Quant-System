@@ -191,6 +191,7 @@ def build_research_backtest_report(
             ("base", Decimal("1")),
             ("2x_costs", Decimal("2")),
             ("3x_costs", Decimal("3")),
+            ("5x_crisis_costs", Decimal("5")),
         )
     ]
     result = scenario_results[0][2]

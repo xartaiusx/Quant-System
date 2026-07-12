@@ -35,9 +35,11 @@
 - Offline SPY vendor bake-off validates manually supplied Massive/Norgate samples,
   session alignment, corrections, overlap, corporate-action fixtures, checksums,
   and written data rights without network or credential access.
-- Catalog schema v2 adds deterministic batch imports, corporate-action sets,
-  immutable derived revisions, parent lineage, experiment records, and append-only
-  final-holdout access.
+- Catalog schema v3 adds deterministic batch imports, corporate-action sets,
+  immutable derived revisions, parent lineage, permanent holdout seals,
+  experiment supersession/access records, and versioned SPY identity.
+- Offline vendor decisions enforce written-rights and budget hard gates before
+  weighted technical scoring; contracts and responses remain outside Git.
 - Dual research views are implemented: raw five-minute execution bars,
   split-adjusted five-minute signal bars, and a daily total-return benchmark.
 - Catalog loading fails closed on stale parents, inactive revisions, checksum
@@ -45,14 +47,20 @@
   normal/early-close coverage.
 - Broker-free SPY simulation now models price-protected `LMT DAY` orders,
   trade-through, partial fills, cancellations, fixed/target-allocation sizing,
-  splits, dividends, portfolio accounting, daily returns, base/2x/3x costs, and
+  splits, dividends, portfolio accounting, daily returns, base/2x/3x/5x crisis
+  costs, and
   expanded performance/drawdown/turnover evidence.
-- A tracked 2016-2025 experiment separates development from one-time 2024-2025
-  holdout access, records consumption before access, and reports review gates
-  without automatic execution promotion.
+- A tracked v2 2016-2025 experiment requires a clean hash-locked release,
+  permanently seals 2024-2025 before import, rejects generic sealed-period
+  loads, records consumption before capability-scoped access, and enforces
+  phase-specific trade-count gates without automatic execution promotion.
+- Strategy-driven alpha paper commands require fresh same-commit passing
+  research and ten-session strict-live evidence. Lifecycle smoke remains exempt.
 - Daily SPY history from inception retains an explicit 1993-2003 provenance gap
   until a licensed daily/action export passes the vendor bake-off.
-- GitHub Actions CI added for tests, lint, typecheck, whitespace, and safety scans.
+- GitHub Actions CI uses hash-locked dependencies, Linux Python 3.11/3.12 and
+  Windows Python 3.12, dependency audit, a 76% branch-coverage floor, lint,
+  typecheck, whitespace, order-API allowlist, and sensitive-artifact scans.
 - Optional `ibapi` dependency check script.
 - Offline `ibapi` protocol compatibility check for the current official IBKR
   client, with a minimum supported server protocol of `163`.
@@ -127,6 +135,9 @@
 
 ## Current Blockers
 
+- No vendor has yet supplied written rights and passing sample evidence for the
+  required uses; standard published Massive/Norgate terms remain provisionally
+  insufficient for post-cancellation retention.
 - The canonical catalog has not yet been populated with licensed 2016-2025 SPY
   minute data and approved inception-through-2025 daily/corporate-action data.
 - The preregistered development/final-holdout experiment cannot run until those
@@ -186,21 +197,24 @@
 
 ## Next Recommended Steps
 
-1. Complete the offline vendor bake-off, including written rights and trial/export
-   validation, before purchasing Massive or Norgate.
-2. Import licensed 2016-2025 Massive SPY minute files plus approved daily/action
+1. After this milestone is merged, migrate the empty external catalog to v3,
+   register `research/instruments/spy_v1.json`, and register the committed v2
+   experiment from a clean worktree so 2024-2025 is sealed before import.
+2. Send the common RFI and complete the offline bake-off/vendor decision,
+   including written rights and trial/export validation, before purchasing.
+3. Import licensed 2016-2025 SPY minute files plus approved daily/action
    history, derive all views, and require passing catalog load/audit evidence.
-3. Commit the experiment specification before running development. Do not use the
-   final-holdout confirmation until development and lineage review are complete.
-4. Fund/subscribe the IBKR account for live SPY API market data and complete the
+4. Run v2 development only. Do not use the final-holdout confirmation until
+   development, lineage, cost calibration, and independent review are complete.
+5. Fund/subscribe the IBKR account for live SPY API market data and complete the
    required API acknowledgement; delayed mode remains non-graduating.
-5. Collect five clean strict-live sessions on five XNYS dates to unlock a separate
+6. Collect five clean strict-live sessions on five XNYS dates to unlock a separate
    paper-daemon implementation milestone.
-6. Collect ten clean strict-live sessions across opening, midday, and closing
+7. Collect ten clean strict-live sessions across opening, midday, and closing
    windows before any lifecycle engineering pilot.
-7. Require `research_review_ready=true` in addition to operational evidence
+8. Require `research_review_ready=true` in addition to operational evidence
    before any strategy-driven paper alpha mode.
-8. Keep the paper daemon unimplemented until those gates pass. Continue manual
+9. Keep the paper daemon unimplemented until those gates pass. Continue manual
    reconciliation, summary, and ledger updates after every approved paper window.
-9. Keep GLD/USO research-only, DBA excluded, and direct futures blocked until a
+10. Keep GLD/USO research-only, DBA excluded, and direct futures blocked until a
    separate contract/roll/margin/liquidity/permission/delivery-risk program exists.

@@ -24,10 +24,12 @@ and analysis. It does not route orders.
 
 ## IBKR API Dependency
 
-The default dev install keeps the repo usable without broker dependencies:
+The hash-locked dev/research install keeps the repo usable without broker
+dependencies:
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install --only-binary=:all: --require-hashes -r requirements.lock
+python -m pip install --no-deps -e .
 ```
 
 For real TWS / IB Gateway probing, download the current Stable or Latest TWS API

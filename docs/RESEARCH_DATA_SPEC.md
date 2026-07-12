@@ -28,6 +28,17 @@ The bake-off validates timestamps, XNYS session alignment, OHLCV, duplicates,
 checksums, corrections, overlap tolerances, and rights evidence. It reports
 procurement readiness but never downloads data or promotes a strategy.
 
+Standard published terms are provisionally insufficient until a vendor gives
+written permission for this private program's automated research, model
+training, local and approved cloud storage, derived artifacts, backups,
+correction history, paper/live trading use, and post-cancellation retention.
+Run `research-vendor-decision` only after the same RFI and sample suite has been
+applied to Massive, Norgate, Databento, and AlgoSeek. Rights failure overrides
+the 20/20/10/10/10/10/10/10 technical score and the $700 monthly ceiling.
+Contracts and responses stay in `Quant Creds`; the decision manifest contains
+only SHA-256 evidence references and non-sensitive terms metadata. See
+`docs/VENDOR_RFI.md`.
+
 Massive documents its stock flat files as unadjusted SIP data. Prices and volume
 are not adjusted for splits, dividends, or other corporate actions, so raw
 Massive observations must never be treated as a signal-ready adjusted series.
@@ -41,10 +52,10 @@ Primary vendor sources:
 - Massive stock flat files: https://massive.com/docs/flat-files/stocks/overview
 - Norgate U.S. stock packages: https://norgatedata.com/stockmarketpackages.php
 
-## Catalog V2
+## Catalog V3
 
 The SQLite catalog runs in WAL mode with full synchronous writes and foreign
-keys. Schema v2 retains v1 ingestion tables and adds:
+keys. Schema v3 retains earlier ingestion and lineage tables and adds:
 
 - immutable source artifacts and ingestion runs;
 - raw and canonical partitions with active revisions;
@@ -53,6 +64,9 @@ keys. Schema v2 retains v1 ingestion tables and adds:
 - algorithm, input, action, dataset, and checksum fingerprints;
 - preregistered experiment specs/runs;
 - append-only final-holdout access records.
+- permanent sealed-period records that generic loaders cannot bypass;
+- experiment supersession state;
+- immutable versioned SPY identity records keyed by `spy-us-equity`.
 
 Corrections never overwrite raw or derived data. A changed source creates a new
 parent revision, deactivates the prior parent, invalidates dependent derived
@@ -74,6 +88,15 @@ D:/MarketData/Quant-System/
 Source artifacts are copied byte-for-byte. If a vendor reuses a filename with
 different content, the archive uses a hash-suffixed name. Existing artifacts and
 partitions are never rewritten.
+
+## Instrument Identity
+
+Before importing licensed observations, run `research-instrument-register`
+against the tracked SPY manifest. It pins the internal ID, symbol, security
+type, currency, SMART/ARCA routing identity, minimum tick, listing dates, IBKR
+`conId`, FIGI when available, vendor mappings, and primary-source references.
+A registered version is immutable; a correction requires a higher version and
+deactivates the previous record without deleting it.
 
 ## Import Contract
 
@@ -97,7 +120,7 @@ hard provenance blocker rather than a gap to fill with a convenience feed.
 
 ## Derived Views
 
-`research-data-derive` creates deterministic catalog-v2 revisions:
+`research-data-derive` creates deterministic catalog-v3 revisions:
 
 1. `raw_execution`, `5 mins`: XNYS-anchored OHLCV aggregated from immutable raw
    one-minute observations for simulated execution.
@@ -118,10 +141,15 @@ they do not consume ad hoc IBKR snapshots.
 
 ## Operator Workflow
 
-Install the isolated research dependencies:
+Install the hash-locked environment, then register identity and evaluate vendor
+rights before import:
 
 ```powershell
-python -m pip install -e ".[dev,research]"
+python -m pip install --only-binary=:all: --require-hashes -r requirements.lock
+python -m pip install --no-deps -e .
+python -m trader.cli research-instrument-register `
+  --manifest research/instruments/spy_v1.json `
+  --catalog-root D:\MarketData\Quant-System
 ```
 
 Run the offline bake-off, import, derivation, and load checks:
@@ -129,6 +157,9 @@ Run the offline bake-off, import, derivation, and load checks:
 ```powershell
 python -m trader.cli research-data-bakeoff `
   --manifest D:\MarketData\bakeoff\spy-vendors.json
+
+python -m trader.cli research-vendor-decision `
+  --manifest D:\MarketData\bakeoff\spy-vendor-decision.json
 
 python -m trader.cli research-data-import-batch `
   --source-dir D:\MarketData\incoming\massive `

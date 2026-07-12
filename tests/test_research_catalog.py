@@ -9,6 +9,7 @@ from pathlib import Path
 
 import exchange_calendars as xcals  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
+import pytest
 from typer.testing import CliRunner
 
 from trader.cli import app
@@ -18,6 +19,7 @@ from trader.data.research_catalog import (
     ingest_canonical_daily_file,
     ingest_corporate_action_file,
     load_research_catalog,
+    load_research_catalog_for_final_holdout,
 )
 from trader.data.research_store import (
     ingest_massive_minute_file,
@@ -56,7 +58,7 @@ _ACTION_FIELDS = [
 ]
 
 
-def test_catalog_v1_is_migrated_to_v2(tmp_path: Path) -> None:
+def test_catalog_v1_is_migrated_to_v3(tmp_path: Path) -> None:
     root = tmp_path / "store"
     catalog = root / "catalog/research.sqlite3"
     catalog.parent.mkdir(parents=True)
@@ -81,7 +83,7 @@ def test_catalog_v1_is_migrated_to_v2(tmp_path: Path) -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-    assert versions == [(1,), (2,)]
+    assert versions == [(1,), (2,), (3,)]
     assert {
         "action_sets",
         "corporate_actions",
@@ -90,7 +92,48 @@ def test_catalog_v1_is_migrated_to_v2(tmp_path: Path) -> None:
         "experiment_specs",
         "experiment_runs",
         "holdout_access",
+        "sealed_periods",
+        "instrument_master",
     } <= tables
+
+
+def test_catalog_v3_migration_rolls_back_on_schema_conflict(tmp_path: Path) -> None:
+    root = tmp_path / "store"
+    catalog = root / "catalog/research.sqlite3"
+    catalog.parent.mkdir(parents=True)
+    with sqlite3.connect(catalog) as connection:
+        connection.execute(
+            "CREATE TABLE schema_metadata(version INTEGER PRIMARY KEY, installed_at TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO schema_metadata(version, installed_at) VALUES (?, 'test')",
+            [(1,), (2,)],
+        )
+        connection.execute(
+            """
+            CREATE TABLE experiment_specs(
+                experiment_id TEXT PRIMARY KEY,
+                spec_fingerprint TEXT NOT NULL UNIQUE,
+                spec_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("CREATE TABLE sealed_periods(conflict TEXT)")
+
+    with pytest.raises(sqlite3.Error):
+        initialize_research_store(root)
+
+    with sqlite3.connect(catalog) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(experiment_specs)")
+        }
+        versions = connection.execute(
+            "SELECT version FROM schema_metadata ORDER BY version"
+        ).fetchall()
+    assert "status" not in columns
+    assert "supersedes_experiment_id" not in columns
+    assert versions == [(1,), (2,)]
 
 
 def test_derive_and_load_normal_session_with_split_lineage(tmp_path: Path) -> None:
@@ -142,6 +185,66 @@ def test_derive_and_load_normal_session_with_split_lineage(tmp_path: Path) -> No
     )
     assert unchanged.ok is True
     assert unchanged.idempotent_partition_count == 2
+
+
+def test_catalog_seal_blocks_generic_access_and_requires_recorded_capability(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "store"
+    source = _write_massive_file(tmp_path / "source/2026-07-02.csv.gz", date(2026, 7, 2))
+    assert ingest_massive_minute_file(_minute_request(source, root)).ok is True
+    actions = _write_actions(tmp_path / "source/actions.csv", [])
+    assert _ingest_actions(actions, root, "2026-07-02", "2026-07-02").ok is True
+    assert derive_research_views(ResearchDerivedViewRequest(root_path=root.as_posix())).ok
+    catalog = root / "catalog/research.sqlite3"
+    with sqlite3.connect(catalog) as connection:
+        connection.execute(
+            """
+            INSERT INTO experiment_specs(
+                experiment_id, spec_fingerprint, spec_json, created_at, status
+            ) VALUES ('sealed-v1', 'sha256:spec', '{}', 'test', 'active')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO sealed_periods(
+                experiment_id, symbol, start_date, end_date, purpose, created_at
+            ) VALUES ('sealed-v1', 'SPY', '2026-07-02', '2026-07-02',
+                      'final_holdout', 'test')
+            """
+        )
+
+    request = ResearchCatalogLoadRequest(
+        root_path=root.as_posix(),
+        start_date="2026-07-02",
+        end_date="2026-07-02",
+    )
+    generic = load_research_catalog(request)
+    assert generic.ok is False
+    assert "permanently sealed holdout" in generic.errors[0]
+
+    unauthorized = load_research_catalog_for_final_holdout(
+        request,
+        experiment_id="sealed-v1",
+        holdout_access_fingerprint="sha256:access",
+    )
+    assert unauthorized.ok is False
+    assert "not recorded" in unauthorized.errors[0]
+
+    with sqlite3.connect(catalog) as connection:
+        connection.execute(
+            """
+            INSERT INTO holdout_access(
+                experiment_id, holdout_fingerprint, confirmation, accessed_at
+            ) VALUES ('sealed-v1', 'sha256:access', 'CONFIRM', 'test')
+            """
+        )
+    authorized = load_research_catalog_for_final_holdout(
+        request,
+        experiment_id="sealed-v1",
+        holdout_access_fingerprint="sha256:access",
+    )
+    assert authorized.ok is True
 
 
 def test_early_close_derives_exactly_42_five_minute_bars(tmp_path: Path) -> None:

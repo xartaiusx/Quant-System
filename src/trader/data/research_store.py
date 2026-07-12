@@ -38,7 +38,7 @@ from trader.models import (
 
 DEFAULT_RESEARCH_DATA_ROOT = Path("D:/MarketData/Quant-System")
 CATALOG_RELATIVE_PATH = Path("catalog/research.sqlite3")
-CATALOG_SCHEMA_VERSION = 2
+CATALOG_SCHEMA_VERSION = 3
 _MASSIVE_REQUIRED_COLUMNS = frozenset(
     {
         "ticker",
@@ -484,6 +484,9 @@ def initialize_research_store(root: Path) -> Path:
                 (2, _utc_iso()),
             )
             versions.append(2)
+        if versions[-1] == 2:
+            _install_catalog_v3(connection)
+            versions.append(3)
         if versions != list(range(1, CATALOG_SCHEMA_VERSION + 1)):
             raise RuntimeError(f"unsupported research catalog schema versions: {versions}")
     return catalog_path
@@ -578,6 +581,63 @@ def _install_catalog_v2(connection: sqlite3.Connection) -> None:
             accessed_at TEXT NOT NULL,
             UNIQUE(experiment_id, holdout_fingerprint)
         );
+        """
+    )
+
+
+def _install_catalog_v3(connection: sqlite3.Connection) -> None:
+    """Install holdout governance and versioned instrument identity metadata."""
+
+    connection.executescript(
+        """
+        SAVEPOINT install_catalog_v3;
+        ALTER TABLE experiment_specs
+        ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+        ALTER TABLE experiment_specs
+        ADD COLUMN supersedes_experiment_id TEXT;
+        ALTER TABLE experiment_specs
+        ADD COLUMN superseded_by_experiment_id TEXT;
+        CREATE TABLE sealed_periods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            experiment_id TEXT NOT NULL REFERENCES experiment_specs(experiment_id),
+            symbol TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK (start_date <= end_date),
+            UNIQUE(experiment_id, symbol, start_date, end_date, purpose)
+        );
+        CREATE INDEX sealed_period_overlap_lookup
+        ON sealed_periods(symbol, start_date, end_date);
+        CREATE TABLE instrument_master (
+            internal_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            symbol TEXT NOT NULL,
+            security_name TEXT NOT NULL,
+            sec_type TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            primary_exchange TEXT NOT NULL,
+            routing_exchange TEXT NOT NULL,
+            min_tick TEXT NOT NULL,
+            listing_start TEXT NOT NULL,
+            listing_end TEXT,
+            ibkr_con_id INTEGER NOT NULL,
+            composite_figi TEXT,
+            cusip TEXT,
+            isin TEXT,
+            vendor_mappings_json TEXT NOT NULL,
+            source_references_json TEXT NOT NULL,
+            record_fingerprint TEXT NOT NULL,
+            active INTEGER NOT NULL CHECK(active IN (0, 1)),
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (internal_id, version)
+        );
+        CREATE UNIQUE INDEX one_active_instrument_revision
+        ON instrument_master(internal_id) WHERE active = 1;
+        INSERT INTO schema_metadata(version, installed_at)
+        VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+        RELEASE SAVEPOINT install_catalog_v3;
         """
     )
 

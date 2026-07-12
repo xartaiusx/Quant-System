@@ -1803,10 +1803,15 @@ class ResearchDataRightsEvidence(SerializableModel):
     vendor: str
     evidence_reference: str
     internal_storage_allowed: bool = False
+    cloud_backup_allowed: bool = False
+    automated_research_allowed: bool = False
     model_training_allowed: bool = False
     derived_data_allowed: bool = False
     correction_replay_available: bool = False
+    paper_trading_use_allowed: bool = False
+    live_trading_use_allowed: bool = False
     retention_after_termination_allowed: bool = False
+    derived_retention_after_termination_allowed: bool = False
 
     @field_validator("vendor", "evidence_reference")
     @classmethod
@@ -1821,10 +1826,15 @@ class ResearchDataRightsEvidence(SerializableModel):
         return all(
             (
                 self.internal_storage_allowed,
+                self.cloud_backup_allowed,
+                self.automated_research_allowed,
                 self.model_training_allowed,
                 self.derived_data_allowed,
                 self.correction_replay_available,
+                self.paper_trading_use_allowed,
+                self.live_trading_use_allowed,
                 self.retention_after_termination_allowed,
+                self.derived_retention_after_termination_allowed,
             )
         )
 
@@ -2840,7 +2850,11 @@ class ResearchExperimentSpec(SerializableModel):
     validation_years: list[int]
     holdout_start: str
     holdout_end: str
+    supersedes_experiment_id: str | None = None
     minimum_closed_trades: int = Field(default=1, ge=0)
+    minimum_development_closed_trades: int | None = Field(default=None, ge=0)
+    minimum_validation_closed_trades_per_year: int | None = Field(default=None, ge=0)
+    minimum_holdout_closed_trades: int | None = Field(default=None, ge=0)
     sizing_mode: ResearchSizingMode = ResearchSizingMode.TARGET_ALLOCATION
     quantity: int = Field(default=1, gt=0)
     target_allocation_pct: Decimal = Field(default=Decimal("100"), gt=0, le=100)
@@ -2916,6 +2930,374 @@ class ResearchExperimentSpec(SerializableModel):
             raise ValueError("validation years must precede the holdout")
         if self.required_positive_validation_years > len(self.validation_years):
             raise ValueError("positive-year threshold exceeds validation fold count")
+        phase_trade_gates = (
+            self.minimum_development_closed_trades,
+            self.minimum_validation_closed_trades_per_year,
+            self.minimum_holdout_closed_trades,
+        )
+        if any(value is not None for value in phase_trade_gates) and any(
+            value is None for value in phase_trade_gates
+        ):
+            raise ValueError(
+                "phase-specific trade gates must define development, validation, and holdout"
+            )
+        if self.supersedes_experiment_id == self.experiment_id:
+            raise ValueError("an experiment cannot supersede itself")
+        return self
+
+    @property
+    def development_trade_gate(self) -> int:
+        return (
+            self.minimum_development_closed_trades
+            if self.minimum_development_closed_trades is not None
+            else self.minimum_closed_trades
+        )
+
+    @property
+    def validation_trade_gate(self) -> int:
+        return (
+            self.minimum_validation_closed_trades_per_year
+            if self.minimum_validation_closed_trades_per_year is not None
+            else self.minimum_closed_trades
+        )
+
+    @property
+    def holdout_trade_gate(self) -> int:
+        return (
+            self.minimum_holdout_closed_trades
+            if self.minimum_holdout_closed_trades is not None
+            else self.minimum_closed_trades
+        )
+
+
+class ResearchVendorDecisionCandidate(SerializableModel):
+    """Non-sensitive vendor proposal metadata and weighted technical scores."""
+
+    model_config = ConfigDict(frozen=True, use_enum_values=True, extra="forbid")
+
+    vendor: str
+    bakeoff_report_path: str
+    monthly_cost_usd: Decimal = Field(ge=0)
+    one_time_cost_usd: Decimal = Field(default=Decimal("0"), ge=0)
+    estimated_storage_gb: Decimal = Field(ge=0)
+    written_evidence_sha256: list[str]
+    technical_scores: dict[str, Decimal]
+
+    @field_validator("vendor", "bakeoff_report_path")
+    @classmethod
+    def validate_vendor_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("vendor decision text fields must not be empty")
+        return normalized
+
+    @field_validator("written_evidence_sha256")
+    @classmethod
+    def validate_evidence_hashes(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("vendor decision requires written-evidence hashes")
+        normalized: list[str] = []
+        for item in value:
+            candidate = item.strip().lower()
+            digest = candidate.removeprefix("sha256:")
+            if len(digest) != 64 or any(
+                character not in "0123456789abcdef" for character in digest
+            ):
+                raise ValueError("written evidence must use SHA-256 hashes")
+            normalized.append(f"sha256:{digest}")
+        return list(dict.fromkeys(normalized))
+
+
+class ResearchVendorDecisionManifest(SerializableModel):
+    """Offline rights-first vendor selection manifest."""
+
+    model_config = ConfigDict(frozen=True, use_enum_values=True, extra="forbid")
+
+    manifest_version: int = 1
+    symbol: str = "SPY"
+    max_monthly_budget_usd: Decimal = Field(default=Decimal("700"), gt=0, le=700)
+    evaluation_years: int = Field(default=3, gt=0, le=10)
+    score_weights: dict[str, int] = Field(
+        default_factory=lambda: {
+            "rights_and_permitted_use": 20,
+            "data_quality": 20,
+            "coverage": 10,
+            "corporate_actions": 10,
+            "corrections": 10,
+            "timestamp_sessions": 10,
+            "delivery_operations": 10,
+            "total_cost_storage": 10,
+        }
+    )
+    candidates: list[ResearchVendorDecisionCandidate]
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_vendor_decision_symbol(cls, value: str) -> str:
+        if value.strip().upper() != "SPY":
+            raise ValueError("vendor decision is SPY-only")
+        return "SPY"
+
+    @model_validator(mode="after")
+    def validate_vendor_decision_manifest(self) -> ResearchVendorDecisionManifest:
+        required_weights = {
+            "rights_and_permitted_use": 20,
+            "data_quality": 20,
+            "coverage": 10,
+            "corporate_actions": 10,
+            "corrections": 10,
+            "timestamp_sessions": 10,
+            "delivery_operations": 10,
+            "total_cost_storage": 10,
+        }
+        if self.manifest_version != 1:
+            raise ValueError("unsupported vendor decision manifest version")
+        if self.score_weights != required_weights:
+            raise ValueError("vendor decision score weights must match the approved policy")
+        vendors = [candidate.vendor.lower() for candidate in self.candidates]
+        if not vendors or len(vendors) != len(set(vendors)):
+            raise ValueError("vendor decision candidates must be non-empty and unique")
+        expected_scores = set(self.score_weights)
+        for candidate in self.candidates:
+            if set(candidate.technical_scores) != expected_scores:
+                raise ValueError(
+                    f"{candidate.vendor} technical score keys must match score_weights"
+                )
+            if any(score < 0 or score > 100 for score in candidate.technical_scores.values()):
+                raise ValueError("vendor technical scores must be between 0 and 100")
+        return self
+
+
+class ResearchVendorDecisionResult(SerializableModel):
+    """One vendor's rights-first procurement decision evidence."""
+
+    vendor: str
+    weighted_score: Decimal
+    three_year_tco_usd: Decimal
+    estimated_storage_gb: Decimal
+    written_evidence_sha256: list[str] = Field(default_factory=list)
+    rights_gate_passed: bool = False
+    bakeoff_gate_passed: bool = False
+    budget_gate_passed: bool = False
+    eligible: bool = False
+    selected: bool = False
+    discrepancy_classifications: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+
+
+class ResearchVendorDecisionReport(SerializableModel):
+    """Offline, no-secret vendor selection report with hard rights gates."""
+
+    title: str = "SPY Research Data Vendor Decision"
+    report_type: str = "research_vendor_decision"
+    command: str = "research-vendor-decision"
+    ok: bool
+    manifest_path: str
+    manifest: ResearchVendorDecisionManifest | None = None
+    candidate_results: list[ResearchVendorDecisionResult] = Field(default_factory=list)
+    selected_vendor: str | None = None
+    procurement_blocked: bool = True
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    credentials_read: bool = False
+    network_accessed: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    promotion_eligible: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_vendor_decision_safety(self) -> ResearchVendorDecisionReport:
+        if self.broker_contacted or self.credentials_read or self.network_accessed:
+            raise ValueError("vendor decision must remain offline and credential-free")
+        if self.order_routing_enabled or self.submitted_orders or self.order_api_invoked:
+            raise ValueError("vendor decision must not invoke order routing")
+        if self.promotion_eligible:
+            raise ValueError("vendor selection cannot promote a strategy")
+        if self.selected_vendor is not None and self.procurement_blocked:
+            raise ValueError("a selected vendor cannot be marked procurement blocked")
+        return self
+
+
+class ResearchInstrumentMasterRecord(SerializableModel):
+    """Versioned permanent identity for the SPY execution/research instrument."""
+
+    model_config = ConfigDict(frozen=True, use_enum_values=True, extra="forbid")
+
+    internal_id: str = "spy-us-equity"
+    version: int = Field(default=1, gt=0)
+    symbol: str = "SPY"
+    security_name: str = "State Street SPDR S&P 500 ETF Trust"
+    sec_type: str = "STK"
+    currency: str = "USD"
+    primary_exchange: str = "ARCA"
+    routing_exchange: str = "SMART"
+    min_tick: Decimal = Decimal("0.01")
+    listing_start: str = "1993-01-22"
+    listing_end: str | None = None
+    ibkr_con_id: int = Field(gt=0)
+    composite_figi: str | None = None
+    cusip: str | None = None
+    isin: str | None = None
+    vendor_mappings: dict[str, str] = Field(default_factory=dict)
+    source_references: list[str]
+
+    @field_validator(
+        "internal_id",
+        "security_name",
+        "sec_type",
+        "currency",
+        "primary_exchange",
+        "routing_exchange",
+    )
+    @classmethod
+    def validate_instrument_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("instrument master text fields must not be empty")
+        return normalized
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_instrument_spy(cls, value: str) -> str:
+        if value.strip().upper() != "SPY":
+            raise ValueError("instrument master is SPY-only")
+        return "SPY"
+
+    @field_validator("source_references")
+    @classmethod
+    def validate_source_references(cls, value: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if len(normalized) < 2 or any(not item.startswith("https://") for item in normalized):
+            raise ValueError("instrument master requires at least two HTTPS source references")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_spy_identity(self) -> ResearchInstrumentMasterRecord:
+        if self.sec_type != "STK" or self.currency != "USD":
+            raise ValueError("SPY instrument master requires STK/USD")
+        if self.primary_exchange != "ARCA" or self.routing_exchange != "SMART":
+            raise ValueError("SPY instrument master requires ARCA primary and SMART routing")
+        if self.min_tick != Decimal("0.01"):
+            raise ValueError("SPY instrument master requires a 0.01 minimum tick")
+        start = date.fromisoformat(self.listing_start)
+        if self.listing_end is not None and date.fromisoformat(self.listing_end) < start:
+            raise ValueError("instrument listing_end must not precede listing_start")
+        return self
+
+
+class ResearchInstrumentMasterReport(SerializableModel):
+    """Offline registration evidence for one immutable instrument revision."""
+
+    title: str = "SPY Research Instrument Master"
+    report_type: str = "research_instrument_master"
+    command: str = "research-instrument-register"
+    ok: bool
+    manifest_path: str
+    catalog_path: str | None = None
+    record: ResearchInstrumentMasterRecord | None = None
+    record_fingerprint: str | None = None
+    active_version: int | None = None
+    idempotent_replay: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    credentials_read: bool = False
+    network_accessed: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    promotion_eligible: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_instrument_master_safety(self) -> ResearchInstrumentMasterReport:
+        if self.broker_contacted or self.credentials_read or self.network_accessed:
+            raise ValueError("instrument registration must remain offline")
+        if self.order_routing_enabled or self.submitted_orders or self.order_api_invoked:
+            raise ValueError("instrument registration must not invoke order routing")
+        if self.promotion_eligible:
+            raise ValueError("instrument registration cannot promote a strategy")
+        return self
+
+
+class ResearchSealedPeriod(SerializableModel):
+    """Permanent catalog seal reserving an experiment holdout interval."""
+
+    experiment_id: str
+    symbol: str = "SPY"
+    start_date: str
+    end_date: str
+    purpose: str = "final_holdout"
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ResearchEnvironmentManifest(SerializableModel):
+    """Reproducible release evidence attached to governed research runs."""
+
+    commit_sha: str
+    worktree_clean: bool
+    dependency_lock_path: str
+    dependency_lock_fingerprint: str
+    pyproject_fingerprint: str
+    python_version: str
+    ibapi_version: str | None = None
+    strategy_fingerprint: str
+    config_fingerprint: str
+    environment_fingerprint: str
+
+
+class ResearchExperimentRegistrationRequest(SerializableModel):
+    """Offline request to register and permanently seal a tracked experiment."""
+
+    spec_path: str
+    root_path: str
+    dependency_lock_path: str = "requirements.lock"
+    supersedes_spec_path: str | None = None
+
+
+class ResearchExperimentRegistrationReport(SerializableModel):
+    """Broker-free evidence that an experiment and holdout seal were registered."""
+
+    title: str = "SPY Research Experiment Registration"
+    report_type: str = "research_experiment_registration"
+    command: str = "research-experiment-register"
+    ok: bool
+    request: ResearchExperimentRegistrationRequest
+    spec: ResearchExperimentSpec | None = None
+    experiment_id: str | None = None
+    spec_fingerprint: str | None = None
+    spec_git_tracked: bool = False
+    worktree_clean: bool = False
+    commit_sha: str | None = None
+    environment_manifest: ResearchEnvironmentManifest | None = None
+    catalog_path: str | None = None
+    sealed_period: ResearchSealedPeriod | None = None
+    superseded_experiment_id: str | None = None
+    idempotent_replay: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    credentials_read: bool = False
+    network_accessed: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_registration_safety(self) -> ResearchExperimentRegistrationReport:
+        if self.broker_contacted or self.credentials_read or self.network_accessed:
+            raise ValueError("experiment registration must remain offline")
+        if self.order_routing_enabled or self.submitted_orders or self.order_api_invoked:
+            raise ValueError("experiment registration must not invoke order routing")
+        if self.ok and (self.sealed_period is None or self.environment_manifest is None):
+            raise ValueError("successful registration requires seal and environment evidence")
         return self
 
 
@@ -2926,6 +3308,7 @@ class ResearchExperimentRequest(SerializableModel):
     root_path: str
     phase: ResearchExperimentPhase = ResearchExperimentPhase.DEVELOPMENT
     confirmation: str | None = None
+    dependency_lock_path: str = "requirements.lock"
 
 
 class ResearchExperimentCandidateResult(SerializableModel):
@@ -2991,7 +3374,12 @@ class ResearchExperimentReport(SerializableModel):
     spec_path: str
     spec_fingerprint: str | None = None
     spec_git_tracked: bool = False
+    worktree_clean: bool = False
     commit_sha: str | None = None
+    environment_manifest: ResearchEnvironmentManifest | None = None
+    strategy_fingerprint: str | None = None
+    config_fingerprint: str | None = None
+    environment_fingerprint: str | None = None
     catalog_path: str | None = None
     signal_dataset_fingerprint: str | None = None
     execution_dataset_fingerprint: str | None = None
@@ -4847,6 +5235,10 @@ class AlphaPaperRunRequest(SerializableModel):
     max_report_age_hours: int = 24
     alpha_shadow_report_path: str = "reports/latest_alpha_shadow_run.json"
     paper_smoke_report_path: str = "reports/latest_paper_order_smoke.json"
+    research_experiment_report_path: str = "reports/latest_research_experiment.json"
+    strict_shadow_summary_report_path: str = (
+        "reports/latest_alpha_shadow_daemon_summary.json"
+    )
 
     @field_validator("symbol")
     @classmethod
@@ -4886,7 +5278,12 @@ class AlphaPaperRunRequest(SerializableModel):
             raise ValueError("max_report_age_hours must be greater than 0 and no more than 168")
         return value
 
-    @field_validator("alpha_shadow_report_path", "paper_smoke_report_path")
+    @field_validator(
+        "alpha_shadow_report_path",
+        "paper_smoke_report_path",
+        "research_experiment_report_path",
+        "strict_shadow_summary_report_path",
+    )
     @classmethod
     def validate_report_path(cls, value: str) -> str:
         normalized = value.strip()
@@ -4914,10 +5311,20 @@ class AlphaPaperRunReport(SerializableModel):
     source_report_campaign_ids: dict[str, str | None] = Field(default_factory=dict)
     alpha_shadow_report_verified: bool = False
     paper_smoke_report_verified: bool = False
+    research_experiment_report_verified: bool = False
+    strict_shadow_summary_report_verified: bool = False
     alpha_shadow_commit_sha: str | None = None
     paper_smoke_commit_sha: str | None = None
+    research_experiment_commit_sha: str | None = None
+    strict_shadow_summary_commit_sha: str | None = None
     alpha_shadow_timestamp: datetime | None = None
     paper_smoke_timestamp: datetime | None = None
+    research_experiment_timestamp: datetime | None = None
+    strict_shadow_summary_timestamp: datetime | None = None
+    research_experiment_id: str | None = None
+    research_review_ready: bool = False
+    strict_shadow_graduation_ready: bool = False
+    strict_shadow_engineering_pilot_ready: bool = False
     shadow_signal: str | None = None
     risk_approved: bool = False
     no_trade_reason: str | None = None
@@ -4953,8 +5360,8 @@ class AlphaPaperRunReport(SerializableModel):
     bracket_orders_enabled: bool = False
     safety_statement: str = (
         "This command may submit at most one SPY BUY 1 STK/SMART/USD LMT DAY "
-        "paper order after a same-commit read-only alpha shadow report and a "
-        "same-commit paper-order smoke report pass within the configured freshness window."
+        "paper order after same-commit research-review, strict-live shadow, read-only "
+        "alpha-shadow, and paper-order-smoke prerequisites pass."
     )
     final_status: AlphaPaperRunStatus
     timestamp: datetime = Field(default_factory=utc_now)
@@ -4987,6 +5394,17 @@ class AlphaPaperRunReport(SerializableModel):
             raise ValueError("no_trade reports must not submit orders")
         if self.submitted_orders and not self.paper_orders_enabled:
             raise ValueError("submitted paper orders require paper_orders_enabled")
+        if self.submitted_orders and not all(
+            (
+                self.alpha_shadow_report_verified,
+                self.paper_smoke_report_verified,
+                self.research_experiment_report_verified,
+                self.strict_shadow_summary_report_verified,
+                self.research_review_ready,
+                self.strict_shadow_engineering_pilot_ready,
+            )
+        ):
+            raise ValueError("submitted alpha orders require every promotion prerequisite")
         return self
 
 
@@ -5261,6 +5679,10 @@ class AlphaCampaignRunRequest(SerializableModel):
     max_report_age_hours: int = 24
     alpha_shadow_report_path: str = "reports/latest_alpha_shadow_run.json"
     paper_smoke_report_path: str = "reports/latest_paper_order_smoke.json"
+    research_experiment_report_path: str = "reports/latest_research_experiment.json"
+    strict_shadow_summary_report_path: str = (
+        "reports/latest_alpha_shadow_daemon_summary.json"
+    )
     read_only_off_confirm: str = ""
 
     @field_validator("mode", mode="before")
@@ -5289,7 +5711,12 @@ class AlphaCampaignRunRequest(SerializableModel):
             raise ValueError("max_report_age_hours must be greater than 0 and no more than 168")
         return value
 
-    @field_validator("alpha_shadow_report_path", "paper_smoke_report_path")
+    @field_validator(
+        "alpha_shadow_report_path",
+        "paper_smoke_report_path",
+        "research_experiment_report_path",
+        "strict_shadow_summary_report_path",
+    )
     @classmethod
     def validate_report_path(cls, value: str) -> str:
         normalized = value.strip()
