@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -1061,6 +1061,61 @@ def test_readiness_detects_sorted_ready_bars() -> None:
     assert summary.readiness_status == HistoricalReadinessStatus.READY
     assert summary.sorted_timestamps is True
     assert summary.duplicate_timestamps_count == 0
+
+
+@pytest.mark.parametrize(
+    ("timestamp", "expected"),
+    [
+        ("20260710 09:30:00 US/Eastern", "2026-07-10T13:30:00+00:00"),
+        ("20260710 09:30:00 America/New_York", "2026-07-10T13:30:00+00:00"),
+        ("20260710 09:30:00 UTC", "2026-07-10T09:30:00+00:00"),
+        ("20260306 09:30:00 US/Eastern", "2026-03-06T14:30:00+00:00"),
+        ("20260309 09:30:00 US/Eastern", "2026-03-09T13:30:00+00:00"),
+    ],
+)
+def test_readiness_normalizes_ibkr_timezone_timestamps(
+    timestamp: str,
+    expected: str,
+) -> None:
+    bars = [snapshot_bar(timestamp=timestamp)]
+    manifest = snapshot_manifest(bars)
+
+    summary = readiness_summary_for_snapshot(manifest, bars, now=manifest.generated_at)
+
+    assert summary.readiness_status == HistoricalReadinessStatus.READY
+    assert summary.first_timestamp == expected
+    assert summary.last_timestamp == expected
+    assert bars[0].timestamp == timestamp
+
+
+def test_readiness_accepts_complete_ibkr_eastern_regular_session() -> None:
+    start = datetime(2026, 7, 10, 9, 30)
+    bars = [
+        snapshot_bar(
+            timestamp=f"{(start + timedelta(minutes=5 * index)):%Y%m%d %H:%M:%S} US/Eastern"
+        )
+        for index in range(78)
+    ]
+    manifest = snapshot_manifest(bars)
+
+    summary = readiness_summary_for_snapshot(manifest, bars, now=manifest.generated_at)
+
+    assert summary.readiness_status == HistoricalReadinessStatus.READY
+    assert summary.bars_count == 78
+    assert summary.first_timestamp == "2026-07-10T13:30:00+00:00"
+    assert summary.last_timestamp == "2026-07-10T19:55:00+00:00"
+    assert summary.missing_timestamp_gaps == []
+
+
+def test_readiness_rejects_unknown_ibkr_timezone() -> None:
+    bars = [snapshot_bar(timestamp="20260710 09:30:00 Mars/Olympus")]
+    manifest = snapshot_manifest(bars)
+
+    summary = readiness_summary_for_snapshot(manifest, bars, now=manifest.generated_at)
+
+    assert summary.readiness_status == HistoricalReadinessStatus.FAILED
+    assert summary.first_timestamp is None
+    assert any(issue.code == "timestamp_parse_failed" for issue in summary.issues)
 
 
 def test_readiness_detects_duplicate_timestamps() -> None:

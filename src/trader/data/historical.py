@@ -9,6 +9,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from trader.config import TraderConfig
 from trader.models import (
@@ -28,6 +29,10 @@ DEFAULT_HISTORICAL_ROOT = Path("data/historical")
 _SNAPSHOT_STALE_AFTER_SECONDS = 48 * 60 * 60
 _MIN_READY_BARS = 1
 _QUALITY_SAMPLE_LIMIT = 5
+_IBKR_TIMEZONE_ALIASES = {
+    "GMT": "UTC",
+    "US/Eastern": "America/New_York",
+}
 
 
 def write_historical_snapshot_result(
@@ -402,6 +407,21 @@ def _parse_bar_timestamp(value: str) -> datetime | None:
     normalized = " ".join(value.strip().split())
     if not normalized:
         return None
+    zoned_match = re.fullmatch(
+        r"(?P<timestamp>\d{8} \d{2}:\d{2}:\d{2}) (?P<timezone>[A-Za-z0-9_+\-/]+)",
+        normalized,
+    )
+    if zoned_match is not None:
+        try:
+            parsed = datetime.strptime(zoned_match.group("timestamp"), "%Y%m%d %H:%M:%S")
+            timezone_name = _IBKR_TIMEZONE_ALIASES.get(
+                zoned_match.group("timezone"),
+                zoned_match.group("timezone"),
+            )
+            timezone = ZoneInfo(timezone_name)
+        except (ValueError, ZoneInfoNotFoundError):
+            return None
+        return parsed.replace(tzinfo=timezone).astimezone(UTC)
     for fmt in ("%Y%m%d %H:%M:%S", "%Y%m%d", "%Y-%m-%dT%H:%M:%S%z"):
         try:
             parsed = datetime.strptime(normalized, fmt)
