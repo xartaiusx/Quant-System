@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Send the same questions to Massive, Norgate, Databento, and AlgoSeek before a
+Send the same questions to Massive, Norgate, Databento, AlgoSeek, and Alpaca before a
 purchase. This document is a due-diligence checklist, not legal advice. Written
 vendor responses and contracts belong only in ignored `Quant Creds`; Git may
 contain their SHA-256 hashes and non-sensitive decision metadata.
@@ -24,6 +24,7 @@ Ask the vendor to confirm in writing whether a non-professional individual may:
 
 Any material ambiguity or prohibited required use fails the rights gate. Do not
 infer rights from product features, trial access, or an unwritten statement.
+Free API access and successful download are not evidence of these rights.
 
 ## Technical Sample Request
 

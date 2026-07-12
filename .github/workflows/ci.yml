@@ -147,6 +147,8 @@ jobs:
             src/trader/data/shadow_warmup.py
       - name: Enforce global production order API allowlist
         run: python scripts/check_order_api_allowlist.py
+      - name: Enforce Alpaca historical-data-only boundary
+        run: python scripts/check_alpaca_data_only.py
       - name: Reject tracked credentials, reports, and market data
         run: python scripts/check_no_sensitive_artifacts.py
       - name: Check order flags stay rejected

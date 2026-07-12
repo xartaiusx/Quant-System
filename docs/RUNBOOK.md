@@ -814,6 +814,12 @@ python -m trader.cli research-data-bakeoff `
 
 python -m trader.cli research-vendor-decision `
   --manifest D:\MarketData\bakeoff\spy-vendor-decision.json
+
+python scripts/acquire_alpaca_spy.py `
+  --symbol SPY --feed sip --timeframe 1Min `
+  --start 2016-01-01 --end 2025-12-31 `
+  --output-root D:\MarketData\Quant-System\incoming\alpaca_sip `
+  --plan-only
 ```
 
 The manifest must cover a normal session, early close, ex-dividend date,
@@ -821,6 +827,24 @@ before/after correction, cross-vendor daily overlap, synthetic split, expected
 checksums, and written rights for storage, training, derived data, corrections,
 and retention after cancellation. The command reads no credentials and performs
 no network request.
+
+Alpaca is data-only; IBKR remains the sole broker. A real Alpaca acquisition is
+kept outside Git and does not import or activate its output. Before import, send
+the standard RFI, hash the written response, pass the technical bake-off, and
+produce a vendor-decision report that selects `alpaca_sip`. Then import one
+complete acquisition run with:
+
+```powershell
+python -m trader.cli research-data-import-batch `
+  --source-dir <one-complete-alpaca-run> `
+  --vendor alpaca_sip `
+  --kind minute_bars `
+  --pattern 'alpaca-sip-SPY-*.json.gz' `
+  --vendor-decision-report <passing-local-decision-report.json> `
+  --root D:\MarketData\Quant-System
+```
+
+Acquisition and import details are in `docs/ALPACA_DATA_ACQUISITION.md`.
 
 After a vendor passes procurement review, batch-import local licensed files in
 deterministic filename order, import complete actions, derive views, and audit:

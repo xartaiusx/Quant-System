@@ -23,6 +23,7 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from trader.data.research_store import (
     CATALOG_RELATIVE_PATH,
+    ingest_alpaca_sip_minute_file,
     ingest_massive_minute_file,
     initialize_research_store,
 )
@@ -50,6 +51,7 @@ from trader.models import (
     ResearchDerivedViewReport,
     ResearchDerivedViewRequest,
     ResearchSampleKind,
+    ResearchVendorDecisionReport,
 )
 
 _DAILY_COLUMNS = {"symbol", "timestamp", "open", "high", "low", "close", "volume"}
@@ -333,11 +335,13 @@ def import_research_data_batch(
     """Import sorted local files without downloading or reading credentials."""
 
     source_dir = Path(request.source_dir).expanduser().resolve()
-    errors: list[str] = []
+    errors = _batch_vendor_rights_errors(request)
     warnings = ["Batch import is offline and reads local licensed files only"]
-    if not source_dir.is_dir():
-        errors.append(f"source directory not found: {source_dir.as_posix()}")
+    if errors:
         paths: list[Path] = []
+    elif not source_dir.is_dir():
+        errors.append(f"source directory not found: {source_dir.as_posix()}")
+        paths = []
     else:
         paths = sorted(
             path.resolve() for path in source_dir.glob(request.pattern) if path.is_file()
@@ -396,7 +400,7 @@ def derive_research_views(
             )
             all_parents = [*minute_parents, *daily_parents]
             if not minute_parents:
-                errors.append("no active raw Massive SPY minute partitions found")
+                errors.append("no active rights-approved raw SPY minute partitions found")
             if not daily_parents:
                 warnings.append("no active raw SPY daily partitions found; benchmark not derived")
             if all_parents:
@@ -675,10 +679,21 @@ def _import_batch_item(
 ) -> ResearchDataBatchImportItem:
     kind = str(request.kind)
     if kind == ResearchSampleKind.MINUTE_BARS:
-        report = ingest_massive_minute_file(
+        ingest = (
+            ingest_alpaca_sip_minute_file
+            if request.vendor.strip().lower() == "alpaca_sip"
+            else ingest_massive_minute_file
+        )
+        report = ingest(
             ResearchDataIngestRequest(
                 source_path=path.as_posix(),
                 root_path=request.root_path,
+                source_name=request.vendor,
+                vendor_decision_sha256=(
+                    f"sha256:{_sha256(Path(request.vendor_decision_report_path or ''))}"
+                    if request.vendor.strip().lower() == "alpaca_sip"
+                    else None
+                ),
             )
         )
         return ResearchDataBatchImportItem(
@@ -728,6 +743,42 @@ def _import_batch_item(
         warnings=actions.warnings,
         errors=actions.errors,
     )
+
+
+def _batch_vendor_rights_errors(request: ResearchDataBatchImportRequest) -> list[str]:
+    if request.vendor.strip().lower() != "alpaca_sip":
+        return []
+    report_path = Path(request.vendor_decision_report_path or "").expanduser().resolve()
+    if not report_path.is_file():
+        return ["alpaca_sip import requires an existing vendor-decision report"]
+    try:
+        report = ResearchVendorDecisionReport.model_validate_json(
+            report_path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        return [f"alpaca_sip vendor-decision report failed validation: {exc}"]
+    selected = next(
+        (
+            item
+            for item in report.candidate_results
+            if item.selected and item.vendor.strip().lower() == "alpaca_sip"
+        ),
+        None,
+    )
+    if (
+        not report.ok
+        or report.procurement_blocked
+        or (report.selected_vendor or "").strip().lower() != "alpaca_sip"
+        or selected is None
+        or not selected.rights_gate_passed
+        or not selected.bakeoff_gate_passed
+        or not selected.budget_gate_passed
+        or not selected.eligible
+    ):
+        return [
+            "alpaca_sip import is blocked until written rights and technical bake-off gates pass"
+        ]
+    return []
 
 
 def _parse_daily_file(path: Path) -> list[_DailyBar]:

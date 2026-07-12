@@ -64,6 +64,22 @@ def test_rights_failure_overrides_perfect_score(tmp_path: Path) -> None:
     assert "written rights gate failed" in report.candidate_results[0].reasons
 
 
+def test_free_alpaca_candidate_cannot_bypass_written_rights_gate(tmp_path: Path) -> None:
+    bakeoff = _write_bakeoff(tmp_path / "alpaca.json", "alpaca_sip", rights=False)
+    manifest = _write_manifest(
+        tmp_path / "decision.json",
+        [_candidate("alpaca_sip", bakeoff.name, score=100, monthly_cost=0)],
+    )
+
+    report = run_research_vendor_decision(manifest)
+
+    assert report.ok is False
+    assert report.selected_vendor is None
+    assert report.procurement_blocked is True
+    assert report.candidate_results[0].budget_gate_passed is True
+    assert report.candidate_results[0].rights_gate_passed is False
+
+
 def test_vendor_decision_reports_render_and_command_runs(
     tmp_path: Path,
     monkeypatch,

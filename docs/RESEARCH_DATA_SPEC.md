@@ -27,13 +27,17 @@ points only to manually supplied local CSV or CSV.gz samples and declares:
 The bake-off validates timestamps, XNYS session alignment, OHLCV, duplicates,
 checksums, corrections, overlap tolerances, and rights evidence. It reports
 procurement readiness but never downloads data or promotes a strategy.
+It can compare a local Alpaca SIP one-minute sample directly with a local IBKR
+five-minute snapshot through the `intraday_overlap` case. One-minute bars are
+aggregated deterministically to 78/42 XNYS-anchored five-minute bars before
+OHLCV comparison.
 
 Standard published terms are provisionally insufficient until a vendor gives
 written permission for this private program's automated research, model
 training, local and approved cloud storage, derived artifacts, backups,
 correction history, paper/live trading use, and post-cancellation retention.
 Run `research-vendor-decision` only after the same RFI and sample suite has been
-applied to Massive, Norgate, Databento, and AlgoSeek. Rights failure overrides
+applied to Massive, Norgate, Databento, AlgoSeek, and Alpaca. Rights failure overrides
 the 20/20/10/10/10/10/10/10 technical score and the $700 monthly ceiling.
 Contracts and responses stay in `Quant Creds`; the decision manifest contains
 only SHA-256 evidence references and non-sensitive terms metadata. See
@@ -51,6 +55,13 @@ Primary vendor sources:
 
 - Massive stock flat files: https://massive.com/docs/flat-files/stocks/overview
 - Norgate U.S. stock packages: https://norgatedata.com/stockmarketpackages.php
+- Alpaca Market Data API: https://docs.alpaca.markets/us/docs/about-market-data-api
+- Alpaca SIP historical boundary: https://docs.alpaca.markets/us/docs/market-data-faq
+
+Alpaca is a no-cost historical SIP candidate, not a broker integration. Its
+standalone downloader is documented in `docs/ALPACA_DATA_ACQUISITION.md`.
+Acquired files remain non-promoting until written rights and the full technical
+bake-off pass.
 
 ## Catalog V3
 
@@ -103,7 +114,7 @@ deactivates the previous record without deleting it.
 `research-data-import-batch` sorts a non-recursive local filename glob before
 import and accepts only these SPY source kinds:
 
-- `minute_bars`: licensed Massive-style unadjusted minute aggregates;
+- `minute_bars`: rights-approved Massive or Alpaca SIP raw minute aggregates;
 - `daily_bars`: approved canonical daily OHLCV exports;
 - `corporate_actions`: complete split/dividend event exports with declared
   coverage dates.
@@ -161,10 +172,25 @@ python -m trader.cli research-data-bakeoff `
 python -m trader.cli research-vendor-decision `
   --manifest D:\MarketData\bakeoff\spy-vendor-decision.json
 
+python scripts/acquire_alpaca_spy.py `
+  --symbol SPY --feed sip --timeframe 1Min `
+  --start 2016-01-01 --end 2025-12-31 `
+  --output-root D:\MarketData\Quant-System\incoming\alpaca_sip `
+  --plan-only
+
 python -m trader.cli research-data-import-batch `
   --source-dir D:\MarketData\incoming\massive `
   --vendor massive `
   --kind minute_bars `
+  --root D:\MarketData\Quant-System
+
+# Alpaca import remains blocked until this report selects alpaca_sip and proves rights.
+python -m trader.cli research-data-import-batch `
+  --source-dir <one-complete-alpaca-run> `
+  --vendor alpaca_sip `
+  --kind minute_bars `
+  --pattern 'alpaca-sip-SPY-*.json.gz' `
+  --vendor-decision-report <passing-local-decision-report.json> `
   --root D:\MarketData\Quant-System
 
 python -m trader.cli research-data-import-batch `

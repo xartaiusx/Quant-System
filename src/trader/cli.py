@@ -1102,6 +1102,13 @@ def research_data_import_batch(
         str | None,
         typer.Option(help="Complete corporate-action coverage end (YYYY-MM-DD)."),
     ] = None,
+    vendor_decision_report: Annotated[
+        Path | None,
+        typer.Option(
+            "--vendor-decision-report",
+            help="Passing rights-first decision report required for alpaca_sip imports.",
+        ),
+    ] = None,
 ) -> None:
     """Import a deterministic batch of local licensed SPY files offline."""
 
@@ -1113,6 +1120,9 @@ def research_data_import_batch(
         pattern=pattern,
         coverage_start=coverage_start,
         coverage_end=coverage_end,
+        vendor_decision_report_path=(
+            vendor_decision_report.as_posix() if vendor_decision_report else None
+        ),
     )
     report = import_research_data_batch(request)
     json_path, md_path = Journal().write_cycle(
