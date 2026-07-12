@@ -64,7 +64,10 @@ def test_rights_failure_overrides_perfect_score(tmp_path: Path) -> None:
     assert "written rights gate failed" in report.candidate_results[0].reasons
 
 
-def test_vendor_decision_reports_render_and_command_is_registered(tmp_path: Path) -> None:
+def test_vendor_decision_reports_render_and_command_runs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     selected = _write_bakeoff(tmp_path / "vendor.json", "Vendor", rights=True)
     manifest = _write_manifest(
         tmp_path / "decision.json",
@@ -75,7 +78,13 @@ def test_vendor_decision_reports_render_and_command_is_registered(tmp_path: Path
     markdown = markdown_summary(report.model_dump(mode="json"))
     assert "Research Data Vendor Decision" in markdown
     assert "Selected vendor: `Vendor`" in markdown
-    assert CliRunner().invoke(app, ["research-vendor-decision", "--help"]).exit_code == 0
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        ["research-vendor-decision", "--manifest", manifest.as_posix()],
+    )
+    assert result.exit_code == 0
+    assert "Selected vendor: Vendor" in result.output
 
 
 def test_vendor_decision_module_is_offline_and_order_free() -> None:
@@ -108,6 +117,23 @@ def test_vendor_decision_cannot_weaken_budget_or_weights() -> None:
     payload["score_weights"] = {**_WEIGHTS, "coverage": 9, "corporate_actions": 11}
     with pytest.raises(ValidationError, match="approved policy"):
         ResearchVendorDecisionManifest.model_validate(payload)
+
+
+def test_vendor_decision_fails_closed_on_invalid_or_missing_evidence(tmp_path: Path) -> None:
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("not-json", encoding="utf-8")
+    invalid_report = run_research_vendor_decision(invalid)
+    assert invalid_report.ok is False
+    assert "could not be loaded" in invalid_report.errors[0]
+
+    manifest = _write_manifest(
+        tmp_path / "missing.json",
+        [_candidate("Missing", "missing-bakeoff.json", score=100, monthly_cost=10)],
+    )
+    missing_report = run_research_vendor_decision(manifest)
+    assert missing_report.ok is False
+    assert missing_report.selected_vendor is None
+    assert "could not be loaded" in " ".join(missing_report.errors)
 
 
 def _candidate(

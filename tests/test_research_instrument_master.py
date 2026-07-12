@@ -49,17 +49,59 @@ def test_higher_instrument_version_supersedes_active_revision(tmp_path: Path) ->
     assert rows == [(1, 0), (2, 1)]
 
 
-def test_instrument_report_renders_and_command_is_registered(tmp_path: Path) -> None:
+def test_instrument_report_renders_and_command_runs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manifest = _write_manifest(tmp_path / "spy.json", version=1)
+    root = tmp_path / "store"
     report = register_research_instrument(
-        _write_manifest(tmp_path / "spy.json", version=1),
-        catalog_root=tmp_path / "store",
+        manifest,
+        catalog_root=root,
     )
 
     markdown = markdown_summary(report.model_dump(mode="json"))
     assert "SPY Research Instrument Master" in markdown
     assert "IBKR conId: `756733`" in markdown
-    result = CliRunner().invoke(app, ["research-instrument-register", "--help"])
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "research-instrument-register",
+            "--manifest",
+            manifest.as_posix(),
+            "--catalog-root",
+            root.as_posix(),
+        ],
+    )
     assert result.exit_code == 0
+    assert "Active version: 1" in result.output
+
+
+def test_instrument_registration_rejects_invalid_and_regressive_versions(
+    tmp_path: Path,
+) -> None:
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("not-json", encoding="utf-8")
+    invalid_report = register_research_instrument(
+        invalid,
+        catalog_root=tmp_path / "store",
+    )
+    assert invalid_report.ok is False
+    assert "could not be registered" in invalid_report.errors[0]
+
+    root = tmp_path / "versions"
+    v1 = _write_manifest(tmp_path / "v1.json", version=1)
+    v3 = _write_manifest(tmp_path / "v3.json", version=3)
+    v2 = _write_manifest(tmp_path / "v2.json", version=2)
+    assert register_research_instrument(v1, catalog_root=root).ok is True
+    assert register_research_instrument(v3, catalog_root=root).ok is True
+    inactive_replay = register_research_instrument(v1, catalog_root=root)
+    assert inactive_replay.ok is True
+    assert inactive_replay.active_version == 3
+    regressive = register_research_instrument(v2, catalog_root=root)
+    assert regressive.ok is False
+    assert "must increase" in regressive.errors[0]
 
 
 def test_instrument_registration_module_is_offline_and_order_free() -> None:
