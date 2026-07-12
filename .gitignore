@@ -32,6 +32,7 @@ state/*
 !state/.gitkeep
 data/historical/**/*.jsonl
 data/historical/**/*_manifest.json
+data/research/
 logs/
 *.log
 

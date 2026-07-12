@@ -770,6 +770,26 @@ offline local-file workflows. Common failures:
 - Failed feed: fix loader errors before replay.
 - Partial feed: review missing-bar diagnostics in the run report.
 
+## Canonical SPY Research Data
+
+Install the isolated research dependency group and ingest only licensed files
+that the operator downloaded explicitly through the vendor-supported S3 path:
+
+```powershell
+python -m pip install -e ".[dev,research]"
+python -m trader.cli research-data-ingest `
+  --source-file D:\MarketData\incoming\2026-07-10.csv.gz `
+  --root D:\MarketData\Quant-System
+python -m trader.cli research-data-audit --root D:\MarketData\Quant-System
+```
+
+The commands are SPY-only and offline-only. They do not read vendor
+credentials, download files, contact IBKR, evaluate a strategy, or calculate
+P&L. A failed file remains in the immutable raw archive but cannot activate a
+Parquet partition. Stop on any failed audit. Keep raw data, Parquet files, the
+SQLite catalog, and generated reports out of Git. Full provenance and revision
+rules are in `docs/RESEARCH_DATA_SPEC.md`.
+
 ## SPY Research Backtest
 
 ```bash

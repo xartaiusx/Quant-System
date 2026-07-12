@@ -134,6 +134,8 @@ python -m trader.cli backtest-feed --symbols SPY,AAPL
 python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment intersection
 python -m trader.cli backtest-run --symbols SPY,AAPL
 python -m trader.cli backtest-run --symbols SPY,AAPL --alignment intersection
+python -m trader.cli research-data-ingest --source-file <licensed-massive.csv.gz>
+python -m trader.cli research-data-audit
 python -m trader.cli research-backtest --symbol SPY --short-window 5 --long-window 20
 python -m trader.cli research-walk-forward --symbol SPY --window-pairs 5:20,10:30,20:50
 python -m trader.cli strategy-contract --symbols SPY,AAPL
@@ -250,6 +252,12 @@ then selects once on the full development partition before evaluating the
 fingerprinted holdout exactly once per report. The report remains
 `promotion_eligible=false`: software cannot prevent an operator from rerunning
 or informally tuning against a consumed holdout.
+
+`research-data-ingest` and `research-data-audit` maintain an external,
+offline-only SPY research store with immutable Massive raw files, versioned
+Parquet partitions, SQLite lineage, XNYS regular-session validation, and
+checksum audits. Install `.[research]` first. Licensed data and generated store
+artifacts remain outside Git. See `docs/RESEARCH_DATA_SPEC.md`.
 
 `strategy-contract` is an offline interface scaffold. It validates a no-op
 strategy contract against local feed frames, writes contract reports, and does
