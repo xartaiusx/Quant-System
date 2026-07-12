@@ -13,9 +13,10 @@ diagnostics. `research-experiment-run` is the only command that can report
 
 ## Preregistration
 
-The first specification is committed at
-`research/experiments/spy_sma_2016_2025_v1.json` before final-holdout access. It
-declares:
+The active specification is committed at
+`research/experiments/spy_sma_2016_2025_v2.json`. It supersedes only the
+unconsumed v1 experiment and is registered before importing the sealed period.
+It declares:
 
 - strategy `spy_sma_target_state` version `1.0.0`;
 - candidates `5:20`, `10:30`, and `20:50`;
@@ -24,11 +25,17 @@ declares:
 - untouched final holdout 2024-2025;
 - unlevered target-allocation sizing and explicit cost assumptions;
 - deterministic selection and review thresholds;
+- at least 100 development trades, 12 trades in each validation year, and 30
+  final-holdout trades;
 - exact one-time final-holdout confirmation text.
 
-The command fails before catalog data access when the spec is not Git-tracked,
-changes after registration, uses an invalid candidate grid, or violates period
-ordering.
+`research-experiment-register` requires a clean worktree and records commit,
+hash-locked dependency, pyproject, Python, official IBKR API, strategy,
+configuration, and environment fingerprints. It permanently seals 2024-2025.
+Generic catalog, backtest, and walk-forward loads reject any overlap with a
+sealed period. The command fails before catalog data access when the spec is not
+Git-tracked, changes after registration, supersedes a consumed experiment, uses
+an invalid candidate grid, or violates period ordering.
 
 ## Development Phase
 
@@ -51,8 +58,9 @@ research-review ready.
 
 The final phase reruns and verifies development from the same immutable spec and
 catalog lineage. It then requires the exact confirmation string. Before loading
-2024-2025, it appends a `holdout_access` row to catalog v2. That record is the
-point of consumption: a missing dataset, failed simulation, interruption, or
+2024-2025, it appends a `holdout_access` row to catalog v3. Only then can the
+capability-scoped final-holdout loader read the exact registered seal. That
+record is the point of consumption: a missing dataset, failed simulation, interruption, or
 unsatisfactory result still consumes the experiment. A second final access for
 the same experiment ID is rejected.
 
@@ -66,6 +74,7 @@ hypothesis/version and future forward evidence, not a relabeled reuse of the sam
 
 - at least four of five validation years positive after base costs;
 - aggregate validation return nonnegative under 2x costs;
+- explicit base, 2x, 3x, and 5x crisis-cost diagnostics;
 - final-holdout return positive after base costs;
 - Deflated Sharpe probability at least 0.95 when statistically supported;
 - final-holdout maximum drawdown no worse than the total-return benchmark;
@@ -79,6 +88,10 @@ Neither statistic substitutes for untouched out-of-sample evidence.
 Even a passing report keeps `promotion_eligible=false`. Review readiness is one
 independent prerequisite for strategy-driven paper alpha, not an automatic
 deployment decision.
+
+Quote-calibrated spread/slippage and decision-to-arrival evidence remain a
+required operator review item before consuming the holdout. The program does
+not invent such evidence when licensed quote samples are unavailable.
 
 ## Interpretation Limits
 

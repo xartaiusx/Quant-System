@@ -5,7 +5,8 @@
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[dev]"
+python -m pip install --only-binary=:all: --require-hashes -r requirements.lock
+python -m pip install --no-deps -e .
 ```
 
 For real read-only broker probes:
@@ -230,8 +231,10 @@ command.
 
 ## First Strategy-Gated Alpha Paper Run
 
-Run this only after a same-commit read-only alpha shadow report and a
-same-commit transmitted paper-order smoke report have passed within 24 hours.
+Run this only after a same-commit read-only alpha shadow report, transmitted
+paper-order smoke report, consumed final-holdout research report with
+`research_review_ready=true`, and strict-live daemon summary with
+`engineering_pilot_ready=true` have passed within 24 hours.
 Keep normal development defaults at `ALLOW_PAPER_ORDERS=false` and IBKR
 Read-Only API enabled until the exact alpha paper window.
 
@@ -256,7 +259,7 @@ export MAX_TRADE_NOTIONAL=1000
 Then run:
 
 ```bash
-python -m trader.cli alpha-paper-run --campaign-id "$CAMPAIGN_ID" --symbol SPY --quantity 1 --allow-fill false --cancel-after-seconds 30 --confirm ALPHA_PAPER_SPY_1
+python -m trader.cli alpha-paper-run --campaign-id "$CAMPAIGN_ID" --symbol SPY --quantity 1 --allow-fill false --cancel-after-seconds 30 --confirm ALPHA_PAPER_SPY_1 --research-experiment-report reports/latest_research_experiment.json --strict-shadow-summary-report reports/latest_alpha_shadow_daemon_summary.json
 ```
 
 Expected behavior:
@@ -266,6 +269,10 @@ Expected behavior:
 - refuses when prerequisite reports carry different `campaign_id` values
 - refuses unless the transmitted `paper-order-smoke` report proves paper-only
   order lifecycle handling
+- refuses unless research evidence is final-holdout, consumed, clean-release,
+  broker-free, same-commit, and research-review ready
+- refuses unless strict-live evidence includes at least ten clean sessions,
+  five dates, opening/midday/closing coverage, and no order-safety flags
 - returns `no_trade` without an order when the shadow signal is HOLD/no-signal
   or risk did not approve
 - submits at most one SPY BUY 1 `LMT DAY` paper order only when the shadow
@@ -377,7 +384,7 @@ and writes the alpha test summary:
 ```bash
 export ALLOW_PAPER_ORDERS=true
 export IBKR_CLIENT_ID=21
-python -m trader.cli alpha-campaign-run --mode paper --campaign-id "$CAMPAIGN_ID" --read-only-off-confirm READ_ONLY_OFF_FOR_ALPHA_PAPER --allow-fill false --cancel-after-seconds 30
+python -m trader.cli alpha-campaign-run --mode paper --campaign-id "$CAMPAIGN_ID" --read-only-off-confirm READ_ONLY_OFF_FOR_ALPHA_PAPER --allow-fill false --cancel-after-seconds 30 --research-experiment-report reports/latest_research_experiment.json --strict-shadow-summary-report reports/latest_alpha_shadow_daemon_summary.json
 ```
 
 Paper mode still requires the operator to disable IBKR Read-Only API only for
@@ -786,15 +793,23 @@ offline local-file workflows. Common failures:
 
 ## Canonical SPY Research Data
 
-Install the isolated research dependency group. Before purchase or bulk import,
-run the offline vendor bake-off against manually supplied trial/export files and
-written rights evidence:
+Install the hash-locked environment. Before purchase or bulk import, register
+SPY identity and run the offline vendor bake-off plus rights-first decision
+against manually supplied trial/export files and written rights evidence:
 
 ```powershell
-python -m pip install -e ".[dev,research]"
+python -m pip install --only-binary=:all: --require-hashes -r requirements.lock
+python -m pip install --no-deps -e .
+
+python -m trader.cli research-instrument-register `
+  --manifest research/instruments/spy_v1.json `
+  --catalog-root D:\MarketData\Quant-System
 
 python -m trader.cli research-data-bakeoff `
   --manifest D:\MarketData\bakeoff\spy-vendors.json
+
+python -m trader.cli research-vendor-decision `
+  --manifest D:\MarketData\bakeoff\spy-vendor-decision.json
 ```
 
 The manifest must cover a normal session, early close, ex-dividend date,
@@ -861,7 +876,7 @@ Expected behavior:
   trade-through, tick, participation, partial-fill, and DAY-cancel rules
 - applies splits/dividends and explicit spread, slippage, and commission costs
 - records orders, fills, trades, capital events, daily returns, portfolio state,
-  base/2x/3x costs, P&L, risk metrics, turnover, exposure, and benchmark-relative
+  base/2x/3x/5x crisis costs, P&L, risk metrics, turnover, exposure, and benchmark-relative
   results
 - leaves annualized metrics unavailable until at least 30 completed daily
   observations exist
@@ -875,13 +890,25 @@ Review `docs/RESEARCH_BACKTEST_SPEC.md`.
 
 ## Preregistered SPY Experiment
 
-The committed specification declares candidates `5:20,10:30,20:50`, training
-2016-2018, annual validation 2019-2023, and untouched holdout 2024-2025. Run only
-development first:
+The committed v2 specification declares candidates `5:20,10:30,20:50`, training
+2016-2018, annual validation 2019-2023, untouched holdout 2024-2025, and explicit
+development/validation/holdout trade-count gates. Register it from a clean
+committed worktree before importing sealed-period data:
+
+```powershell
+python -m trader.cli research-experiment-register `
+  --spec research/experiments/spy_sma_2016_2025_v2.json `
+  --supersedes-spec research/experiments/spy_sma_2016_2025_v1.json `
+  --catalog-root D:\MarketData\Quant-System
+```
+
+Registration records the clean commit and hash-locked environment and
+permanently seals 2024-2025. Generic catalog/backtest/walk-forward loads reject
+that interval. Then run development only:
 
 ```powershell
 python -m trader.cli research-experiment-run `
-  --spec research/experiments/spy_sma_2016_2025_v1.json `
+  --spec research/experiments/spy_sma_2016_2025_v2.json `
   --phase development `
   --catalog-root D:\MarketData\Quant-System
 ```
@@ -892,9 +919,9 @@ phase. When explicitly authorized to consume the holdout:
 
 ```powershell
 python -m trader.cli research-experiment-run `
-  --spec research/experiments/spy_sma_2016_2025_v1.json `
+  --spec research/experiments/spy_sma_2016_2025_v2.json `
   --phase final_holdout `
-  --confirmation ACCESS_FINAL_HOLDOUT_ONCE `
+  --confirmation ACCESS_FINAL_HOLDOUT_ONCE_SPY_SMA_V2 `
   --catalog-root D:\MarketData\Quant-System
 ```
 

@@ -16,7 +16,7 @@ Required evidence:
 - passing offline vendor bake-off and written usage/retention rights;
 - complete immutable SPY minute data for calendar years 2016-2025;
 - approved daily and corporate-action coverage from SPY inception through 2025;
-- active checksum-valid catalog-v2 revisions;
+- active checksum-valid catalog-v3 revisions and an immutable SPY identity;
 - exact XNYS normal-session and early-close coverage;
 - raw execution, split-adjusted signal, and total-return benchmark views;
 - no stale parents, missing actions, or checksum drift.
@@ -28,14 +28,16 @@ The 1993-2003 gap stays blocked if that evidence is unavailable.
 
 ## Gate 2: Research Review
 
-The tracked experiment uses 2016-2018 training, annual 2019-2023 validation, and
+The tracked v2 experiment uses 2016-2018 training, annual 2019-2023 validation, and
 one untouched 2024-2025 final holdout. Development must complete before the
 one-time holdout confirmation is used. The holdout access record is append-only
 and any access consumes the experiment.
 
 Strategy-driven paper alpha requires `research_review_ready=true`, including the
 validation-year, 2x-cost, positive-holdout, Deflated Sharpe, drawdown, lineage,
-and simulation gates. This flag never routes an order and never means the
+simulation, and trade-count gates. Strategy-driven paper commands also require
+the same-commit ten-session strict summary with lifecycle-pilot eligibility.
+This flag never routes an order and never means the
 strategy is profitable or approved for live trading.
 
 ## Gate 3: Strict-Live Operations
@@ -88,6 +90,11 @@ state; SELL is allowed only to reduce a verified long SPY paper position.
 IBKR states that paper fills are simulated from top-of-book data without deep
 book access. Paper outcomes therefore validate software lifecycle and controls,
 not production execution quality.
+
+The existing manual `alpha-paper-run` and `alpha-campaign-run --mode paper`
+now fail closed unless Gate 2 and the ten-session Gate 3 evidence are supplied.
+The lifecycle-only `paper-order-smoke` remains exempt so connectivity can be
+tested without claiming strategy readiness.
 
 ## Operating Targets
 

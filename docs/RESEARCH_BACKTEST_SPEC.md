@@ -3,7 +3,7 @@
 ## Scope
 
 `research-backtest` is a broker-free, SPY-only simulation command. It loads only
-passing active catalog-v2 revisions and never imports broker/execution modules,
+passing active catalog-v3 revisions and never imports broker/execution modules,
 opens an IBKR socket, invokes an order API, or submits an order. It is an
 accounting and hypothesis-testing tool, not proof of profitability.
 
@@ -52,7 +52,9 @@ The model records:
 
 OHLCV bars cannot reconstruct quote sequence, queue position, hidden liquidity,
 or the intrabar path. Fill results are deterministic assumptions and must be
-stress-tested rather than treated as observed execution quality.
+stress-tested rather than treated as observed execution quality. Every run
+includes base, 2x, 3x, and 5x crisis-cost diagnostics; none substitutes for
+quote-calibrated spread, slippage, or decision-to-arrival evidence.
 
 ## Sizing And Accounting
 

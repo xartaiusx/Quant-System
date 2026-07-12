@@ -23,8 +23,8 @@ The current project is infrastructure only. It must support research, signal gen
 - Backtest data adapter commands must remain broker-free and must not evaluate strategies, simulate orders, or compute P&L.
 - Backtest engine skeleton commands must remain broker-free and must not evaluate strategies, simulate orders, or calculate P&L until explicitly approved in a future milestone.
 - `research-backtest` is the approved broker-free SPY simulator. Operator runs must load passing active catalog revisions: split-adjusted five-minute bars for signals, raw five-minute bars for simulated execution, and the daily total-return benchmark. It may use the shared SPY target-state policy, simulate price-protected `LMT DAY` orders, partial fills, cancellations, capital events, explicit costs, portfolio accounting, and P&L. It must not import broker or execution modules, contact IBKR, invoke order APIs, expand beyond SPY, or report automatic promotion eligibility.
-- `research-walk-forward` may run predeclared SPY candidates over chronological folds, but tracked `research-experiment-run` is the authoritative final-holdout gate. Development must not load holdout dates. Final-holdout access requires the exact preregistered confirmation and creates one append-only catalog access row. A consumed experiment must never be rerun or tuned against.
-- Research data-store commands must remain offline-only, SPY-only, and broker-free. They may run an operator-supplied vendor bake-off, archive licensed Massive or approved daily/action exports, create immutable raw and derived Parquet revisions, maintain catalog-v2 lineage and experiment records, and load only passing active revisions. They must never download data implicitly, read credentials, contact IBKR, route orders, or activate failed/incomplete partitions.
+- `research-walk-forward` may run predeclared SPY candidates over chronological folds, but tracked `research-experiment-register` plus `research-experiment-run` are the authoritative final-holdout gate. Registration requires a clean committed release and permanently seals holdout dates. Generic catalog loaders must reject sealed overlap. Final access requires the exact preregistered confirmation, records one append-only catalog access row before reading data, and uses only the capability-scoped final-holdout loader. A consumed experiment must never be rerun or tuned against.
+- Research data-store commands must remain offline-only, SPY-only, and broker-free. They may register immutable instrument identity, run operator-supplied vendor bake-off/decision reports, archive licensed approved exports, create immutable raw and derived Parquet revisions, maintain catalog-v3 lineage and experiment records, and load only passing active revisions. They must never download data implicitly, read credentials, contact IBKR, route orders, or activate failed/incomplete partitions.
 - Strategy interface scaffold commands must remain broker-free and must not generate real signals, simulate orders, or calculate P&L until explicitly approved in a future milestone.
 - Strategy runner commands must remain inert/no-op until a future milestone explicitly approves real signal generation. They must not generate orders, simulate fills, calculate P&L, or contact brokers.
 - Offline stress tests may generate synthetic fixture data only and must remain broker-free.
@@ -38,6 +38,7 @@ The current project is infrastructure only. It must support research, signal gen
 - `paper-order-smoke` is the only current production module allowed to call IBKR paper order APIs. It must require `TRADING_MODE=paper`, `ALLOW_PAPER_ORDERS=true`, `ALLOW_LIVE_ORDERS=false`, localhost, paper port `7497` or `4002`, its dedicated client ID, explicit confirmation, SPY only, quantity `1`, STK/SMART/USD, `LMT`, `DAY`, max notional `$1,000`, and no live route. Keep the normal `PaperExecutor` refusing submissions.
 - `alpha-shadow-run` must assemble complete cached XNYS sessions with the current completed live-bar prefix, prove overlap or structural boundary agreement, and apply freshness only to the newest current-live bar. It must fail closed on forming bars, gaps, conflicting overlaps, stale current data, or missing prior-session evidence.
 - `alpha-shadow-daemon-summary` must remain offline-only. Five clean strict-live sessions on five distinct XNYS dates with stable release/config/strategy fingerprints unlock paper-daemon implementation work. Ten clean sessions across at least five dates and opening, midday, and closing windows unlock engineering-pilot eligibility. Delayed sessions never count.
+- Strategy-driven `alpha-paper-run` and `alpha-campaign-run --mode paper` must require a fresh same-commit final-holdout report with `research_review_ready=true` and a fresh same-commit strict-live daemon summary with `engineering_pilot_ready=true`. Lifecycle-only `paper-order-smoke` remains exempt. No research or shadow report may automatically promote execution.
 - Production `placeOrder` and `cancelOrder` text is allowlisted only to `src/trader/execution/paper_order_smoke.py`; `reqGlobalCancel` is forbidden throughout `src`.
 - Do not commit `.env`, secrets, account numbers, API credentials, tokens, or sensitive logs.
 - Missing or invalid config must fail closed.
@@ -73,7 +74,8 @@ Normal execution attempts must pass through risk and `trader.execution.router`. 
 Install locally:
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install --only-binary=:all: --require-hashes -r requirements.lock
+python -m pip install --no-deps -e .
 ```
 
 Run tests:
@@ -148,11 +150,14 @@ Run broker-free SPY research infrastructure only with local licensed files:
 
 ```bash
 python -m trader.cli research-data-bakeoff --manifest <local-manifest.json>
+python -m trader.cli research-vendor-decision --manifest <local-decision.json>
+python -m trader.cli research-instrument-register --manifest research/instruments/spy_v1.json
+python -m trader.cli research-experiment-register --spec research/experiments/spy_sma_2016_2025_v2.json --supersedes-spec research/experiments/spy_sma_2016_2025_v1.json
 python -m trader.cli research-data-import-batch --source-dir <licensed-files> --vendor massive --kind minute_bars
 python -m trader.cli research-data-derive
 python -m trader.cli research-catalog-load --price-view split_adjusted_signal
 python -m trader.cli research-backtest --symbol SPY
-python -m trader.cli research-experiment-run --spec research/experiments/spy_sma_2016_2025_v1.json --phase development
+python -m trader.cli research-experiment-run --spec research/experiments/spy_sma_2016_2025_v2.json --phase development
 ```
 
 Run repository safety scans:
