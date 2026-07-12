@@ -59,6 +59,10 @@ commands. Read-Only API remains enabled for all shadow work.
 
 ## TWS Settings
 
+The supervised paper operator settings and locked workspace map are documented
+in [TWS Operator Layout](TWS_OPERATOR_LAYOUT.md). Use TWS paper `7497` for the
+current supervised workflow and only one API host per campaign.
+
 For broker-backed reads, enable API socket clients in TWS:
 
 ```text
@@ -68,6 +72,11 @@ Global Configuration -> API -> Settings -> Enable ActiveX and Socket Clients
 The socket port configured in TWS or IB Gateway must match the client port.
 
 Keep Read-Only API enabled while developing this project. It blocks API orders at the TWS/Gateway setting level. This repo also keeps order routing disabled in code, so the read-only probe does not submit, modify, or cancel orders.
+
+Keep `Maintain and resubmit orders when connection is restored` disabled. The
+program halts and reconciles after connection uncertainty instead of allowing
+TWS to resubmit automatically. Keep API message logging at `Error`, market-data
+logging off, and every API precaution bypass disabled.
 
 ## Paper TWS Checklist
 

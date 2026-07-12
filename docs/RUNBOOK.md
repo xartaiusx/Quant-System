@@ -28,6 +28,10 @@ cp .env.example .env
 
 Keep `.env` local.
 
+For the supervised TWS `7497` API settings, delayed SPY workspace, research-only
+commodity workspace, and operator startup/shutdown checks, see
+[TWS Operator Layout](TWS_OPERATOR_LAYOUT.md).
+
 ## Test Commands
 
 ```bash
