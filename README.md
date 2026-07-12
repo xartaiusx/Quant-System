@@ -22,6 +22,8 @@ This project is infrastructure-first. It is not a profitability claim or a live 
 - Offline vendor bake-off and rights-first vendor decision reports, immutable
   catalog-v3 lineage, versioned SPY identity, batch import, derived views, and
   checksum-valid catalog loading.
+- Standalone, resumable historical Alpaca SPY SIP acquisition with immutable
+  checksums and a fail-closed written-rights import gate; Alpaca is data-only.
 - Read-only IBKR TWS / IB Gateway broker probe with current-time diagnostics.
 - Masked managed-account discovery when the broker API is reachable.
 - Read-only IBKR market-data diagnostics for contract resolution, delayed quote capture,
@@ -128,6 +130,7 @@ python -m ruff check --no-cache src tests scripts
 python -m mypy src
 git diff --check
 python scripts/check_order_api_allowlist.py
+python scripts/check_alpaca_data_only.py
 python scripts/check_no_sensitive_artifacts.py
 ```
 
@@ -156,6 +159,7 @@ python -m trader.cli research-data-ingest --source-file <licensed-massive.csv.gz
 python -m trader.cli research-data-audit
 python -m trader.cli research-data-bakeoff --manifest <local-manifest.json>
 python -m trader.cli research-vendor-decision --manifest <local-decision.json>
+python scripts/acquire_alpaca_spy.py --symbol SPY --feed sip --timeframe 1Min --start 2016-01-01 --end 2025-12-31 --output-root D:\MarketData\Quant-System\incoming\alpaca_sip --plan-only
 python -m trader.cli research-instrument-register --manifest research/instruments/spy_v1.json
 python -m trader.cli research-data-import-batch --source-dir <licensed-files> --vendor massive --kind minute_bars
 python -m trader.cli research-data-derive

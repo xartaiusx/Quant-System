@@ -17,7 +17,9 @@ from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals  # type: ignore[import-untyped]
 
+from trader.data.historical import parse_ibkr_bar_timestamp
 from trader.models import (
+    HistoricalSnapshotBar,
     ResearchDataBakeoffComparison,
     ResearchDataBakeoffManifest,
     ResearchDataBakeoffReport,
@@ -40,6 +42,7 @@ _MASSIVE_COLUMNS = {
     "window_start",
     "transactions",
 }
+_ALPACA_FIELDS = {"t", "o", "h", "l", "c", "v", "n", "vw"}
 _CANONICAL_BAR_COLUMNS = {"symbol", "timestamp", "open", "high", "low", "close", "volume"}
 _CANONICAL_ACTION_COLUMNS = {
     "symbol",
@@ -109,6 +112,7 @@ def run_research_data_bakeoff(manifest_path: Path) -> ResearchDataBakeoffReport:
     observed_tags = sorted({tag for sample in manifest.samples for tag in sample.case_tags})
     missing_tags = sorted(set(manifest.required_case_tags) - set(observed_tags))
     comparisons = [
+        *_intraday_overlap_comparisons(parsed, manifest),
         *_daily_overlap_comparisons(parsed, manifest),
         *_correction_comparisons(parsed),
     ]
@@ -220,10 +224,14 @@ def _read_sample(
     path: Path,
     sample: ResearchDataBakeoffSample,
 ) -> tuple[list[_BarRecord], list[_ActionRecord]]:
+    source_format = _format(sample.source_format)
+    if source_format == "alpaca_sip_json":
+        return _read_alpaca_sip_rows(path), []
+    if source_format == "ibkr_snapshot_jsonl":
+        return _read_ibkr_snapshot_rows(path), []
     with _open_csv(path) as handle:
         reader = csv.DictReader(handle)
         fields = set(reader.fieldnames or [])
-        source_format = _format(sample.source_format)
         if source_format == "massive_minute":
             _require_columns(fields, _MASSIVE_COLUMNS)
             return _read_massive_rows(reader), []
@@ -244,6 +252,87 @@ def _read_massive_rows(reader: csv.DictReader[str]) -> list[_BarRecord]:
         raw_timestamp = int(str(row["window_start"]).strip())
         timestamp = datetime.fromtimestamp(raw_timestamp / 1_000_000_000, tz=UTC)
         records.append(_bar_from_row(row, timestamp=timestamp))
+    return records
+
+
+def _read_alpaca_sip_rows(path: Path) -> list[_BarRecord]:
+    if path.name.lower().endswith(".gz"):
+        with gzip.open(path, mode="rt", encoding="utf-8-sig") as handle:
+            payload = json.load(handle)
+    else:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict):
+        raise ValueError("Alpaca SIP sample must contain a JSON object")
+    if payload.get("source") != "alpaca_sip":
+        raise ValueError("Alpaca SIP sample must declare source=alpaca_sip")
+    if str(payload.get("symbol", "")).upper() != "SPY":
+        raise ValueError("Alpaca SIP sample must contain SPY only")
+    if payload.get("feed") != "sip" or payload.get("timeframe") != "1Min":
+        raise ValueError("Alpaca sample must contain SIP one-minute bars")
+    if payload.get("adjustment") != "raw" or payload.get("sort") != "asc":
+        raise ValueError("Alpaca sample must be raw and ascending")
+    bars = payload.get("bars")
+    if not isinstance(bars, list):
+        raise ValueError("Alpaca SIP sample must contain a bars array")
+    records: list[_BarRecord] = []
+    for index, row in enumerate(bars):
+        if not isinstance(row, dict) or not _ALPACA_FIELDS.issubset(row):
+            raise ValueError(f"Alpaca SIP bar {index} is missing required fields")
+        timestamp = _parse_timestamp(str(row["t"]))
+        _nonnegative_integer(row["n"], "trade count")
+        vwap = _decimal(row["vw"])
+        if not vwap.is_finite() or vwap <= 0:
+            raise ValueError(f"invalid VWAP at {timestamp.isoformat()}")
+        records.append(
+            _bar_from_row(
+                {
+                    "open": str(row["o"]),
+                    "high": str(row["h"]),
+                    "low": str(row["l"]),
+                    "close": str(row["c"]),
+                    "volume": str(row["v"]),
+                },
+                timestamp=timestamp,
+            )
+        )
+    return records
+
+
+def _read_ibkr_snapshot_rows(path: Path) -> list[_BarRecord]:
+    records: list[_BarRecord] = []
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not raw_line.strip():
+            continue
+        try:
+            bar = HistoricalSnapshotBar.model_validate_json(raw_line)
+        except ValueError as exc:
+            raise ValueError(f"invalid IBKR snapshot row {line_number}: {exc}") from exc
+        if bar.symbol.upper() != "SPY":
+            continue
+        if (
+            bar.source != "ibkr"
+            or bar.bar_size != "5 mins"
+            or bar.what_to_show != "TRADES"
+            or bar.use_rth != 1
+        ):
+            raise ValueError("IBKR bake-off sample must be 5-minute RTH TRADES data")
+        timestamp = parse_ibkr_bar_timestamp(bar.timestamp)
+        if timestamp is None:
+            raise ValueError(f"invalid IBKR timestamp at row {line_number}")
+        if bar.volume is None:
+            raise ValueError(f"missing IBKR volume at row {line_number}")
+        records.append(
+            _bar_from_row(
+                {
+                    "open": str(bar.open),
+                    "high": str(bar.high),
+                    "low": str(bar.low),
+                    "close": str(bar.close),
+                    "volume": str(bar.volume),
+                },
+                timestamp=timestamp,
+            )
+        )
     return records
 
 
@@ -342,11 +431,11 @@ def _sample_errors(
     if not bars:
         errors.append(f"{sample.sample_id}: no SPY bars found")
         return errors
-    if kind == "minute_bars" and set(sample.case_tags) & {
+    if kind in {"minute_bars", "five_minute_bars"} and set(sample.case_tags) & {
         "normal_session",
         "early_close",
     }:
-        errors.extend(_minute_session_errors(sample, bars))
+        errors.extend(_intraday_session_errors(sample, bars, kind=kind))
     if kind == "daily_bars":
         calendar = xcals.get_calendar("XNYS")
         invalid_dates = sorted(
@@ -363,9 +452,11 @@ def _sample_errors(
     return errors
 
 
-def _minute_session_errors(
+def _intraday_session_errors(
     sample: ResearchDataBakeoffSample,
     bars: list[_BarRecord],
+    *,
+    kind: str,
 ) -> list[str]:
     errors: list[str] = []
     session_dates = {bar.timestamp.astimezone(_EASTERN).date() for bar in bars}
@@ -379,14 +470,142 @@ def _minute_session_errors(
         value.to_pydatetime().astimezone(UTC)
         for value in calendar.session_minutes(session_date)
     ]
+    if kind == "five_minute_bars":
+        expected = expected[::5]
     observed = [bar.timestamp.astimezone(UTC) for bar in bars]
     if observed != expected:
-        errors.append(f"{sample.sample_id}: minute timestamps do not match XNYS grid")
-    if "normal_session" in sample.case_tags and len(expected) != 390:
-        errors.append(f"{sample.sample_id}: tagged normal session is not a 390-minute day")
-    if "early_close" in sample.case_tags and len(expected) != 210:
-        errors.append(f"{sample.sample_id}: tagged early close is not a 210-minute day")
+        errors.append(f"{sample.sample_id}: intraday timestamps do not match XNYS grid")
+    normal_count = 78 if kind == "five_minute_bars" else 390
+    early_count = 42 if kind == "five_minute_bars" else 210
+    if "normal_session" in sample.case_tags and len(expected) != normal_count:
+        errors.append(
+            f"{sample.sample_id}: tagged normal session is not a {normal_count}-bar day"
+        )
+    if "early_close" in sample.case_tags and len(expected) != early_count:
+        errors.append(
+            f"{sample.sample_id}: tagged early close is not a {early_count}-bar day"
+        )
     return errors
+
+
+def _intraday_overlap_comparisons(
+    parsed: list[_ParsedSample],
+    manifest: ResearchDataBakeoffManifest,
+) -> list[ResearchDataBakeoffComparison]:
+    candidates = [
+        item
+        for item in parsed
+        if "intraday_overlap" in item.sample.case_tags
+        and item.bars
+        and _kind(item.sample.kind) in {"minute_bars", "five_minute_bars"}
+    ]
+    comparisons: list[ResearchDataBakeoffComparison] = []
+    for left_index, left in enumerate(candidates):
+        for right in candidates[left_index + 1 :]:
+            if left.sample.vendor.strip().lower() == right.sample.vendor.strip().lower():
+                continue
+            comparisons.append(_compare_intraday_bars(left, right, manifest))
+    if "intraday_overlap" in manifest.required_case_tags and not comparisons:
+        comparisons.append(
+            ResearchDataBakeoffComparison(
+                comparison_type="intraday_overlap",
+                left_sample_id="missing",
+                right_sample_id="missing",
+                ok=False,
+                errors=["intraday overlap requires samples from two different vendors"],
+            )
+        )
+    return comparisons
+
+
+def _compare_intraday_bars(
+    left: _ParsedSample,
+    right: _ParsedSample,
+    manifest: ResearchDataBakeoffManifest,
+) -> ResearchDataBakeoffComparison:
+    try:
+        left_bars = _as_five_minute_bars(left)
+        right_bars = _as_five_minute_bars(right)
+    except ValueError as exc:
+        return ResearchDataBakeoffComparison(
+            comparison_type="intraday_overlap",
+            left_sample_id=left.sample.sample_id,
+            right_sample_id=right.sample.sample_id,
+            ok=False,
+            errors=[str(exc)],
+        )
+    left_by_time = {bar.timestamp: bar for bar in left_bars}
+    right_by_time = {bar.timestamp: bar for bar in right_bars}
+    overlap = sorted(set(left_by_time) & set(right_by_time))
+    price_mismatches = 0
+    volume_mismatches = 0
+    for timestamp in overlap:
+        left_bar = left_by_time[timestamp]
+        right_bar = right_by_time[timestamp]
+        if any(
+            _difference_bps(left_value, right_value) > manifest.max_price_difference_bps
+            for left_value, right_value in (
+                (left_bar.open, right_bar.open),
+                (left_bar.high, right_bar.high),
+                (left_bar.low, right_bar.low),
+                (left_bar.close, right_bar.close),
+            )
+        ):
+            price_mismatches += 1
+        if _difference_pct(left_bar.volume, right_bar.volume) > manifest.max_volume_difference_pct:
+            volume_mismatches += 1
+    errors: list[str] = []
+    expected_overlap = min(len(left_bars), len(right_bars))
+    if not overlap:
+        errors.append("intraday vendor samples have no overlapping SPY timestamps")
+    elif len(overlap) != expected_overlap:
+        errors.append(
+            f"intraday overlap is incomplete: {len(overlap)} of {expected_overlap} bars"
+        )
+    if price_mismatches:
+        errors.append(f"intraday overlap price mismatches: {price_mismatches}")
+    if volume_mismatches:
+        errors.append(f"intraday overlap volume mismatches: {volume_mismatches}")
+    return ResearchDataBakeoffComparison(
+        comparison_type="intraday_overlap",
+        left_sample_id=left.sample.sample_id,
+        right_sample_id=right.sample.sample_id,
+        overlap_count=len(overlap),
+        price_mismatch_count=price_mismatches,
+        volume_mismatch_count=volume_mismatches,
+        ok=not errors,
+        errors=errors,
+    )
+
+
+def _as_five_minute_bars(sample: _ParsedSample) -> list[_BarRecord]:
+    if _kind(sample.sample.kind) == "five_minute_bars":
+        return sample.bars
+    by_session: dict[date, list[_BarRecord]] = {}
+    for bar in sample.bars:
+        by_session.setdefault(bar.timestamp.astimezone(_EASTERN).date(), []).append(bar)
+    result: list[_BarRecord] = []
+    for session_bars in by_session.values():
+        grouped = [
+            session_bars[index : index + 5]
+            for index in range(0, len(session_bars), 5)
+        ]
+        if any(len(group) != 5 for group in grouped):
+            raise ValueError(
+                f"{sample.sample.sample_id}: incomplete five-minute aggregation group"
+            )
+        result.extend(
+            _BarRecord(
+                timestamp=group[0].timestamp,
+                open=group[0].open,
+                high=max(bar.high for bar in group),
+                low=min(bar.low for bar in group),
+                close=group[-1].close,
+                volume=sum((bar.volume for bar in group), Decimal("0")),
+            )
+            for group in grouped
+        )
+    return result
 
 
 def _daily_overlap_comparisons(
@@ -539,6 +758,13 @@ def _optional_decimal(value: object) -> Decimal | None:
     if value is None or not str(value).strip():
         return None
     return _decimal(value)
+
+
+def _nonnegative_integer(value: object, field_name: str) -> int:
+    parsed = _decimal(value)
+    if not parsed.is_finite() or parsed < 0 or parsed != parsed.to_integral_value():
+        raise ValueError(f"{field_name} must be a nonnegative integer")
+    return int(parsed)
 
 
 def _difference_bps(left: Decimal, right: Decimal) -> Decimal:

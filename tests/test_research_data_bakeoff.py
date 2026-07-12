@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import csv
 import json
-from datetime import UTC, date
+from datetime import UTC, date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals  # type: ignore[import-untyped]
 from typer.testing import CliRunner
@@ -38,6 +39,70 @@ def _minute_rows(session_date: date) -> list[dict[str, object]]:
         }
         for index, timestamp in enumerate(timestamps)
     ]
+
+
+def _alpaca_minute_rows(session_date: date) -> list[dict[str, object]]:
+    rows = _minute_rows(session_date)
+    return [
+        {
+            **row,
+            "timestamp": datetime.fromtimestamp(
+                int(row["window_start"]) / 1_000_000_000,
+                tz=UTC,
+            ),
+        }
+        for row in rows
+    ]
+
+
+def _write_ibkr_five_minute_snapshot(path: Path, session_date: date) -> Path:
+    minute_rows = _alpaca_minute_rows(session_date)
+    eastern = ZoneInfo("America/New_York")
+    bars = []
+    for index in range(0, len(minute_rows), 5):
+        group = minute_rows[index : index + 5]
+        timestamp = group[0]["timestamp"]
+        assert isinstance(timestamp, datetime)
+        bars.append(
+            {
+                "symbol": "SPY",
+                "timestamp": f"{timestamp.astimezone(eastern):%Y%m%d %H:%M:%S} US/Eastern",
+                "open": "500.00",
+                "high": "500.02",
+                "low": "499.99",
+                "close": "500.01",
+                "volume": sum(int(row["volume"]) for row in group),
+                "wap": "500.005",
+                "bar_count": 50,
+                "source": "ibkr",
+                "duration": "1 D",
+                "bar_size": "5 mins",
+                "what_to_show": "TRADES",
+                "use_rth": 1,
+            }
+        )
+    path.write_text(
+        "".join(json.dumps(bar, sort_keys=True) + "\n" for bar in bars),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _passing_rights(vendor: str) -> dict[str, object]:
+    return {
+        "vendor": vendor,
+        "evidence_reference": f"operator-reviewed-{vendor}-terms",
+        "internal_storage_allowed": True,
+        "cloud_backup_allowed": True,
+        "automated_research_allowed": True,
+        "model_training_allowed": True,
+        "derived_data_allowed": True,
+        "correction_replay_available": True,
+        "paper_trading_use_allowed": True,
+        "live_trading_use_allowed": True,
+        "retention_after_termination_allowed": True,
+        "derived_retention_after_termination_allowed": True,
+    }
 
 
 def _bar_rows(*, changed: bool = False) -> list[dict[str, object]]:
@@ -226,6 +291,86 @@ def test_bakeoff_fails_closed_on_rights_gap(tmp_path: Path) -> None:
     assert "vendor rights evidence failed: massive" in report.errors
 
 
+def test_bakeoff_maps_alpaca_sip_sample_but_still_requires_rights(tmp_path: Path) -> None:
+    manifest_path = _passing_manifest(tmp_path)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    alpaca_path = tmp_path / "alpaca-sip-SPY-202511.json"
+    alpaca_path.write_text(
+        json.dumps(
+            {
+                "source": "alpaca_sip",
+                "symbol": "SPY",
+                "feed": "sip",
+                "timeframe": "1Min",
+                "adjustment": "raw",
+                "sort": "asc",
+                "bars": [
+                    {
+                        "t": row["timestamp"].isoformat().replace("+00:00", "Z"),
+                        "o": row["open"],
+                        "h": row["high"],
+                        "l": row["low"],
+                        "c": row["close"],
+                        "v": row["volume"],
+                        "n": row["transactions"],
+                        "vw": "500.005",
+                    }
+                    for row in _alpaca_minute_rows(date(2025, 11, 26))
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload["samples"].append(
+        {
+            "sample_id": "alpaca-normal",
+            "vendor": "alpaca_sip",
+            "path": alpaca_path.name,
+            "kind": "minute_bars",
+            "source_format": "alpaca_sip_json",
+            "case_tags": ["normal_session", "intraday_overlap"],
+            "expected_rows": 390,
+        }
+    )
+    ibkr_path = _write_ibkr_five_minute_snapshot(
+        tmp_path / "ibkr-SPY-20251126.jsonl",
+        date(2025, 11, 26),
+    )
+    payload["samples"].append(
+        {
+            "sample_id": "ibkr-normal",
+            "vendor": "ibkr",
+            "path": ibkr_path.name,
+            "kind": "five_minute_bars",
+            "source_format": "ibkr_snapshot_jsonl",
+            "case_tags": ["normal_session", "intraday_overlap"],
+            "expected_rows": 78,
+        }
+    )
+    payload["rights"].append(
+        {
+            "vendor": "alpaca_sip",
+            "evidence_reference": "written-rights-not-yet-received",
+        }
+    )
+    payload["rights"].append(_passing_rights("ibkr"))
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = run_research_data_bakeoff(manifest_path)
+
+    result = next(item for item in report.sample_results if item.vendor == "alpaca_sip")
+    assert result.ok is True
+    assert result.row_count == 390
+    assert report.ok is False
+    assert report.rights_failed_vendors == ["alpaca_sip"]
+    assert "alpaca_sip" not in report.procurement_ready_vendors
+    comparison = next(
+        item for item in report.comparisons if item.comparison_type == "intraday_overlap"
+    )
+    assert comparison.ok is True
+    assert comparison.overlap_count == 78
+
+
 def test_bakeoff_fails_closed_on_vendor_overlap_mismatch(tmp_path: Path) -> None:
     manifest_path = _passing_manifest(tmp_path)
     norgate_path = tmp_path / "norgate-daily.csv"
@@ -267,7 +412,7 @@ def test_bakeoff_rejects_count_correct_but_misaligned_minute_grid(tmp_path: Path
     report = run_research_data_bakeoff(manifest_path)
 
     assert report.ok is False
-    assert any("minute timestamps do not match XNYS grid" in error for error in report.errors)
+    assert any("intraday timestamps do not match XNYS grid" in error for error in report.errors)
 
 
 def test_bakeoff_does_not_approve_rights_only_vendor(tmp_path: Path) -> None:

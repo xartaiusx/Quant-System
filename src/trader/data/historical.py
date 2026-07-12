@@ -267,7 +267,7 @@ def readiness_summary_for_snapshot(
     parsed: list[tuple[datetime, HistoricalSnapshotBar]] = []
 
     for bar in bars:
-        parsed_timestamp = _parse_bar_timestamp(bar.timestamp)
+        parsed_timestamp = parse_ibkr_bar_timestamp(bar.timestamp)
         if parsed_timestamp is None:
             issues.append(
                 HistoricalDataQualityIssue(
@@ -403,7 +403,8 @@ def _resolve_snapshot_path(
     return Path(manifest_path).with_name(inferred_name)
 
 
-def _parse_bar_timestamp(value: str) -> datetime | None:
+def parse_ibkr_bar_timestamp(value: str) -> datetime | None:
+    """Normalize supported IBKR bar timestamps to UTC or fail closed."""
     normalized = " ".join(value.strip().split())
     if not normalized:
         return None

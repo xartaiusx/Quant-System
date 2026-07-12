@@ -51,6 +51,7 @@ _MASSIVE_REQUIRED_COLUMNS = frozenset(
         "transactions",
     }
 )
+_ALPACA_REQUIRED_FIELDS = frozenset({"t", "o", "h", "l", "c", "v", "n", "vw"})
 _UTC_NANOSECONDS_PER_MINUTE = 60_000_000_000
 _PRICE_QUANTUM = Decimal("0.00000001")
 _EASTERN = ZoneInfo("America/New_York")
@@ -68,6 +69,7 @@ class _MinuteAggregate:
     close: Decimal
     volume: int
     transactions: int
+    vwap: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,26 @@ def ingest_massive_minute_file(
     request: ResearchDataIngestRequest,
 ) -> ResearchDataIngestReport:
     """Archive and ingest one licensed Massive aggregate flat file offline."""
+
+    if request.source_name != "massive":
+        raise ValueError("Massive ingestion requires source_name=massive")
+    return _ingest_minute_file(request)
+
+
+def ingest_alpaca_sip_minute_file(
+    request: ResearchDataIngestRequest,
+) -> ResearchDataIngestReport:
+    """Archive and ingest one rights-approved Alpaca SIP JSON export offline."""
+
+    if request.source_name != "alpaca_sip":
+        raise ValueError("Alpaca SIP ingestion requires source_name=alpaca_sip")
+    return _ingest_minute_file(request)
+
+
+def _ingest_minute_file(
+    request: ResearchDataIngestRequest,
+) -> ResearchDataIngestReport:
+    """Archive and ingest one supported immutable SIP minute artifact."""
 
     root = Path(request.root_path).expanduser().resolve()
     catalog_path = root / CATALOG_RELATIVE_PATH
@@ -117,6 +139,7 @@ def ingest_massive_minute_file(
             source_path,
             root=root,
             source_sha256=source_sha256,
+            request=request,
         )
     except (OSError, RuntimeError) as exc:
         message = f"source flat file could not be archived immutably: {exc}"
@@ -137,7 +160,7 @@ def ingest_massive_minute_file(
     run_id = uuid4().hex
 
     try:
-        parsed = _parse_massive_minute_file(archived_path, request=request)
+        parsed = _parse_minute_file(archived_path, request=request)
     except (csv.Error, OSError, UnicodeError, ValueError) as exc:
         message = f"source flat file could not be parsed: {exc}"
         findings = [_finding("error", "source_parse_failed", message)]
@@ -642,6 +665,18 @@ def _install_catalog_v3(connection: sqlite3.Connection) -> None:
     )
 
 
+def _parse_minute_file(
+    path: Path,
+    *,
+    request: ResearchDataIngestRequest,
+) -> _ParsedFile:
+    if request.source_name == "massive":
+        return _parse_massive_minute_file(path, request=request)
+    if request.source_name == "alpaca_sip":
+        return _parse_alpaca_sip_minute_file(path, request=request)
+    raise ValueError(f"unsupported minute source: {request.source_name}")
+
+
 def _parse_massive_minute_file(
     path: Path,
     *,
@@ -704,6 +739,77 @@ def _parse_massive_minute_file(
     )
 
 
+def _parse_alpaca_sip_minute_file(
+    path: Path,
+    *,
+    request: ResearchDataIngestRequest,
+) -> _ParsedFile:
+    calendar = xcals.get_calendar("XNYS")
+    payload = _read_json_payload(path)
+    if payload.get("source") != "alpaca_sip":
+        raise ValueError("Alpaca source payload must declare source=alpaca_sip")
+    if str(payload.get("symbol", "")).upper() != request.symbol:
+        raise ValueError("Alpaca source payload must contain SPY only")
+    if payload.get("feed") != "sip" or payload.get("timeframe") != "1Min":
+        raise ValueError("Alpaca source payload must use SIP one-minute bars")
+    if payload.get("adjustment") != "raw" or payload.get("sort") != "asc":
+        raise ValueError("Alpaca source payload must be raw and ascending")
+    raw_bars = payload.get("bars")
+    if not isinstance(raw_bars, list):
+        raise ValueError("Alpaca source payload must contain a bars array")
+
+    rows_by_session: dict[date, list[_MinuteAggregate]] = defaultdict(list)
+    findings: list[ResearchDataQualityFinding] = []
+    outside_rth_rows_excluded = 0
+    for index, raw_bar in enumerate(raw_bars, start=1):
+        if not isinstance(raw_bar, dict) or not _ALPACA_REQUIRED_FIELDS.issubset(raw_bar):
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_alpaca_row",
+                    f"malformed SPY Alpaca bar at index {index}: missing required fields",
+                    samples=[str(index)],
+                )
+            )
+            continue
+        try:
+            aggregate = _parse_alpaca_minute_row(raw_bar)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_alpaca_row",
+                    f"malformed SPY Alpaca bar at index {index}: {exc}",
+                    samples=[str(index)],
+                )
+            )
+            continue
+        try:
+            session = calendar.date_to_session(aggregate.session_date, direction="none")
+        except ValueError:
+            outside_rth_rows_excluded += 1
+            continue
+        session_open = calendar.session_open(session).to_pydatetime()
+        session_close = calendar.session_close(session).to_pydatetime()
+        if not session_open <= aggregate.timestamp < session_close:
+            outside_rth_rows_excluded += 1
+            continue
+        rows_by_session[aggregate.session_date].append(aggregate)
+    if not raw_bars:
+        findings.append(_finding("error", "symbol_not_found", "source contains no SPY rows"))
+    if raw_bars and not rows_by_session:
+        findings.append(
+            _finding("error", "no_rth_rows", "source contains no SPY regular-session rows")
+        )
+    return _ParsedFile(
+        rows_scanned=len(raw_bars),
+        symbol_rows_seen=len(raw_bars),
+        outside_rth_rows_excluded=outside_rth_rows_excluded,
+        rows_by_session=dict(rows_by_session),
+        findings=findings,
+    )
+
+
 def _parse_minute_row(row: dict[str, str]) -> _MinuteAggregate:
     window_start = int(row["window_start"])
     if window_start % _UTC_NANOSECONDS_PER_MINUTE:
@@ -725,6 +831,27 @@ def _parse_minute_row(row: dict[str, str]) -> _MinuteAggregate:
         close=close,
         volume=volume,
         transactions=transactions,
+    )
+
+
+def _parse_alpaca_minute_row(row: dict[str, Any]) -> _MinuteAggregate:
+    timestamp = datetime.fromisoformat(str(row["t"]).replace("Z", "+00:00"))
+    if timestamp.tzinfo is None:
+        raise ValueError("Alpaca timestamp must include a timezone")
+    timestamp = timestamp.astimezone(UTC)
+    if timestamp.second or timestamp.microsecond:
+        raise ValueError("Alpaca timestamp is not aligned to a UTC minute")
+    session_date = timestamp.astimezone(_EASTERN).date()
+    return _MinuteAggregate(
+        timestamp=timestamp,
+        session_date=session_date,
+        open=_price(row["o"]),
+        high=_price(row["h"]),
+        low=_price(row["l"]),
+        close=_price(row["c"]),
+        volume=_whole_number(row["v"], "volume"),
+        transactions=_whole_number(row["n"], "transactions"),
+        vwap=_price(row["vw"]),
     )
 
 
@@ -979,18 +1106,22 @@ def _write_partition(
             pa.field("close", pa.decimal128(20, 8), nullable=False),
             pa.field("volume", pa.int64(), nullable=False),
             pa.field("transactions", pa.int64(), nullable=False),
+            pa.field("vwap", pa.decimal128(20, 8), nullable=True),
             pa.field("source", pa.string(), nullable=False),
             pa.field("dataset", pa.string(), nullable=False),
             pa.field("price_view", pa.string(), nullable=False),
             pa.field("source_artifact_sha256", pa.string(), nullable=False),
         ],
         metadata={
-            b"source": b"massive",
-            b"dataset": b"us_stocks_sip/minute_aggs_v1",
+            b"source": request.source_name.encode("ascii"),
+            b"dataset": f"us_stocks_sip/{request.dataset}".encode("ascii"),
             b"price_view": b"raw",
             b"adjusted": b"false",
             b"session_calendar": b"XNYS",
             b"session_scope": b"regular_hours",
+            b"vendor_decision_sha256": (
+                request.vendor_decision_sha256 or "not_required"
+            ).encode("ascii"),
         },
     )
     table = pa.Table.from_pylist(
@@ -1005,6 +1136,7 @@ def _write_partition(
                 "close": row.close,
                 "volume": row.volume,
                 "transactions": row.transactions,
+                "vwap": row.vwap,
                 "source": request.source_name,
                 "dataset": request.dataset,
                 "price_view": request.price_view,
@@ -1144,14 +1276,30 @@ def _upsert_artifact(
     return int(row[0])
 
 
-def _archive_source_file(source_path: Path, *, root: Path, source_sha256: str) -> Path:
+def _archive_source_file(
+    source_path: Path,
+    *,
+    root: Path,
+    source_sha256: str,
+    request: ResearchDataIngestRequest,
+) -> Path:
     source_date = _date_from_filename(source_path.name)
     if source_date is None:
-        destination_dir = root / "raw/massive/us_stocks_sip/minute_aggs_v1/unclassified"
+        destination_dir = (
+            root
+            / "raw"
+            / request.source_name
+            / "us_stocks_sip"
+            / request.dataset
+            / "unclassified"
+        )
     else:
         destination_dir = (
             root
-            / "raw/massive/us_stocks_sip/minute_aggs_v1"
+            / "raw"
+            / request.source_name
+            / "us_stocks_sip"
+            / request.dataset
             / f"year={source_date.year:04d}"
             / f"month={source_date.month:02d}"
         )
@@ -1310,15 +1458,26 @@ def _open_csv_text(path: Path) -> Iterator[IO[str]]:
         yield stream
 
 
-def _price(value: str) -> Decimal:
-    parsed = Decimal(value)
+def _read_json_payload(path: Path) -> dict[str, Any]:
+    if path.name.lower().endswith(".gz"):
+        with gzip.open(path, mode="rt", encoding="utf-8-sig") as stream:
+            payload = json.load(stream)
+    else:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict):
+        raise ValueError("JSON source must contain an object")
+    return payload
+
+
+def _price(value: object) -> Decimal:
+    parsed = Decimal(str(value))
     if not parsed.is_finite() or parsed <= 0:
         raise ValueError("price must be finite and positive")
     return parsed.quantize(_PRICE_QUANTUM)
 
 
-def _whole_number(value: str, field_name: str) -> int:
-    parsed = Decimal(value)
+def _whole_number(value: object, field_name: str) -> int:
+    parsed = Decimal(str(value))
     if not parsed.is_finite() or parsed != parsed.to_integral_value():
         raise ValueError(f"{field_name} must be a finite whole number")
     return int(parsed)

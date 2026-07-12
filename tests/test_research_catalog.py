@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import gzip
+import json
 import sqlite3
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -554,6 +555,49 @@ def test_batch_import_is_sorted_local_and_broker_free(tmp_path: Path) -> None:
     assert report.order_api_invoked is False
 
 
+def test_alpaca_batch_import_requires_rights_and_maps_sip_fields(tmp_path: Path) -> None:
+    root = tmp_path / "store"
+    source_dir = tmp_path / "alpaca"
+    source = _write_alpaca_sip_file(
+        source_dir / "alpaca-sip-SPY-202607.json.gz",
+        date(2026, 7, 2),
+    )
+    missing = import_research_data_batch(
+        ResearchDataBatchImportRequest(
+            source_dir=source_dir.as_posix(),
+            root_path=root.as_posix(),
+            vendor="alpaca_sip",
+            kind=ResearchSampleKind.MINUTE_BARS,
+            pattern="*.json.gz",
+            vendor_decision_report_path=(tmp_path / "missing.json").as_posix(),
+        )
+    )
+    assert missing.ok is False
+    assert "vendor-decision report" in missing.errors[0]
+
+    decision = _write_alpaca_vendor_decision(tmp_path / "alpaca-decision.json")
+    report = import_research_data_batch(
+        ResearchDataBatchImportRequest(
+            source_dir=source_dir.as_posix(),
+            root_path=root.as_posix(),
+            vendor="alpaca_sip",
+            kind=ResearchSampleKind.MINUTE_BARS,
+            pattern="*.json.gz",
+            vendor_decision_report_path=decision.as_posix(),
+        )
+    )
+
+    assert report.ok is True
+    assert report.succeeded_count == 1
+    assert report.source_files == [source.as_posix()]
+    parquet_path = next(root.rglob("*.parquet"))
+    table = pq.read_table(parquet_path)
+    assert table.schema.metadata[b"source"] == b"alpaca_sip"
+    assert table.schema.metadata[b"vendor_decision_sha256"].startswith(b"sha256:")
+    assert table.column("transactions")[0].as_py() == 10
+    assert table.column("vwap")[0].as_py() == Decimal("500.01000000")
+
+
 def test_catalog_module_remains_broker_order_and_network_free() -> None:
     source = Path("src/trader/data/research_catalog.py").read_text(encoding="utf-8")
     for forbidden in (
@@ -644,6 +688,73 @@ def _write_massive_file(
         writer = csv.DictWriter(stream, fieldnames=_MASSIVE_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
+    return path.resolve()
+
+
+def _write_alpaca_sip_file(path: Path, session_date: date) -> Path:
+    calendar = xcals.get_calendar("XNYS")
+    bars: list[dict[str, object]] = []
+    for index, timestamp in enumerate(calendar.session_minutes(session_date)):
+        event_time = timestamp.to_pydatetime()
+        open_ = Decimal("500") + Decimal(index) / Decimal("100")
+        close = open_ + Decimal("0.02")
+        bars.append(
+            {
+                "t": event_time.isoformat().replace("+00:00", "Z"),
+                "o": str(open_),
+                "h": str(close + Decimal("0.01")),
+                "l": str(open_ - Decimal("0.01")),
+                "c": str(close),
+                "v": 1000 + index,
+                "n": 10 + index,
+                "vw": str(open_ + Decimal("0.01")),
+            }
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, mode="wt", encoding="utf-8") as stream:
+        json.dump(
+            {
+                "schema_version": 1,
+                "source": "alpaca_sip",
+                "symbol": "SPY",
+                "feed": "sip",
+                "timeframe": "1Min",
+                "adjustment": "raw",
+                "sort": "asc",
+                "bars": bars,
+            },
+            stream,
+        )
+    return path.resolve()
+
+
+def _write_alpaca_vendor_decision(path: Path) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "manifest_path": "local/alpaca-decision.json",
+                "candidate_results": [
+                    {
+                        "vendor": "alpaca_sip",
+                        "weighted_score": "90",
+                        "three_year_tco_usd": "0",
+                        "estimated_storage_gb": "25",
+                        "written_evidence_sha256": ["sha256:" + "a" * 64],
+                        "rights_gate_passed": True,
+                        "bakeoff_gate_passed": True,
+                        "budget_gate_passed": True,
+                        "eligible": True,
+                        "selected": True,
+                    }
+                ],
+                "selected_vendor": "alpaca_sip",
+                "procurement_blocked": False,
+                "final_status": "completed",
+            }
+        ),
+        encoding="utf-8",
+    )
     return path.resolve()
 
 

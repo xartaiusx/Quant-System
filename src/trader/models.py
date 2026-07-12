@@ -230,6 +230,8 @@ class ResearchSampleFormat(StrEnum):
     """Explicit offline file formats accepted by the vendor bake-off."""
 
     MASSIVE_MINUTE = "massive_minute"
+    ALPACA_SIP_JSON = "alpaca_sip_json"
+    IBKR_SNAPSHOT_JSONL = "ibkr_snapshot_jsonl"
     CANONICAL_OHLCV = "canonical_ohlcv"
     CANONICAL_ACTIONS = "canonical_actions"
 
@@ -238,6 +240,7 @@ class ResearchSampleKind(StrEnum):
     """Research sample roles used by the bake-off."""
 
     MINUTE_BARS = "minute_bars"
+    FIVE_MINUTE_BARS = "five_minute_bars"
     DAILY_BARS = "daily_bars"
     CORPORATE_ACTIONS = "corporate_actions"
 
@@ -1618,7 +1621,7 @@ class BacktestRunReport(SerializableModel):
 
 
 class ResearchDataIngestRequest(SerializableModel):
-    """Offline SPY Massive minute-aggregate ingestion request."""
+    """Offline SPY SIP minute-aggregate ingestion request."""
 
     source_path: str
     root_path: str
@@ -1627,6 +1630,7 @@ class ResearchDataIngestRequest(SerializableModel):
     dataset: str = "minute_aggs_v1"
     price_view: str = "raw"
     rth_only: bool = True
+    vendor_decision_sha256: str | None = None
 
     @field_validator("symbol", mode="before")
     @classmethod
@@ -1640,8 +1644,8 @@ class ResearchDataIngestRequest(SerializableModel):
     @classmethod
     def normalize_source_name(cls, value: object) -> str:
         normalized = str(value).strip().lower()
-        if normalized != "massive":
-            raise ValueError("only Massive flat files are supported")
+        if normalized not in {"massive", "alpaca_sip"}:
+            raise ValueError("minute ingestion supports massive or alpaca_sip only")
         return normalized
 
     @field_validator("dataset", mode="before")
@@ -1649,7 +1653,7 @@ class ResearchDataIngestRequest(SerializableModel):
     def normalize_dataset(cls, value: object) -> str:
         normalized = str(value).strip().lower()
         if normalized != "minute_aggs_v1":
-            raise ValueError("only Massive minute_aggs_v1 is supported")
+            raise ValueError("only the minute_aggs_v1 schema is supported")
         return normalized
 
     @field_validator("price_view", mode="before")
@@ -1660,10 +1664,24 @@ class ResearchDataIngestRequest(SerializableModel):
             raise ValueError("flat-file ingestion must preserve the raw price view")
         return normalized
 
+    @field_validator("vendor_decision_sha256", mode="before")
+    @classmethod
+    def normalize_vendor_decision_sha256(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        digest = str(value).strip().lower().removeprefix("sha256:")
+        if len(digest) != 64 or any(
+            character not in "0123456789abcdef" for character in digest
+        ):
+            raise ValueError("vendor-decision evidence must be a SHA-256")
+        return f"sha256:{digest}"
+
     @model_validator(mode="after")
     def validate_scope(self) -> ResearchDataIngestRequest:
         if not self.rth_only:
             raise ValueError("research data ingestion requires XNYS regular hours")
+        if self.source_name == "alpaca_sip" and self.vendor_decision_sha256 is None:
+            raise ValueError("alpaca_sip ingestion requires a vendor-decision SHA-256")
         return self
 
 
@@ -2166,6 +2184,7 @@ class ResearchDataBatchImportRequest(SerializableModel):
     pattern: str = "*.csv*"
     coverage_start: str | None = None
     coverage_end: str | None = None
+    vendor_decision_report_path: str | None = None
 
     @field_validator("source_dir", "root_path", "vendor", "pattern")
     @classmethod
@@ -2179,8 +2198,21 @@ class ResearchDataBatchImportRequest(SerializableModel):
     def validate_vendor_kind(self) -> ResearchDataBatchImportRequest:
         kind = str(self.kind)
         vendor = self.vendor.strip().lower()
-        if kind == ResearchSampleKind.MINUTE_BARS and vendor != "massive":
-            raise ValueError("minute-bar batch import currently requires Massive")
+        if kind == ResearchSampleKind.FIVE_MINUTE_BARS:
+            raise ValueError("five-minute samples are bake-off evidence only")
+        if kind == ResearchSampleKind.MINUTE_BARS and vendor not in {
+            "massive",
+            "alpaca_sip",
+        }:
+            raise ValueError("minute-bar batch import requires massive or alpaca_sip")
+        if (
+            kind == ResearchSampleKind.MINUTE_BARS
+            and vendor == "alpaca_sip"
+            and not (self.vendor_decision_report_path or "").strip()
+        ):
+            raise ValueError(
+                "alpaca_sip import requires a passing vendor-decision report"
+            )
         if kind == ResearchSampleKind.CORPORATE_ACTIONS and (
             not self.coverage_start or not self.coverage_end
         ):
