@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from trader.data.historical import bar_size_seconds, parse_ibkr_bar_timestamp
 from trader.models import (
     BrokerDiagnosticReport,
     HistoricalReadinessReport,
@@ -134,8 +135,10 @@ def build_ibkr_data_diagnostics_report(
     bar_context = _bar_context(selected_request, snapshot_report, current_time)
     bar_count_passed = bar_context.bar_count >= selected_request.min_bars
     freshness_passed = (
-        bar_context.latest_bar_age_seconds is not None
-        and bar_context.latest_bar_age_seconds
+        bar_context.latest_bar_parse_status == "parsed"
+        and bar_context.latest_bar_interval_end_age_seconds is not None
+        and bar_context.latest_bar_interval_end_age_seconds >= 0
+        and bar_context.latest_bar_interval_end_age_seconds
         <= selected_request.stale_after_minutes * 60
     )
     if not bar_count_passed:
@@ -144,12 +147,19 @@ def build_ibkr_data_diagnostics_report(
             f"expected at least {selected_request.min_bars}"
         )
     if not freshness_passed:
-        if bar_context.latest_bar_age_minutes is None:
+        if bar_context.latest_bar_interval_end_age_minutes is None:
             errors.append(f"{selected_request.symbol} latest bar timestamp is unavailable")
+        elif bar_context.latest_bar_interval_end_age_seconds is not None and (
+            bar_context.latest_bar_interval_end_age_seconds < 0
+        ):
+            errors.append(
+                f"{selected_request.symbol} latest bar is still forming; "
+                "freshness requires a completed bar interval"
+            )
         else:
             errors.append(
-                f"{selected_request.symbol} latest bar age "
-                f"{bar_context.latest_bar_age_minutes:.2f} minutes exceeds "
+                f"{selected_request.symbol} latest completed-bar interval-end age "
+                f"{bar_context.latest_bar_interval_end_age_minutes:.2f} minutes exceeds "
                 f"{selected_request.stale_after_minutes} minutes"
             )
 
@@ -172,8 +182,17 @@ def build_ibkr_data_diagnostics_report(
                 market_probe_findings=market_probe_findings,
             )
         )
+    else:
+        errors.extend(
+            _strict_market_probe_errors(
+                market_report=market_report,
+                market_requested=market_requested,
+                market_received=market_received,
+                market_probe_findings=market_probe_findings,
+            )
+        )
     market_hint = _market_data_hint(
-        latest_bar_age_minutes=bar_context.latest_bar_age_minutes,
+        latest_bar_age_minutes=bar_context.latest_bar_interval_end_age_minutes,
         stale_after_minutes=selected_request.stale_after_minutes,
         market_data_type_requested=market_requested,
         market_data_type_received=market_received,
@@ -189,6 +208,10 @@ def build_ibkr_data_diagnostics_report(
         and readiness_ok
         and bar_count_passed
         and freshness_passed
+        and market_report is not None
+        and market_probe_findings.ok is True
+        and market_requested == "live"
+        and market_received == "live"
         and not errors
     )
     delayed_shadow_ready = (
@@ -207,7 +230,7 @@ def build_ibkr_data_diagnostics_report(
         broker_account_verified=broker_account_verified,
         bar_count_passed=bar_count_passed,
         freshness_passed=freshness_passed,
-        latest_bar_age_minutes=bar_context.latest_bar_age_minutes,
+        latest_bar_age_minutes=bar_context.latest_bar_interval_end_age_minutes,
         delayed_mode=delayed_mode,
         delayed_shadow_ready=delayed_shadow_ready,
     )
@@ -244,8 +267,19 @@ def build_ibkr_data_diagnostics_report(
         bar_count_passed=bar_count_passed,
         first_bar_timestamp=bar_context.first_bar_timestamp,
         latest_bar_timestamp=bar_context.latest_bar_timestamp,
-        latest_bar_age_seconds=bar_context.latest_bar_age_seconds,
-        latest_bar_age_minutes=bar_context.latest_bar_age_minutes,
+        latest_bar_parse_status=bar_context.latest_bar_parse_status,
+        latest_bar_start_utc=bar_context.latest_bar_start_utc,
+        latest_bar_end_utc=bar_context.latest_bar_end_utc,
+        latest_bar_start_age_seconds=bar_context.latest_bar_start_age_seconds,
+        latest_bar_start_age_minutes=bar_context.latest_bar_start_age_minutes,
+        latest_bar_interval_end_age_seconds=(
+            bar_context.latest_bar_interval_end_age_seconds
+        ),
+        latest_bar_interval_end_age_minutes=(
+            bar_context.latest_bar_interval_end_age_minutes
+        ),
+        latest_bar_age_seconds=bar_context.latest_bar_interval_end_age_seconds,
+        latest_bar_age_minutes=bar_context.latest_bar_interval_end_age_minutes,
         stale_after_minutes=selected_request.stale_after_minutes,
         freshness_passed=freshness_passed,
         market_data_type_requested=market_requested,
@@ -268,6 +302,7 @@ def build_ibkr_data_diagnostics_report(
         warnings=list(dict.fromkeys(warnings)),
         errors=list(dict.fromkeys(errors)),
         final_status=final_status,
+        timestamp=current_time,
     )
 
 
@@ -278,18 +313,32 @@ class _BarContext:
         bar_count: int,
         first_bar_timestamp: str | None,
         latest_bar_timestamp: str | None,
-        latest_bar_age_seconds: float | None,
+        latest_bar_parse_status: str,
+        latest_bar_start_utc: datetime | None,
+        latest_bar_end_utc: datetime | None,
+        latest_bar_start_age_seconds: float | None,
+        latest_bar_interval_end_age_seconds: float | None,
     ) -> None:
         self.bar_count = bar_count
         self.first_bar_timestamp = first_bar_timestamp
         self.latest_bar_timestamp = latest_bar_timestamp
-        self.latest_bar_age_seconds = latest_bar_age_seconds
+        self.latest_bar_parse_status = latest_bar_parse_status
+        self.latest_bar_start_utc = latest_bar_start_utc
+        self.latest_bar_end_utc = latest_bar_end_utc
+        self.latest_bar_start_age_seconds = latest_bar_start_age_seconds
+        self.latest_bar_interval_end_age_seconds = latest_bar_interval_end_age_seconds
 
     @property
-    def latest_bar_age_minutes(self) -> float | None:
-        if self.latest_bar_age_seconds is None:
+    def latest_bar_start_age_minutes(self) -> float | None:
+        if self.latest_bar_start_age_seconds is None:
             return None
-        return self.latest_bar_age_seconds / 60
+        return self.latest_bar_start_age_seconds / 60
+
+    @property
+    def latest_bar_interval_end_age_minutes(self) -> float | None:
+        if self.latest_bar_interval_end_age_seconds is None:
+            return None
+        return self.latest_bar_interval_end_age_seconds / 60
 
 
 class _MarketProbeFindings:
@@ -321,7 +370,11 @@ def _bar_context(
             bar_count=0,
             first_bar_timestamp=None,
             latest_bar_timestamp=None,
-            latest_bar_age_seconds=None,
+            latest_bar_parse_status="unavailable",
+            latest_bar_start_utc=None,
+            latest_bar_end_utc=None,
+            latest_bar_start_age_seconds=None,
+            latest_bar_interval_end_age_seconds=None,
         )
     result = next(
         (item for item in snapshot_report.results if item.symbol == request.symbol),
@@ -334,20 +387,22 @@ def _bar_context(
     if bars:
         first_bar = _optional_str(bars[0].get("timestamp"))
         latest_bar = _optional_str(bars[-1].get("timestamp"))
-        return _BarContext(
+        return _parsed_bar_context(
             bar_count=len(bars),
             first_bar_timestamp=first_bar,
             latest_bar_timestamp=latest_bar,
-            latest_bar_age_seconds=_bar_age_seconds(latest_bar, snapshot_report.timestamp),
+            bar_size=request.expected_bar_size,
+            now=now,
         )
     manifest = result.manifest if result is not None else None
     latest_bar = manifest.last_bar_time if manifest is not None else None
     first_bar = manifest.first_bar_time if manifest is not None else None
-    return _BarContext(
+    return _parsed_bar_context(
         bar_count=manifest.bar_count if manifest is not None else 0,
         first_bar_timestamp=first_bar,
         latest_bar_timestamp=latest_bar,
-        latest_bar_age_seconds=_bar_age_seconds(latest_bar, now),
+        bar_size=request.expected_bar_size,
+        now=now,
     )
 
 
@@ -370,32 +425,55 @@ def _load_snapshot_rows(snapshot_path: str | None) -> list[Mapping[str, Any]]:
     return rows
 
 
-def _bar_age_seconds(value: str | None, report_timestamp: datetime) -> float | None:
-    parsed = _parse_ibkr_bar_timestamp(value, report_timestamp)
-    if parsed is None:
-        return None
-    return max(0.0, (report_timestamp.astimezone() - parsed).total_seconds())
-
-
-def _parse_ibkr_bar_timestamp(value: str | None, report_timestamp: datetime) -> datetime | None:
-    if value is None:
-        return None
-    normalized = " ".join(value.split())
-    parsed: datetime | None = None
-    for fmt in ("%Y%m%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S%z"):
-        try:
-            parsed = datetime.strptime(normalized, fmt)
-            break
-        except ValueError:
-            continue
-    if parsed is None:
-        try:
-            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    if parsed.tzinfo is not None:
-        return parsed.astimezone()
-    return parsed.replace(tzinfo=report_timestamp.astimezone().tzinfo)
+def _parsed_bar_context(
+    *,
+    bar_count: int,
+    first_bar_timestamp: str | None,
+    latest_bar_timestamp: str | None,
+    bar_size: str,
+    now: datetime,
+) -> _BarContext:
+    start = (
+        parse_ibkr_bar_timestamp(latest_bar_timestamp)
+        if latest_bar_timestamp is not None
+        else None
+    )
+    interval_seconds = bar_size_seconds(bar_size)
+    if start is None:
+        parse_status = "unavailable" if latest_bar_timestamp is None else "parse_failed"
+        return _BarContext(
+            bar_count=bar_count,
+            first_bar_timestamp=first_bar_timestamp,
+            latest_bar_timestamp=latest_bar_timestamp,
+            latest_bar_parse_status=parse_status,
+            latest_bar_start_utc=None,
+            latest_bar_end_utc=None,
+            latest_bar_start_age_seconds=None,
+            latest_bar_interval_end_age_seconds=None,
+        )
+    if interval_seconds is None:
+        return _BarContext(
+            bar_count=bar_count,
+            first_bar_timestamp=first_bar_timestamp,
+            latest_bar_timestamp=latest_bar_timestamp,
+            latest_bar_parse_status="bar_size_parse_failed",
+            latest_bar_start_utc=start,
+            latest_bar_end_utc=None,
+            latest_bar_start_age_seconds=(now - start).total_seconds(),
+            latest_bar_interval_end_age_seconds=None,
+        )
+    end = start + timedelta(seconds=interval_seconds)
+    end_age = (now - end).total_seconds()
+    return _BarContext(
+        bar_count=bar_count,
+        first_bar_timestamp=first_bar_timestamp,
+        latest_bar_timestamp=latest_bar_timestamp,
+        latest_bar_parse_status="forming" if end_age < 0 else "parsed",
+        latest_bar_start_utc=start,
+        latest_bar_end_utc=end,
+        latest_bar_start_age_seconds=(now - start).total_seconds(),
+        latest_bar_interval_end_age_seconds=end_age,
+    )
 
 
 def _market_data_context(
@@ -460,7 +538,7 @@ def _delayed_market_probe_passed(
     if market_probe_findings.permission_blocker:
         return False
     delayed_types = {"delayed", "delayed_frozen"}
-    return market_requested in delayed_types or market_received in delayed_types
+    return market_requested == "delayed" and market_received in delayed_types
 
 
 def _delayed_market_probe_errors(
@@ -482,10 +560,33 @@ def _delayed_market_probe_errors(
     if not market_probe_findings.ok:
         errors.append("delayed market-probe report did not pass")
     delayed_types = {"delayed", "delayed_frozen"}
-    if market_requested not in delayed_types and market_received not in delayed_types:
+    if market_requested != "delayed":
         errors.append(
             "delayed engineering diagnostics require market-probe --data-type delayed"
         )
+    if market_received not in delayed_types:
+        errors.append(
+            "delayed market-probe did not confirm a delayed market-data callback"
+        )
+    return errors
+
+
+def _strict_market_probe_errors(
+    *,
+    market_report: MarketDataDiagnosticReport | None,
+    market_requested: str | None,
+    market_received: str | None,
+    market_probe_findings: _MarketProbeFindings,
+) -> list[str]:
+    if market_report is None:
+        return ["strict diagnostics require the live market-probe alias"]
+    errors: list[str] = []
+    if not market_probe_findings.ok:
+        errors.append("live market-probe report did not pass")
+    if market_requested != "live":
+        errors.append("strict diagnostics require market-probe --data-type live")
+    if market_received != "live":
+        errors.append("strict market-probe did not confirm a live market-data callback")
     return errors
 
 
@@ -608,7 +709,10 @@ def _next_action(
         return "run_alpha_shadow_daemon_delayed_non_graduating"
     if delayed_mode:
         return "keep_delayed_shadow_blocked_until_diagnostics_pass"
-    if any("latest bar age" in error for error in errors):
+    if any(
+        "latest bar age" in error or "interval-end age" in error
+        for error in errors
+    ):
         return "keep_shadow_daemon_blocked_and_investigate_ibkr_data_lag"
     if any("broker-probe" in error or "managed-account" in error for error in errors):
         return "rerun_broker_probe_with_fresh_client_id_or_longer_timeout"

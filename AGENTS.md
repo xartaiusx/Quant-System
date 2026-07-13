@@ -19,6 +19,9 @@ The current project is infrastructure only. It must support research, signal gen
 - Broker-probe commands may read broker state through read-only API requests, but they must not submit, modify, or cancel orders.
 - Market-data diagnostics may request contract, quote, and historical data, but they must never route execution.
 - Historical-data commands may request and store data but must never route execution.
+- `ibkr-session-compare` must remain offline-only and broker-free. It may compare
+  ignored IBKR snapshot revisions and volume-unit attestations, but it must not
+  contact IBKR, evaluate signals, calculate P&L, or route execution.
 - Offline data commands must not import broker clients or contact IBKR.
 - Backtest data adapter commands must remain broker-free and must not evaluate strategies, simulate orders, or compute P&L.
 - Backtest engine skeleton commands must remain broker-free and must not evaluate strategies, simulate orders, or calculate P&L until explicitly approved in a future milestone.
@@ -159,6 +162,12 @@ python -m trader.cli research-data-derive
 python -m trader.cli research-catalog-load --price-view split_adjusted_signal
 python -m trader.cli research-backtest --symbol SPY
 python -m trader.cli research-experiment-run --spec research/experiments/spy_sma_2016_2025_v2.json --phase development
+```
+
+Compare two ignored IBKR session revisions offline:
+
+```bash
+python -m trader.cli ibkr-session-compare --baseline-manifest <path> --candidate-manifest <path>
 ```
 
 Run repository safety scans:

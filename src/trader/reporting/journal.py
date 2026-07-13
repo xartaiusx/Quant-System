@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,7 +23,13 @@ class Journal:
         self.reports_dir = Path(reports_dir)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
-    def write_cycle(self, name: str, payload: Mapping[str, Any]) -> tuple[Path, Path]:
+    def write_cycle(
+        self,
+        name: str,
+        payload: Mapping[str, Any],
+        *,
+        latest_aliases: Iterable[str] = (),
+    ) -> tuple[Path, Path]:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         safe_payload = mask_sensitive_mapping(_to_plain(dict(payload)))
         safe_payload.setdefault("timestamp", timestamp)
@@ -39,6 +45,18 @@ class Journal:
         md_path.write_text(markdown_summary(safe_payload))
         shutil.copyfile(json_path, latest_json)
         shutil.copyfile(md_path, latest_md)
+        for alias in latest_aliases:
+            normalized_alias = alias.strip()
+            if not normalized_alias:
+                continue
+            shutil.copyfile(
+                json_path,
+                self.reports_dir / f"latest_{normalized_alias}.json",
+            )
+            shutil.copyfile(
+                md_path,
+                self.reports_dir / f"latest_{normalized_alias}.md",
+            )
         return json_path, md_path
 
 

@@ -205,8 +205,18 @@ def reconcile_report(
         positions_snapshot=[{"account": "DUQ2****23", "symbol": "SPY", "position": "0"}],
         positions_source="broker_read_only_positions",
         broker_positions_available=True,
+        positions_query_completed=True,
         open_orders=open_orders,
         open_order_count=len(open_orders),
+        open_orders_query_completed=True,
+        zero_open_orders_confirmed=not open_orders,
+        executions_available=True,
+        executions_query_completed=True,
+        zero_executions_confirmed=True,
+        source_report_compatibility={
+            "paper_smoke_report": "current",
+            "alpha_paper_report": "current",
+        },
         latest_order_ids=[31, 32],
         latest_perm_ids=[3100, 3200],
         final_status=PaperReconcileStatus.COMPLETED
@@ -364,6 +374,55 @@ def test_alpha_test_summary_open_order_warns_and_blocks_next_window(
     assert report.next_eligible_for_alpha_window is False
     assert "open broker orders" in " ".join(report.warnings)
     assert "open broker orders must be cleared" in " ".join(report.next_eligibility_reason)
+
+
+def test_alpha_test_summary_rejects_legacy_reconciliation_sources(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.alpha_summary._current_commit_sha", lambda: "abc123")
+    legacy_reconcile = reconcile_report().model_copy(
+        update={
+            "source_report_compatibility": {
+                "paper_smoke_report": "current",
+                "alpha_paper_report": "legacy_incompatible",
+            }
+        }
+    )
+    selected_request = write_all_reports(
+        tmp_path,
+        shadow=shadow_report(),
+        smoke=smoke_report(),
+        alpha=alpha_report(),
+        reconcile=legacy_reconcile,
+    )
+
+    report = run_alpha_test_summary(selected_request, now=now())
+
+    assert report.ok is False
+    assert report.next_eligible_for_alpha_window is False
+    assert "non-current source evidence" in " ".join(report.errors)
+
+
+def test_alpha_test_summary_rejects_legacy_alpha_report_schema(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.alpha_summary._current_commit_sha", lambda: "abc123")
+    selected_request = write_all_reports(
+        tmp_path,
+        shadow=shadow_report(),
+        smoke=smoke_report(),
+        reconcile=reconcile_report(),
+    )
+    legacy_alpha = alpha_report().model_dump(mode="json")
+    legacy_alpha.pop("schema_version")
+    Path(selected_request.alpha_paper_report_path).write_text(json.dumps(legacy_alpha))
+
+    report = run_alpha_test_summary(selected_request, now=now())
+
+    assert report.ok is False
+    assert "legacy_incompatible" in " ".join(report.errors)
 
 
 def test_alpha_test_summary_requires_reconcile_after_paper_execution(

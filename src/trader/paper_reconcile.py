@@ -28,6 +28,7 @@ from trader.models import (
     PaperReconcileReport,
     PaperReconcileRequest,
     PaperReconcileStatus,
+    ReportCompatibilityStatus,
 )
 
 
@@ -117,6 +118,8 @@ def run_paper_reconcile(
     commission_reports: list[PaperBrokerCommissionReport] = []
     open_order_query_failed = False
     execution_query_failed = False
+    open_orders_query_completed = False
+    executions_query_completed = False
 
     try:
         broker_report = broker_client_factory(config).diagnostic_report(
@@ -146,6 +149,7 @@ def run_paper_reconcile(
                     timeout=reconcile_request.timeout_seconds
                 )
             ]
+            open_orders_query_completed = True
         except Exception as exc:
             open_order_query_failed = True
             errors.append(f"open-order reconciliation failed: {exc}")
@@ -153,6 +157,7 @@ def run_paper_reconcile(
             executions, commission_reports = open_order_broker.request_executions(
                 timeout=reconcile_request.timeout_seconds
             )
+            executions_query_completed = True
         except Exception as exc:
             execution_query_failed = True
             errors.append(f"execution-history reconciliation failed: {exc}")
@@ -164,7 +169,9 @@ def run_paper_reconcile(
         with suppress(Exception):
             open_order_broker.disconnect()
 
-    order_evidence, evidence_warnings = _load_order_evidence(source_report_paths)
+    order_evidence, source_compatibility, evidence_warnings = _load_order_evidence(
+        source_report_paths
+    )
     warnings.extend(evidence_warnings)
     selected_campaign_id, campaign_errors = _order_evidence_campaign_context(
         reconcile_request.campaign_id,
@@ -200,6 +207,9 @@ def run_paper_reconcile(
         executions=executions,
         commission_reports=commission_reports,
         order_evidence=order_evidence,
+        source_report_compatibility=source_compatibility,
+        open_orders_query_completed=open_orders_query_completed,
+        executions_query_completed=executions_query_completed,
         warnings=warnings,
         errors=errors,
         final_status=final_status,
@@ -236,14 +246,32 @@ def _open_order_snapshot(order: PaperBrokerOpenOrder) -> BrokerOpenOrderSnapshot
     )
 
 
-def _load_order_evidence(paths: Mapping[str, str]) -> tuple[list[PaperOrderEvidence], list[str]]:
+def _load_order_evidence(
+    paths: Mapping[str, str],
+) -> tuple[
+    list[PaperOrderEvidence],
+    dict[str, ReportCompatibilityStatus],
+    list[str],
+]:
     evidence: list[PaperOrderEvidence] = []
+    compatibility: dict[str, ReportCompatibilityStatus] = {}
     warnings: list[str] = []
     for label, raw_path in paths.items():
         path = Path(raw_path)
         payload, errors = _load_mapping(path, label=label)
         if payload is None:
             warnings.extend(errors)
+            compatibility[label] = (
+                ReportCompatibilityStatus.MISSING
+                if not path.exists()
+                else ReportCompatibilityStatus.INVALID
+            )
+            continue
+        if payload.get("schema_version") != 2:
+            compatibility[label] = ReportCompatibilityStatus.LEGACY_INCOMPATIBLE
+            warnings.append(
+                f"{label} is legacy_incompatible; rerun it on the current report schema"
+            )
             continue
         try:
             if label == "paper_smoke_report":
@@ -253,8 +281,11 @@ def _load_order_evidence(paths: Mapping[str, str]) -> tuple[list[PaperOrderEvide
                 alpha_report = AlphaPaperRunReport.model_validate(payload)
                 evidence.append(_alpha_evidence(label, raw_path, alpha_report))
         except ValueError as exc:
+            compatibility[label] = ReportCompatibilityStatus.INVALID
             warnings.append(f"{label} is invalid: {exc}")
-    return evidence, warnings
+        else:
+            compatibility[label] = ReportCompatibilityStatus.CURRENT
+    return evidence, compatibility, warnings
 
 
 def _smoke_evidence(
@@ -374,6 +405,9 @@ def _build_report(
     executions: list[PaperBrokerExecution] | None = None,
     commission_reports: list[PaperBrokerCommissionReport] | None = None,
     order_evidence: list[PaperOrderEvidence] | None = None,
+    source_report_compatibility: dict[str, ReportCompatibilityStatus] | None = None,
+    open_orders_query_completed: bool = False,
+    executions_query_completed: bool = False,
 ) -> PaperReconcileReport:
     selected_open_orders = open_orders or []
     selected_executions = executions or []
@@ -452,13 +486,31 @@ def _build_report(
         positions_unavailable_reason=positions_unavailable_reason,
         open_orders=selected_open_orders,
         open_order_count=len(selected_open_orders),
+        open_order_source=(
+            "broker_read_only_open_orders"
+            if open_orders_query_completed
+            else "unavailable_missing_end_callback_or_query_failure"
+        ),
+        open_orders_query_completed=open_orders_query_completed,
+        zero_open_orders_confirmed=(
+            open_orders_query_completed and not selected_open_orders
+        ),
         executions_snapshot=execution_rows,
-        executions_available=bool(execution_rows),
-        executions_source="broker_read_only_current_day_executions",
+        executions_available=executions_query_completed,
+        executions_source=(
+            "broker_read_only_current_day_executions"
+            if executions_query_completed
+            else "unavailable_missing_end_callback_or_query_failure"
+        ),
+        executions_query_completed=executions_query_completed,
+        zero_executions_confirmed=(
+            executions_query_completed and not execution_rows
+        ),
         execution_order_ids=execution_order_ids,
         commission_reports=commission_rows,
         broker_state_fingerprint=fingerprint,
         source_report_paths=source_report_paths,
+        source_report_compatibility=source_report_compatibility or {},
         source_report_campaign_ids={
             evidence_row.source: evidence_row.campaign_id
             for evidence_row in selected_evidence

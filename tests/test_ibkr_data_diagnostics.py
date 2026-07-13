@@ -24,6 +24,8 @@ from trader.models import (
     ManagedAccountInfo,
     MarketDataDiagnosticReport,
     MarketDataRequestType,
+    MarketDataTypeInfo,
+    QuoteSnapshot,
     ShadowDataPolicy,
 )
 from trader.reporting.reports import markdown_summary
@@ -38,7 +40,12 @@ def fixed_commit(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_strict_precheck_passes_with_fresh_spy_data(tmp_path: Path) -> None:
-    paths = write_source_reports(tmp_path, latest_bar_age_minutes=10, bar_count=58)
+    paths = write_source_reports(
+        tmp_path,
+        latest_bar_age_minutes=10,
+        bar_count=58,
+        include_live_market_probe=True,
+    )
 
     report = diagnostics.build_ibkr_data_diagnostics_report(request(paths), now=NOW)
 
@@ -50,6 +57,9 @@ def test_strict_precheck_passes_with_fresh_spy_data(tmp_path: Path) -> None:
     assert report.bar_count == 58
     assert report.bar_count_passed is True
     assert report.freshness_passed is True
+    assert report.latest_bar_parse_status == "parsed"
+    assert report.latest_bar_interval_end_age_minutes == pytest.approx(10)
+    assert report.latest_bar_start_age_minutes == pytest.approx(15)
     assert report.next_recommended_action == "run_alpha_shadow_daemon"
     assert report.submitted_orders is False
     assert report.order_api_invoked is False
@@ -57,7 +67,12 @@ def test_strict_precheck_passes_with_fresh_spy_data(tmp_path: Path) -> None:
 
 
 def test_strict_precheck_fails_closed_on_stale_spy_data(tmp_path: Path) -> None:
-    paths = write_source_reports(tmp_path, latest_bar_age_minutes=18.37, bar_count=58)
+    paths = write_source_reports(
+        tmp_path,
+        latest_bar_age_minutes=18.37,
+        bar_count=58,
+        include_live_market_probe=True,
+    )
 
     report = diagnostics.build_ibkr_data_diagnostics_report(request(paths), now=NOW)
 
@@ -71,7 +86,7 @@ def test_strict_precheck_fails_closed_on_stale_spy_data(tmp_path: Path) -> None:
         report.next_recommended_action
         == "keep_shadow_daemon_blocked_and_investigate_ibkr_data_lag"
     )
-    assert any("latest bar age" in error for error in report.errors)
+    assert any("interval-end age" in error for error in report.errors)
     assert any("common delayed-market-data range" in hint for hint in report.operator_hints)
     assert report.submitted_orders is False
     assert report.paper_orders_enabled is False
@@ -83,6 +98,7 @@ def test_strict_precheck_fails_without_broker_account_evidence(tmp_path: Path) -
         latest_bar_age_minutes=10,
         bar_count=58,
         broker_managed_accounts=False,
+        include_live_market_probe=True,
     )
 
     report = diagnostics.build_ibkr_data_diagnostics_report(request(paths), now=NOW)
@@ -125,6 +141,7 @@ def test_request_mismatch_fails_closed(tmp_path: Path) -> None:
         latest_bar_age_minutes=10,
         bar_count=58,
         duration="2 D",
+        include_live_market_probe=True,
     )
 
     report = diagnostics.build_ibkr_data_diagnostics_report(request(paths), now=NOW)
@@ -217,6 +234,66 @@ def test_delayed_engineering_requires_delayed_market_probe(tmp_path: Path) -> No
     assert any("delayed market-probe" in error for error in report.errors)
 
 
+def test_delayed_engineering_rejects_live_probe_alias_evidence(tmp_path: Path) -> None:
+    paths = write_source_reports(
+        tmp_path,
+        latest_bar_age_minutes=10,
+        bar_count=58,
+        include_live_market_probe=True,
+    )
+
+    report = diagnostics.build_ibkr_data_diagnostics_report(
+        request(
+            paths,
+            data_policy=ShadowDataPolicy.DELAYED_ENGINEERING,
+            stale_after_minutes=30,
+        ),
+        now=NOW,
+    )
+
+    assert report.ok is False
+    assert report.market_data_type_requested == "live"
+    assert any("--data-type delayed" in error for error in report.errors)
+
+
+def test_diagnostics_uses_canonical_us_eastern_timestamp_and_interval_end(
+    tmp_path: Path,
+) -> None:
+    paths = write_source_reports(
+        tmp_path,
+        latest_bar_age_minutes=10,
+        bar_count=58,
+        include_live_market_probe=True,
+    )
+    snapshot_path = paths["snapshot"].with_name("spy-snapshot.jsonl")
+    rows = [json.loads(line) for line in snapshot_path.read_text().splitlines()]
+    rows[-1]["timestamp"] = "20260706 14:20:00 US/Eastern"
+    snapshot_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n"
+    )
+
+    report = diagnostics.build_ibkr_data_diagnostics_report(request(paths), now=NOW)
+
+    assert report.latest_bar_parse_status == "parsed"
+    assert report.latest_bar_start_utc == datetime(2026, 7, 6, 18, 20, tzinfo=UTC)
+    assert report.latest_bar_end_utc == datetime(2026, 7, 6, 18, 25, tzinfo=UTC)
+    assert report.latest_bar_start_age_minutes == pytest.approx(13.3667, abs=0.01)
+    assert report.latest_bar_interval_end_age_minutes == pytest.approx(8.3667, abs=0.01)
+
+
+def test_diagnostics_request_defaults_to_policy_specific_probe_aliases() -> None:
+    assert (
+        IBKRDataDiagnosticsRequest().market_probe_report_path
+        == "reports/latest_market_probe_live.json"
+    )
+    assert (
+        IBKRDataDiagnosticsRequest(
+            data_policy=ShadowDataPolicy.DELAYED_ENGINEERING
+        ).market_probe_report_path
+        == "reports/latest_market_probe_delayed.json"
+    )
+
+
 def test_markdown_renders_safety_and_blocker(tmp_path: Path) -> None:
     paths = write_source_reports(
         tmp_path,
@@ -234,7 +311,7 @@ def test_markdown_renders_safety_and_blocker(tmp_path: Path) -> None:
     assert "keep_shadow_daemon_blocked_and_investigate_ibkr_data_lag" in rendered
     assert "Market-data permission blocker: `True`" in rendered
     assert "IBKR 10089" in rendered
-    assert "latest bar age" in rendered
+    assert "interval-end age" in rendered
 
 
 def request(paths: dict[str, Path], **overrides: Any) -> IBKRDataDiagnosticsRequest:
@@ -258,6 +335,7 @@ def write_source_reports(
     broker_managed_accounts: bool = True,
     duration: str = "1 D",
     include_market_probe: bool = False,
+    include_live_market_probe: bool = False,
     include_delayed_market_probe: bool = False,
 ) -> dict[str, Path]:
     snapshot_path = tmp_path / "spy-snapshot.jsonl"
@@ -297,6 +375,9 @@ def write_source_reports(
     if include_market_probe:
         write_report(market_path, market_probe_report())
         paths["market"] = market_path
+    if include_live_market_probe:
+        write_report(market_path, live_market_probe_report())
+        paths["market"] = market_path
     if include_delayed_market_probe:
         write_report(market_path, delayed_market_probe_report())
         paths["market"] = market_path
@@ -304,7 +385,7 @@ def write_source_reports(
 
 
 def snapshot_rows(*, bar_count: int, latest_bar_age_minutes: float) -> list[dict[str, str]]:
-    latest = NOW - timedelta(minutes=latest_bar_age_minutes)
+    latest = NOW - timedelta(minutes=latest_bar_age_minutes + 5)
     start = latest - timedelta(minutes=5 * (bar_count - 1))
     rows: list[dict[str, str]] = []
     for index in range(bar_count):
@@ -494,6 +575,48 @@ def delayed_market_probe_report() -> MarketDataDiagnosticReport:
         market_data_type_requested=MarketDataRequestType.DELAYED,
         market_data_type_requested_code=3,
         include_historical=True,
+        quote_snapshots=[
+            QuoteSnapshot(
+                symbol="SPY",
+                market_data_type=MarketDataTypeInfo(
+                    requested=MarketDataRequestType.DELAYED,
+                    requested_code=3,
+                    received=MarketDataRequestType.DELAYED,
+                    received_code=3,
+                ),
+            )
+        ],
+        final_status="connected",
+        timestamp=NOW,
+    )
+
+
+def live_market_probe_report() -> MarketDataDiagnosticReport:
+    return MarketDataDiagnosticReport(
+        ok=True,
+        mode="paper",
+        host="127.0.0.1",
+        port=4002,
+        client_id=605,
+        broker_kind="ib_gateway",
+        connected=True,
+        ibapi_available=True,
+        connection_attempted=True,
+        symbols_requested=["SPY"],
+        market_data_type_requested=MarketDataRequestType.LIVE,
+        market_data_type_requested_code=1,
+        include_historical=True,
+        quote_snapshots=[
+            QuoteSnapshot(
+                symbol="SPY",
+                market_data_type=MarketDataTypeInfo(
+                    requested=MarketDataRequestType.LIVE,
+                    requested_code=1,
+                    received=MarketDataRequestType.LIVE,
+                    received_code=1,
+                ),
+            )
+        ],
         final_status="connected",
         timestamp=NOW,
     )

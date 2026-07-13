@@ -45,6 +45,7 @@ from trader.data.historical_loader import (
     load_historical_snapshots,
 )
 from trader.data.ibkr_data_diagnostics import build_ibkr_data_diagnostics_report
+from trader.data.ibkr_session_compare import compare_ibkr_sessions
 from trader.data.quality_gate import build_data_quality_gate_report
 from trader.data.research_bakeoff import run_research_data_bakeoff
 from trader.data.research_catalog import (
@@ -93,8 +94,11 @@ from trader.models import (
     HistoricalReadinessReport,
     HistoricalSnapshotLoadRequest,
     HistoricalSnapshotReport,
+    HistoricalVolumeUnit,
     IBKRDataDiagnosticsReport,
     IBKRDataDiagnosticsRequest,
+    IBKRSessionCompareReport,
+    IBKRSessionCompareRequest,
     InertStrategyRunnerReport,
     InertStrategyRunnerRequest,
     MarketDataDiagnosticReport,
@@ -279,7 +283,12 @@ def market_probe(
         include_historical=historical,
         timeout=timeout,
     )
-    json_path, md_path = Journal().write_cycle("market_probe", _report_dict(report))
+    data_type_alias = f"market_probe_{_enum_value(data_type)}"
+    json_path, md_path = Journal().write_cycle(
+        "market_probe",
+        _report_dict(report),
+        latest_aliases=[data_type_alias],
+    )
 
     console.print("[bold]Read-only market-data probe[/bold]")
     console.print("Order routing: disabled.")
@@ -313,6 +322,20 @@ def history_fetch(
         int,
         typer.Option("--use-rth", help="Use regular trading hours: 1 or 0."),
     ] = 1,
+    end_datetime: Annotated[
+        str | None,
+        typer.Option(
+            "--end-datetime",
+            help="Optional timezone-aware ISO timestamp for the historical request end.",
+        ),
+    ] = None,
+    volume_unit: Annotated[
+        HistoricalVolumeUnit,
+        typer.Option(
+            "--volume-unit",
+            help="Operator-attested IBKR volume units stored in the snapshot manifest.",
+        ),
+    ] = HistoricalVolumeUnit.UNKNOWN,
     timeout: Annotated[
         float,
         typer.Option("--timeout", help="Override IBKR connect/request timeout seconds."),
@@ -332,6 +355,8 @@ def history_fetch(
         bar_size=bar_size,
         what_to_show=what_to_show,
         use_rth=use_rth,
+        end_datetime=_parse_aware_datetime_option(end_datetime, "--end-datetime"),
+        volume_unit=volume_unit,
         timeout=request_timeout,
     )
     json_path, md_path = Journal().write_cycle("history_snapshot", _report_dict(report))
@@ -402,7 +427,7 @@ def ibkr_data_diagnostics(
             "--market-probe-report",
             help="Optional ignored local market-probe JSON path.",
         ),
-    ] = Path("reports/latest_market_probe.json"),
+    ] = Path("reports/latest_market_probe_live.json"),
     min_bars: Annotated[
         int,
         typer.Option("--min-bars", help="Minimum bars required for strict shadow."),
@@ -475,7 +500,7 @@ def ibkr_delayed_data_diagnostics(
             "--market-probe-report",
             help="Ignored delayed market-probe JSON path.",
         ),
-    ] = Path("reports/latest_market_probe.json"),
+    ] = Path("reports/latest_market_probe_delayed.json"),
     min_bars: Annotated[
         int,
         typer.Option("--min-bars", help="Minimum bars required for delayed shadow."),
@@ -2280,6 +2305,20 @@ def history_snapshot(
         int,
         typer.Option("--use-rth", help="Use regular trading hours: 1 or 0."),
     ] = 1,
+    end_datetime: Annotated[
+        str | None,
+        typer.Option(
+            "--end-datetime",
+            help="Optional timezone-aware ISO timestamp for the historical request end.",
+        ),
+    ] = None,
+    volume_unit: Annotated[
+        HistoricalVolumeUnit,
+        typer.Option(
+            "--volume-unit",
+            help="Operator-attested IBKR volume units stored in the snapshot manifest.",
+        ),
+    ] = HistoricalVolumeUnit.UNKNOWN,
     timeout: Annotated[
         float,
         typer.Option("--timeout", help="Override IBKR connect/request timeout seconds."),
@@ -2299,6 +2338,8 @@ def history_snapshot(
         bar_size=bar_size,
         what_to_show=what_to_show,
         use_rth=use_rth,
+        end_datetime=_parse_aware_datetime_option(end_datetime, "--end-datetime"),
+        volume_unit=volume_unit,
         timeout=request_timeout,
     )
     snapshot_json, snapshot_md = Journal().write_cycle(
@@ -2324,6 +2365,39 @@ def history_snapshot(
     console.print(f"Readiness JSON report: {readiness_json}")
     console.print(f"Readiness Markdown report: {readiness_md}")
     if not snapshot_report.ok or not readiness_report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("ibkr-session-compare")
+def ibkr_session_compare(
+    baseline_manifest: Annotated[
+        Path,
+        typer.Option("--baseline-manifest", help="Earlier ignored snapshot manifest."),
+    ],
+    candidate_manifest: Annotated[
+        Path,
+        typer.Option("--candidate-manifest", help="Later ignored snapshot manifest."),
+    ],
+) -> None:
+    """Compare two ignored IBKR snapshots without broker contact."""
+
+    report = compare_ibkr_sessions(
+        IBKRSessionCompareRequest(
+            baseline_manifest_path=baseline_manifest.as_posix(),
+            candidate_manifest_path=candidate_manifest.as_posix(),
+        )
+    )
+    json_path, md_path = Journal().write_cycle(
+        "ibkr_session_compare",
+        _report_dict(report),
+    )
+    console.print("[bold]IBKR session comparison[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Order routing: disabled.")
+    _print_ibkr_session_compare_result(report)
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
         raise typer.Exit(code=1)
 
 
@@ -3609,14 +3683,23 @@ def _fetch_historical_snapshot_report(
     what_to_show: str,
     use_rth: int,
     timeout: float,
+    end_datetime: datetime | None = None,
+    volume_unit: HistoricalVolumeUnit = HistoricalVolumeUnit.UNKNOWN,
 ) -> HistoricalSnapshotReport:
+    request_options: dict[str, Any] = {
+        "duration": duration,
+        "bar_size": bar_size,
+        "what_to_show": what_to_show,
+        "use_rth": use_rth,
+        "timeout": timeout,
+    }
+    if end_datetime is not None:
+        request_options["end_datetime"] = end_datetime
+    if volume_unit != HistoricalVolumeUnit.UNKNOWN:
+        request_options["volume_unit"] = volume_unit
     report = _ibkr_client(config).request_historical_snapshots(
         symbols,
-        duration=duration,
-        bar_size=bar_size,
-        what_to_show=what_to_show,
-        use_rth=use_rth,
-        timeout=timeout,
+        **request_options,
     )
     timestamp_slug = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     stored_results = [
@@ -3645,6 +3728,20 @@ def _validate_timeout_option(timeout: float | None) -> float | None:
         console.print("[red]Timeout must be greater than zero seconds.[/red]")
         raise typer.Exit(code=2)
     return timeout
+
+
+def _parse_aware_datetime_option(value: str | None, option_name: str) -> datetime | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        console.print(f"[red]{option_name} must be a valid ISO timestamp.[/red]")
+        raise typer.Exit(code=2) from exc
+    if parsed.tzinfo is None:
+        console.print(f"[red]{option_name} must include an explicit timezone.[/red]")
+        raise typer.Exit(code=2)
+    return parsed
 
 
 def _validate_non_negative_seconds_option(value: float, maximum: float) -> float:
@@ -3680,6 +3777,7 @@ def _report_dict(
         | HistoricalReadinessReport
         | HistoricalSnapshotReport
         | IBKRDataDiagnosticsReport
+        | IBKRSessionCompareReport
         | InertStrategyRunnerReport
         | MarketDataDiagnosticReport
         | AlphaTestSummaryReport
@@ -4642,7 +4740,23 @@ def _print_paper_reconcile_result(report: PaperReconcileReport) -> None:
     table.add_row("Account verified", str(report.account_summary_verified).lower())
     table.add_row("Account source", report.account_summary_source)
     table.add_row("Positions available", str(report.broker_positions_available).lower())
+    table.add_row(
+        "Open-orders query completed",
+        str(report.open_orders_query_completed).lower(),
+    )
+    table.add_row(
+        "Zero open orders confirmed",
+        str(report.zero_open_orders_confirmed).lower(),
+    )
     table.add_row("Open orders", str(report.open_order_count))
+    table.add_row(
+        "Executions query completed",
+        str(report.executions_query_completed).lower(),
+    )
+    table.add_row(
+        "Zero executions confirmed",
+        str(report.zero_executions_confirmed).lower(),
+    )
     table.add_row("Latest order IDs", _format_ints(report.latest_order_ids))
     table.add_row("Latest perm IDs", _format_ints(report.latest_perm_ids))
     table.add_row("Submitted orders", str(report.submitted_orders).lower())
@@ -4700,8 +4814,15 @@ def _print_paper_reconcile_result(report: PaperReconcileReport) -> None:
         source_table = Table(title="Source Reports")
         source_table.add_column("Report")
         source_table.add_column("Path")
+        source_table.add_column("Compatibility")
         for label, path in sorted(report.source_report_paths.items()):
-            source_table.add_row(label, path)
+            source_table.add_row(
+                label,
+                path,
+                _enum_value(
+                    report.source_report_compatibility.get(label, "unknown")
+                ),
+            )
         console.print(source_table)
     if report.warnings:
         console.print("[yellow]Paper reconciliation warnings[/yellow]")
@@ -4979,10 +5100,14 @@ def _print_market_data_result(report: MarketDataDiagnosticReport) -> None:
     quote_table.add_column("Bid Size")
     quote_table.add_column("Ask Size")
     quote_table.add_column("Last Size")
+    quote_table.add_column("Midpoint")
     quote_table.add_column("Spread")
     quote_table.add_column("Spread bps")
-    quote_table.add_column("Age")
-    quote_table.add_column("Stale")
+    quote_table.add_column("Transport Age")
+    quote_table.add_column("Transport Stale")
+    quote_table.add_column("Market Time")
+    quote_table.add_column("Market Age")
+    quote_table.add_column("Market Freshness Known")
 
     resolutions = {item.symbol: item for item in report.contract_resolutions}
     spreads = {item.symbol: item for item in report.spread_diagnostics}
@@ -4996,9 +5121,9 @@ def _print_market_data_result(report: MarketDataDiagnosticReport) -> None:
             if quote and quote.market_data_type.received
             else "n/a"
         )
-        quote_age = (
-            str(quote.quote_age_seconds)
-            if quote and quote.quote_age_seconds is not None
+        transport_age = (
+            str(quote.transport_age_seconds)
+            if quote and quote.transport_age_seconds is not None
             else "n/a"
         )
         quote_table.add_row(
@@ -5012,10 +5137,18 @@ def _print_market_data_result(report: MarketDataDiagnosticReport) -> None:
             str(quote.bid_size) if quote and quote.bid_size is not None else "n/a",
             str(quote.ask_size) if quote and quote.ask_size is not None else "n/a",
             str(quote.last_size) if quote and quote.last_size is not None else "n/a",
+            str(spread.midpoint) if spread and spread.midpoint is not None else "n/a",
             str(spread.spread) if spread and spread.spread is not None else "n/a",
             str(spread.spread_bps) if spread and spread.spread_bps is not None else "n/a",
-            quote_age,
-            str(quote.stale) if quote else "n/a",
+            transport_age,
+            str(quote.transport_stale) if quote else "n/a",
+            quote.market_event_time.isoformat()
+            if quote and quote.market_event_time is not None
+            else "n/a",
+            str(quote.market_event_age_seconds)
+            if quote and quote.market_event_age_seconds is not None
+            else "unknown",
+            str(quote.market_freshness_known) if quote else "n/a",
         )
     console.print(quote_table)
 
@@ -5235,6 +5368,11 @@ def _print_history_snapshot_result(report: HistoricalSnapshotReport) -> None:
     table.add_row("Bar size", report.request.bar_size)
     table.add_row("What to show", report.request.what_to_show)
     table.add_row("Use RTH", str(report.request.use_rth))
+    table.add_row(
+        "End datetime",
+        report.request.end_datetime.isoformat() if report.request.end_datetime else "now",
+    )
+    table.add_row("Volume unit", _enum_value(report.request.volume_unit))
     table.add_row("Final status", report.final_status)
     table.add_row("Order routing", "disabled")
     table.add_row("No order APIs invoked", "true")
@@ -5341,14 +5479,32 @@ def _print_ibkr_data_diagnostics_result(report: IBKRDataDiagnosticsReport) -> No
     table.add_row("Bars", f"{report.bar_count} / {report.min_bars}")
     table.add_row("Bar count passed", str(report.bar_count_passed))
     table.add_row("First bar", report.first_bar_timestamp or "n/a")
-    table.add_row("Latest bar", report.latest_bar_timestamp or "n/a")
-    latest_age = (
-        f"{report.latest_bar_age_minutes:.2f} minutes"
-        if report.latest_bar_age_minutes is not None
+    table.add_row("Latest raw bar", report.latest_bar_timestamp or "n/a")
+    table.add_row("Latest parse status", report.latest_bar_parse_status)
+    table.add_row(
+        "Latest start UTC",
+        report.latest_bar_start_utc.isoformat() if report.latest_bar_start_utc else "n/a",
+    )
+    table.add_row(
+        "Latest end UTC",
+        report.latest_bar_end_utc.isoformat() if report.latest_bar_end_utc else "n/a",
+    )
+    start_age = (
+        f"{report.latest_bar_start_age_minutes:.2f} minutes"
+        if report.latest_bar_start_age_minutes is not None
         else "n/a"
     )
-    table.add_row("Latest bar age", latest_age)
-    table.add_row("Freshness gate", f"<= {report.stale_after_minutes} minutes")
+    end_age = (
+        f"{report.latest_bar_interval_end_age_minutes:.2f} minutes"
+        if report.latest_bar_interval_end_age_minutes is not None
+        else "n/a"
+    )
+    table.add_row("Bar-start age", start_age)
+    table.add_row("Completed interval-end age", end_age)
+    table.add_row(
+        "Freshness gate",
+        f"completed interval end <= {report.stale_after_minutes} minutes",
+    )
     table.add_row("Freshness passed", str(report.freshness_passed))
     table.add_row("Market-data type requested", report.market_data_type_requested or "n/a")
     table.add_row("Market-data type received", report.market_data_type_received or "n/a")
@@ -5385,6 +5541,36 @@ def _print_ibkr_data_diagnostics_result(report: IBKRDataDiagnosticsReport) -> No
     if report.market_probe_errors:
         console.print("[red]Market-probe errors[/red]")
         for error in report.market_probe_errors:
+            console.print(f"- {escape(error)}")
+
+
+def _print_ibkr_session_compare_result(report: IBKRSessionCompareReport) -> None:
+    table = Table(title="IBKR Session Revisions")
+    table.add_column("Check")
+    table.add_column("Value")
+    table.add_row("Symbol", report.symbol or "n/a")
+    table.add_row("Parameters compatible", str(report.parameters_compatible))
+    table.add_row("Baseline bars", str(report.baseline_bar_count))
+    table.add_row("Candidate bars", str(report.candidate_bar_count))
+    table.add_row("Matching bars", str(report.matching_bar_count))
+    table.add_row("Revised bars", str(report.revised_bar_count))
+    table.add_row("Baseline only", str(report.baseline_only_count))
+    table.add_row("Candidate only", str(report.candidate_only_count))
+    table.add_row(
+        "Volume comparison authoritative",
+        str(report.volume_comparison_authoritative),
+    )
+    table.add_row("Final status", _enum_value(report.final_status))
+    table.add_row("Broker contacted", "false")
+    table.add_row("Order routing", "disabled")
+    console.print(table)
+    if report.warnings:
+        console.print("[yellow]Comparison warnings[/yellow]")
+        for warning in report.warnings:
+            console.print(f"- {escape(warning)}")
+    if report.errors:
+        console.print("[red]Comparison errors[/red]")
+        for error in report.errors:
             console.print(f"- {escape(error)}")
 
 

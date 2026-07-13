@@ -169,6 +169,8 @@ def build_readiness_report(
                     what_to_show=manifest.what_to_show,
                     use_rth=manifest.use_rth,
                     timeout_seconds=manifest.request_timeout,
+                    end_datetime=manifest.end_datetime,
+                    volume_unit=manifest.volume_unit,
                 )
             )
             if manifest.snapshot_path:
@@ -284,7 +286,7 @@ def readiness_summary_for_snapshot(
     timestamps = [timestamp for timestamp, _bar in parsed]
     sorted_timestamps = timestamps == sorted(timestamps)
     duplicate_timestamps_count = len(timestamps) - len(set(timestamps))
-    expected_gap_seconds = _bar_size_seconds(manifest.bar_size)
+    expected_gap_seconds = bar_size_seconds(manifest.bar_size)
     largest_gap_seconds: float | None = None
     missing_timestamp_gaps: list[str] = []
     sorted_values = sorted(timestamps)
@@ -440,7 +442,9 @@ def parse_ibkr_bar_timestamp(value: str) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def _bar_size_seconds(value: str) -> float | None:
+def bar_size_seconds(value: str) -> float | None:
+    """Return the duration in seconds for a supported IBKR bar-size string."""
+
     match = re.match(r"^\s*(\d+)\s*([A-Za-z]+)", value)
     if not match:
         return None

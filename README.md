@@ -234,12 +234,22 @@ Broker data requests treat IBKR farm-status callbacks as readiness diagnostics. 
 
 `market-probe` is also read-only. It may call IBKR contract, market-data, and
 historical-data request APIs, then cleans up data requests with `cancelMktData`
-and `cancelHistoricalData`. It does not submit, modify, or cancel orders.
+and `cancelHistoricalData`. It writes type-specific
+`latest_market_probe_delayed` or `latest_market_probe_live` aliases in addition
+to the generic audit alias. Quote callback time is reported as `received_at`
+and `transport_age_seconds`; it is never represented as exchange-event
+freshness when IBKR supplies no market-event timestamp. It does not submit,
+modify, or cancel orders.
 
 `history-snapshot` is read-only data infrastructure. It requests bounded
 historical bars, stores local JSONL snapshots under `data/historical/`, writes
 matching manifests, and produces readiness reports for future backtesting and
-simulation work. The snapshots are generated artifacts and are ignored by Git.
+simulation work. `--end-datetime` accepts a timezone-aware ISO timestamp and
+`--volume-unit` records an operator attestation (`unknown`, `shares`, or
+`round_lots`) in the request and manifest. `ibkr-session-compare` compares two
+ignored revisions offline and treats volume differences as authoritative only
+when both manifests attest the same non-unknown unit. The snapshots are
+generated artifacts and are ignored by Git.
 
 `history-index`, `history-load`, and `history-inspect` are offline-only. They
 read local snapshot JSONL and manifest files, normalize bars into reusable
@@ -420,7 +430,12 @@ python -m trader.cli paper-ledger-update --campaign-id campaign-YYYYMMDD-spy-001
 positions, broker open orders, current-day execution/commission evidence,
 latest local order IDs/perm IDs, and a broker-state fingerprint without
 placing, modifying, or canceling orders. It distinguishes a completed
-zero-position response from unavailable positions. `alpha-test-summary` is offline-only
+zero-position response from unavailable positions, and does the same for empty
+open-order and execution responses only after their IBKR end callbacks arrive.
+Current reports carry schema versions; legacy order artifacts are labeled
+`legacy_incompatible`. Standalone broker reconciliation may finish with that
+warning, but campaign eligibility and ledger updates reject non-current source
+evidence. `alpha-test-summary` is offline-only
 and aggregates the latest alpha shadow, paper smoke, alpha paper, and
 reconciliation reports into a no-secret campaign summary. Use one no-secret
 `campaign_id` across `alpha-shadow-run`, `paper-order-smoke`, `alpha-paper-run`,
@@ -462,8 +477,9 @@ market-hours shadow testing. Run it after a fresh `broker-probe` and
 `history-snapshot --symbols SPY --duration "1 D" --bar-size "5 mins"
 --what-to-show TRADES --use-rth 1`. It reads ignored local reports only,
 requires same-commit broker/account evidence, confirms at least `50` SPY bars,
-checks the latest 5-minute bar age against `15` minutes, surfaces live
-market-data subscription errors from the latest `market-probe` report, and
+checks the latest completed 5-minute interval end against `15` minutes,
+surfaces live market-data subscription errors only from
+`latest_market_probe_live.json`, and
 writes JSON/Markdown diagnostics. It never contacts IBKR and reports
 `submitted_orders=false`, `paper_orders_enabled=false`, and
 `order_api_invoked=false`.
@@ -474,7 +490,9 @@ that do not yet have live SPY API market data. Run it only after a delayed
 `history-snapshot`. It uses the same broker/account and bar-count evidence, but
 defaults to a wider `30` minute freshness gate, reports
 `delayed_shadow_precheck_passed`, keeps `strict_shadow_precheck_passed=false`,
-and marks reports `graduation_eligible=false`.
+marks reports `graduation_eligible=false`, and reads only
+`latest_market_probe_delayed.json`. Requested/received data-type mismatches fail
+closed in both lanes.
 
 `alpha-shadow-daemon` is the first controlled autonomous mode. It repeats the
 existing read-only SPY shadow path for a bounded number of cycles, atomically

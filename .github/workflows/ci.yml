@@ -132,6 +132,7 @@ jobs:
             src/trader/data/research_vendor_decision.py \
             src/trader/data/research_catalog.py \
             src/trader/data/shadow_warmup.py \
+            src/trader/data/ibkr_session_compare.py \
             src/trader/data/quality_gate.py
       - name: Keep research backtest broker and order API free
         run: |
@@ -144,7 +145,8 @@ jobs:
             src/trader/data/research_instrument_master.py \
             src/trader/data/research_vendor_decision.py \
             src/trader/data/research_catalog.py \
-            src/trader/data/shadow_warmup.py
+            src/trader/data/shadow_warmup.py \
+            src/trader/data/ibkr_session_compare.py
       - name: Enforce global production order API allowlist
         run: python scripts/check_order_api_allowlist.py
       - name: Enforce Alpaca historical-data-only boundary

@@ -34,6 +34,7 @@ from trader.models import (
     HistoricalSnapshotReport,
     HistoricalSnapshotRequest,
     HistoricalSnapshotResult,
+    HistoricalVolumeUnit,
     ManagedAccountInfo,
     MarketDataDiagnosticReport,
     MarketDataRequestType,
@@ -888,6 +889,8 @@ class IBKRClient:
         bar_size: str = _DEFAULT_HISTORICAL_BAR_SIZE,
         what_to_show: str = _DEFAULT_HISTORICAL_WHAT_TO_SHOW,
         use_rth: int = 1,
+        end_datetime: datetime | None = None,
+        volume_unit: HistoricalVolumeUnit = HistoricalVolumeUnit.UNKNOWN,
         timeout: float | None = None,
     ) -> HistoricalSnapshotResult:
         """Request one bounded read-only historical snapshot."""
@@ -898,6 +901,8 @@ class IBKRClient:
             bar_size=bar_size,
             what_to_show=what_to_show,
             use_rth=use_rth,
+            end_datetime=end_datetime,
+            volume_unit=volume_unit,
             timeout=timeout,
         )
         if report.results:
@@ -910,6 +915,8 @@ class IBKRClient:
             what_to_show=what_to_show,
             use_rth=use_rth,
             timeout_seconds=request_timeout,
+            end_datetime=end_datetime,
+            volume_unit=volume_unit,
         )
         return HistoricalSnapshotResult(
             symbol=symbol.strip().upper(),
@@ -927,6 +934,8 @@ class IBKRClient:
         bar_size: str = _DEFAULT_HISTORICAL_BAR_SIZE,
         what_to_show: str = _DEFAULT_HISTORICAL_WHAT_TO_SHOW,
         use_rth: int = 1,
+        end_datetime: datetime | None = None,
+        volume_unit: HistoricalVolumeUnit = HistoricalVolumeUnit.UNKNOWN,
         timeout: float | None = None,
     ) -> HistoricalSnapshotReport:
         """Request bounded read-only historical snapshots for symbols."""
@@ -941,6 +950,8 @@ class IBKRClient:
             what_to_show=what_to_show,
             use_rth=use_rth,
             timeout_seconds=request_timeout,
+            end_datetime=end_datetime,
+            volume_unit=volume_unit,
         )
         results: list[HistoricalSnapshotResult] = []
         connected_before_disconnect = False
@@ -1539,7 +1550,7 @@ class IBKRClient:
             app.reqHistoricalData(
                 req_id,
                 contract,
-                "",
+                _historical_end_datetime(request.end_datetime),
                 request.duration,
                 request.bar_size,
                 request.what_to_show,
@@ -1621,6 +1632,8 @@ class IBKRClient:
             bar_size=request.bar_size,
             what_to_show=request.what_to_show,
             use_rth=request.use_rth,
+            end_datetime=request.end_datetime,
+            volume_unit=request.volume_unit,
             bar_count=len(bars),
             first_bar_time=first_bar_time,
             last_bar_time=last_bar_time,
@@ -1653,8 +1666,12 @@ class IBKRClient:
         warning: str | None = None,
     ) -> QuoteSnapshot:
         values = app.quote_values.get(req_id, {})
-        timestamp = app.quote_timestamps.get(req_id)
-        age = round((utc_now() - timestamp).total_seconds(), 2) if timestamp else None
+        received_at = app.quote_timestamps.get(req_id)
+        transport_age = (
+            round((utc_now() - received_at).total_seconds(), 2)
+            if received_at
+            else None
+        )
         received_code = app.market_data_types.get(req_id)
         received_name = _MARKET_DATA_TYPE_BY_CODE.get(received_code or -1)
         warnings: list[str] = []
@@ -1673,8 +1690,14 @@ class IBKRClient:
             for error in self._errors_for_req(req_id)
         ):
             warnings.append("IBKR reported market-data permission/subscription issue")
+        warnings.append(
+            "IBKR bid/ask callbacks do not provide an exchange-event timestamp here; "
+            "market freshness is unknown and callback receipt age is transport age only"
+        )
 
-        stale = age is None or age > _QUOTE_STALE_AFTER_SECONDS
+        transport_stale = (
+            transport_age is None or transport_age > _QUOTE_STALE_AFTER_SECONDS
+        )
         ticks = [
             tick.model_copy(update={"symbol": symbol})
             for tick in app.quote_ticks.get(req_id, [])
@@ -1694,9 +1717,12 @@ class IBKRClient:
             bid_size=values.get("bid_size"),
             ask_size=values.get("ask_size"),
             last_size=values.get("last_size"),
-            quote_timestamp=timestamp,
-            quote_age_seconds=age,
-            stale=stale,
+            received_at=received_at,
+            transport_age_seconds=transport_age,
+            transport_stale=transport_stale,
+            market_event_time=None,
+            market_event_age_seconds=None,
+            market_freshness_known=False,
             ticks=ticks,
             errors=self._errors_for_req(req_id),
             warnings=warnings,
@@ -1984,7 +2010,16 @@ def _spread_for_quote(quote: QuoteSnapshot) -> SpreadDiagnostic:
     return SpreadDiagnostic(
         symbol=quote.symbol,
         has_bid_ask=True,
+        midpoint=mid,
         spread=spread,
         spread_bps=spread_bps,
         warnings=warnings,
     )
+
+
+def _historical_end_datetime(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        raise ValueError("historical end_datetime must include an explicit timezone")
+    return value.astimezone(UTC).strftime("%Y%m%d-%H:%M:%S")

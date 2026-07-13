@@ -85,6 +85,7 @@ class TimeoutFakeApp:
         self.requested_market_data_type: int | None = None
         self.cancelled_market_data: list[int] = []
         self.cancelled_historical_data: list[int] = []
+        self.historical_end_datetimes: list[str] = []
 
     def connect(self, _host: str, _port: int, _clientId: int) -> bool:
         self.connected = True
@@ -135,7 +136,7 @@ class TimeoutFakeApp:
         self,
         reqId: int,
         _contract: object,
-        _endDateTime: str,
+        endDateTime: str,
         _durationStr: str,
         _barSizeSetting: str,
         _whatToShow: str,
@@ -144,6 +145,7 @@ class TimeoutFakeApp:
         _keepUpToDate: bool,
         _chartOptions: list[Any],
     ) -> None:
+        self.historical_end_datetimes.append(endDateTime)
         self.historical_data_events.setdefault(reqId, threading.Event()).set()
 
     def cancelHistoricalData(self, reqId: int) -> None:
@@ -270,7 +272,7 @@ class MarketDataSuccessFakeApp(TimeoutFakeApp):
         self,
         reqId: int,
         contract: object,
-        _endDateTime: str,
+        endDateTime: str,
         _durationStr: str,
         _barSizeSetting: str,
         _whatToShow: str,
@@ -280,6 +282,7 @@ class MarketDataSuccessFakeApp(TimeoutFakeApp):
         _chartOptions: list[Any],
     ) -> None:
         assert keepUpToDate is False
+        self.historical_end_datetimes.append(endDateTime)
         symbol = str(getattr(contract, "symbol", "SPY"))
         self.historical_bars[reqId] = [
             HistoricalBar(
@@ -842,7 +845,13 @@ def test_market_data_diagnostic_captures_delayed_type_ticks_spread_and_history()
     assert quote.bid_size == Decimal("100")
     assert quote.ask_size == Decimal("200")
     assert quote.last_size == Decimal("50")
-    assert quote.stale is False
+    assert quote.transport_stale is False
+    assert quote.transport_age_seconds is not None
+    assert quote.market_event_time is None
+    assert quote.market_event_age_seconds is None
+    assert quote.market_freshness_known is False
+    assert any("transport age only" in warning for warning in quote.warnings)
+    assert report.spread_diagnostics[0].midpoint == Decimal("500.15")
     assert report.spread_diagnostics[0].spread == Decimal("0.10")
     assert report.spread_diagnostics[0].spread_bps is not None
     assert report.historical_data[0].ok is True
@@ -1003,6 +1012,30 @@ def test_historical_snapshot_collection_and_completion() -> None:
     assert result.manifest is not None
     assert result.manifest.bar_count == 1
     assert fake_app.cancelled_historical_data == []
+
+
+def test_historical_snapshot_normalizes_aware_end_datetime_to_ibkr_utc() -> None:
+    config = load_config(env={}, load_dotenv_file=False)
+    fake_app = MarketDataSuccessFakeApp()
+    client = IBKRClient(
+        config,
+        app_factory=lambda: fake_app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+    end_datetime = datetime.fromisoformat("2026-07-13T16:00:00-04:00")
+
+    report = client.request_historical_snapshots(
+        ["SPY"],
+        end_datetime=end_datetime,
+        timeout=0.1,
+    )
+
+    assert report.ok is True
+    assert fake_app.historical_end_datetimes == ["20260713-20:00:00"]
+    assert report.request.end_datetime == end_datetime
+    assert report.results[0].manifest is not None
+    assert report.results[0].manifest.end_datetime == end_datetime
 
 
 def test_historical_snapshot_timeout_returns_structured_failure_and_cleans_up() -> None:
@@ -1413,6 +1446,7 @@ def test_market_probe_command_handles_mocked_success(
     assert "Read-only market-data probe" in result.output
     assert "No order APIs invoked" in result.output
     assert (tmp_path / "reports" / "latest_market_probe.json").exists()
+    assert (tmp_path / "reports" / "latest_market_probe_delayed.json").exists()
 
 
 def test_history_snapshot_command_handles_mocked_success(

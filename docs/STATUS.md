@@ -177,7 +177,11 @@
 - Offline `evaluator-compare` compares approved moving-average diagnostic condition counts across explicit window candidates only, reports `broker_contacted=false`, `generated_signals=false`, `signal_count=0`, `order_intents_generated=false`, `orders_simulated=false`, `portfolio_accounting=false`, and `pnl_calculated=false`.
 - Latest local data-quality check found `DBA` has `2` zero-volume bars; default gate fails closed, while an explicit `--max-zero-volume-bars 2` threshold documents the known partial symbol.
 - Latest local `evaluator-compare` completed for `SPY,AAPL,GLD,USO,DBA` with window pairs `5:20,10:30`, `390` observations per candidate, and no generated signals or P&L.
-- `paper-reconcile` distinguishes completed zero-position responses from unavailable positions, requests current-day execution/commission evidence, writes a broker-state fingerprint, and verifies source-report campaign IDs while keeping `submitted_orders=false` and `order_api_invoked=false`.
+- `paper-reconcile` distinguishes completed zero-position, zero-open-order, and
+  zero-execution responses from unavailable queries, requests current-day
+  execution/commission evidence, writes a broker-state fingerprint, and labels
+  legacy source reports while keeping `submitted_orders=false` and
+  `order_api_invoked=false`.
 - Alpha shadow, paper smoke, alpha paper, reconcile, and alpha summary reports now carry a no-secret `campaign_id`; reconcile, alpha paper, and summary fail closed when source report campaign IDs do not match.
 - `alpha-campaign-run` orchestrates the existing staged SPY paper-alpha workflow in `shadow` or `paper` mode, writes a top-level campaign report, and keeps order APIs confined to the existing paper execution boundary.
 - `paper-ledger-update` reads ignored summary and reconciliation reports offline, validates current-commit same-campaign broker truth, and upserts one masked local JSONL campaign row under ignored `state/`.
@@ -192,8 +196,16 @@
   distinct XNYS dates for implementation graduation and ten clean sessions with
   opening/midday/closing coverage for lifecycle-pilot eligibility. Delayed
   reports never count.
-- `ibkr-data-diagnostics` reads ignored local reports offline, verifies strict SPY `1 D` / `5 mins` / `TRADES` / `use_rth=1` data freshness and broker/account evidence, surfaces live market-data permission errors from `market-probe`, and keeps daemon startup blocked when latest-bar age exceeds the configured strict gate or live SPY API market data is unavailable.
-- `ibkr-delayed-data-diagnostics` and `alpha-shadow-daemon-delayed` provide a read-only delayed-data engineering lane while live SPY API data is unavailable. Their reports are explicitly non-graduating and must not unlock paper-daemon design or paper execution.
+- `ibkr-data-diagnostics` reads ignored local reports offline, uses canonical
+  zone-aware timestamps, applies freshness to the completed interval end at
+  diagnostics run time, consumes only the live probe alias, and rejects
+  requested/received market-data mismatches.
+- `ibkr-delayed-data-diagnostics` consumes only the delayed probe alias;
+  `alpha-shadow-daemon-delayed` remains read-only and non-graduating while live
+  SPY API data is unavailable.
+- Dated `history-snapshot` captures now support timezone-aware end times and
+  volume-unit attestations. Offline `ibkr-session-compare` classifies T+1
+  revisions without broker contact.
 
 ## Next Recommended Steps
 

@@ -172,6 +172,16 @@ def _load_report(
     payload, errors = _load_mapping(path, label=label)
     if payload is None:
         return None, errors
+    expected_schema = {
+        PaperOrderSmokeReport: 2,
+        AlphaPaperRunReport: 2,
+        PaperReconcileReport: 2,
+    }.get(model)
+    if expected_schema is not None and payload.get("schema_version") != expected_schema:
+        return None, [
+            f"{label} is legacy_incompatible; rerun it on report schema "
+            f"{expected_schema}"
+        ]
     try:
         return model.model_validate(payload), []
     except ValueError as exc:
@@ -303,6 +313,29 @@ def _reconcile_errors(
         errors.append("paper-reconcile report allowed live order risk")
     if not report.account_summary_verified:
         errors.append("paper-reconcile lacks verified account summary")
+    if not report.open_orders_query_completed:
+        errors.append("paper-reconcile did not complete the broker open-orders query")
+    if not report.executions_query_completed:
+        errors.append("paper-reconcile did not complete the broker executions query")
+    expected_sources = {"paper_smoke_report", "alpha_paper_report"}
+    missing_compatibility = sorted(
+        expected_sources - set(report.source_report_compatibility)
+    )
+    if missing_compatibility:
+        errors.append(
+            "paper-reconcile lacks source compatibility evidence: "
+            + ", ".join(missing_compatibility)
+        )
+    incompatible_sources = sorted(
+        label
+        for label, status in report.source_report_compatibility.items()
+        if str(status) != "current"
+    )
+    if incompatible_sources:
+        errors.append(
+            "paper-reconcile contains non-current source evidence: "
+            + ", ".join(incompatible_sources)
+        )
     return errors
 
 

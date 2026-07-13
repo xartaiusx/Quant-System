@@ -436,6 +436,9 @@ export IBKR_CLIENT_ID=61
 python -m trader.cli broker-probe --timeout 30
 
 export IBKR_CLIENT_ID=62
+python -m trader.cli market-probe --symbols SPY --data-type live --historical --timeout 30
+
+export IBKR_CLIENT_ID=63
 python -m trader.cli history-snapshot --symbols SPY --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1 --timeout 45
 
 python -m trader.cli ibkr-data-diagnostics --min-bars 50 --stale-after-minutes 15
@@ -447,22 +450,23 @@ Start the daemon only when diagnostics reports:
 - broker connected
 - account verified
 - bar count at least `50`
-- latest SPY 5-minute bar age at or below `15` minutes
+- latest completed SPY 5-minute interval-end age at or below `15` minutes
+- requested and callback-confirmed market-data type both `live`
 - `strict_shadow_precheck_passed=true`
 - `submitted_orders=false`
 - `order_api_invoked=false`
 
 If broker/account evidence or freshness fails, do not start the daemon. Keep
 Read-Only API enabled, keep `ALLOW_PAPER_ORDERS=false`, and investigate the
-reported blocker first. A latest-bar age near the common delayed-data range is
-treated as a data-permission or delayed-data diagnostic, not a reason to loosen
-the autonomous readiness gate.
+reported blocker first. A completed interval-end age near the common
+delayed-data range is treated as a data-permission or delayed-data diagnostic,
+not a reason to loosen the autonomous readiness gate.
 
 If diagnostics reports delayed-data-like lag, run a read-only live
 market-data probe and rerun diagnostics:
 
 ```bash
-export IBKR_CLIENT_ID=63
+export IBKR_CLIENT_ID=64
 python -m trader.cli market-probe --symbols SPY --data-type live --historical --timeout 30
 python -m trader.cli ibkr-data-diagnostics --min-bars 50 --stale-after-minutes 15
 ```
@@ -477,10 +481,10 @@ separate delayed engineering lane. This lane is read-only, non-graduating, and
 must not unlock paper execution:
 
 ```bash
-export IBKR_CLIENT_ID=64
+export IBKR_CLIENT_ID=65
 python -m trader.cli market-probe --symbols SPY --data-type delayed --historical --timeout 30
 
-export IBKR_CLIENT_ID=65
+export IBKR_CLIENT_ID=66
 python -m trader.cli history-snapshot --symbols SPY --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1 --timeout 45
 
 python -m trader.cli ibkr-delayed-data-diagnostics --min-bars 50 --stale-after-minutes 30
@@ -564,7 +568,9 @@ Expected behavior:
 - defaults to delayed data
 - resolves SMART/USD stock contracts
 - requests market-data type before quote ticks
-- captures bid, ask, last, close, sizes, quote timestamp, spread, spread bps, and staleness when available
+- captures bid, ask, last, close, sizes, midpoint, spread, and spread bps
+- reports callback receipt as transport time/age; market-event freshness remains
+  unknown when no exchange-event timestamp is available
 - optionally requests a small historical-bar sample
 - cleans up data subscriptions with `cancelMktData` and `cancelHistoricalData`
 - places no orders and invokes no order APIs
@@ -576,6 +582,10 @@ reports/market_probe_<timestamp>.json
 reports/market_probe_<timestamp>.md
 reports/latest_market_probe.json
 reports/latest_market_probe.md
+reports/latest_market_probe_delayed.json
+reports/latest_market_probe_delayed.md
+reports/latest_market_probe_live.json
+reports/latest_market_probe_live.md
 ```
 
 Common outcomes:
@@ -585,7 +595,8 @@ Common outcomes:
 - Delayed data unavailable: confirm IBKR delayed-data settings and try during market hours.
 - Contract ambiguity: the probe selects a listed USD equity match and records an ambiguity warning.
 - Missing bid/ask outside market hours: the probe may still capture last, close, market-data type, or historical bars.
-- Stale quotes: quote age is reported and stale quotes are flagged.
+- Old callback delivery: transport age is reported and transport staleness is
+  flagged; it is not described as market freshness.
 - Historical data pacing or permission issue: the historical section records IBKR errors or timeout diagnostics.
 
 ## Historical Snapshot Ingestion
@@ -594,6 +605,8 @@ Common outcomes:
 python -m trader.cli history-fetch --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
 python -m trader.cli history-readiness --latest
 python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
+python -m trader.cli history-snapshot --symbols SPY --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1 --end-datetime "2026-07-13T16:00:00-04:00" --volume-unit shares
+python -m trader.cli ibkr-session-compare --baseline-manifest <path> --candidate-manifest <path>
 scripts/run-history-snapshot.sh
 ```
 
