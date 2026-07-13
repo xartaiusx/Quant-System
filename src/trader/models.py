@@ -152,6 +152,32 @@ class HistoricalReadinessStatus(StrEnum):
     FAILED = "failed"
 
 
+class HistoricalVolumeUnit(StrEnum):
+    """Operator-attested volume units for an IBKR historical snapshot."""
+
+    UNKNOWN = "unknown"
+    SHARES = "shares"
+    ROUND_LOTS = "round_lots"
+
+
+class IBKRSessionCompareStatus(StrEnum):
+    """Offline comparison outcomes for two IBKR session snapshots."""
+
+    IDENTICAL = "identical"
+    REVISED = "revised"
+    INCOMPATIBLE = "incompatible"
+    FAILED = "failed"
+
+
+class ReportCompatibilityStatus(StrEnum):
+    """Compatibility of ignored local evidence with the current report schema."""
+
+    CURRENT = "current"
+    LEGACY_INCOMPATIBLE = "legacy_incompatible"
+    MISSING = "missing"
+    INVALID = "invalid"
+
+
 class HistoricalLoadStatus(StrEnum):
     """Offline historical snapshot load states."""
 
@@ -726,12 +752,33 @@ class QuoteSnapshot(SerializableModel):
     bid_size: Decimal | None = None
     ask_size: Decimal | None = None
     last_size: Decimal | None = None
-    quote_timestamp: datetime | None = None
-    quote_age_seconds: float | None = None
-    stale: bool = True
+    received_at: datetime | None = None
+    transport_age_seconds: float | None = None
+    transport_stale: bool = True
+    market_event_time: datetime | None = None
+    market_event_age_seconds: float | None = None
+    market_freshness_known: bool = False
     ticks: list[MarketDataTick] = Field(default_factory=list)
     errors: list[BrokerErrorEvent] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+    @property
+    def quote_timestamp(self) -> datetime | None:
+        """Compatibility accessor for code that has not migrated to received_at."""
+
+        return self.received_at
+
+    @property
+    def quote_age_seconds(self) -> float | None:
+        """Compatibility accessor; this is transport age, not market-event age."""
+
+        return self.transport_age_seconds
+
+    @property
+    def stale(self) -> bool:
+        """Compatibility accessor; this describes callback transport staleness only."""
+
+        return self.transport_stale
 
 
 class SpreadDiagnostic(SerializableModel):
@@ -739,6 +786,7 @@ class SpreadDiagnostic(SerializableModel):
 
     symbol: str
     has_bid_ask: bool = False
+    midpoint: Decimal | None = None
     spread: Decimal | None = None
     spread_bps: Decimal | None = None
     warnings: list[str] = Field(default_factory=list)
@@ -885,6 +933,8 @@ class HistoricalSnapshotRequest(SerializableModel):
     what_to_show: str = "TRADES"
     use_rth: int = 1
     timeout_seconds: float = 30
+    end_datetime: datetime | None = None
+    volume_unit: HistoricalVolumeUnit = HistoricalVolumeUnit.UNKNOWN
 
     @field_validator("symbols")
     @classmethod
@@ -921,6 +971,13 @@ class HistoricalSnapshotRequest(SerializableModel):
             raise ValueError("timeout_seconds must be greater than 0 and no more than 120")
         return value
 
+    @field_validator("end_datetime")
+    @classmethod
+    def validate_end_datetime(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("end_datetime must include an explicit timezone")
+        return value
+
 
 class HistoricalSnapshotBar(SerializableModel):
     """Persisted historical bar from a read-only IBKR snapshot."""
@@ -954,6 +1011,8 @@ class HistoricalSnapshotManifest(SerializableModel):
     bar_size: str
     what_to_show: str
     use_rth: int
+    end_datetime: datetime | None = None
+    volume_unit: HistoricalVolumeUnit = HistoricalVolumeUnit.UNKNOWN
     bar_count: int = 0
     first_bar_time: str | None = None
     last_bar_time: str | None = None
@@ -989,6 +1048,7 @@ class HistoricalSnapshotReport(SerializableModel):
 
     title: str = "Read-only Historical Snapshot"
     report_type: str = "history_snapshot"
+    schema_version: int = 2
     ok: bool
     mode: str
     host: str
@@ -1015,6 +1075,76 @@ class HistoricalSnapshotReport(SerializableModel):
         "This historical snapshot uses read-only data requests only and order routing is disabled."
     )
     timestamp: datetime = Field(default_factory=utc_now)
+
+
+class IBKRSessionBarRevision(SerializableModel):
+    """One timestamp-level difference between two ignored IBKR snapshots."""
+
+    timestamp: str
+    changed_fields: list[str] = Field(default_factory=list)
+    baseline: dict[str, Any] | None = None
+    candidate: dict[str, Any] | None = None
+
+
+class IBKRSessionCompareRequest(SerializableModel):
+    """Offline request to compare two historical snapshot manifests."""
+
+    baseline_manifest_path: str
+    candidate_manifest_path: str
+
+    @field_validator("baseline_manifest_path", "candidate_manifest_path")
+    @classmethod
+    def validate_manifest_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("IBKR session manifest paths must not be empty")
+        return normalized
+
+
+class IBKRSessionCompareReport(SerializableModel):
+    """Broker-free revision comparison for two ignored IBKR sessions."""
+
+    title: str = "IBKR Session Comparison"
+    report_type: str = "ibkr_session_compare"
+    command: str = "ibkr-session-compare"
+    schema_version: int = 1
+    ok: bool
+    request: IBKRSessionCompareRequest
+    symbol: str | None = None
+    baseline_generated_at: datetime | None = None
+    candidate_generated_at: datetime | None = None
+    baseline_bar_count: int = 0
+    candidate_bar_count: int = 0
+    matching_bar_count: int = 0
+    revised_bar_count: int = 0
+    baseline_only_count: int = 0
+    candidate_only_count: int = 0
+    parameters_compatible: bool = False
+    volume_comparison_authoritative: bool = False
+    baseline_volume_unit: HistoricalVolumeUnit = HistoricalVolumeUnit.UNKNOWN
+    candidate_volume_unit: HistoricalVolumeUnit = HistoricalVolumeUnit.UNKNOWN
+    baseline_checksum_sha256: str | None = None
+    candidate_checksum_sha256: str | None = None
+    revisions: list[IBKRSessionBarRevision] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    submitted_orders: bool = False
+    order_routing_enabled: bool = False
+    order_api_invoked: bool = False
+    no_order_guarantee: bool = True
+    final_status: IBKRSessionCompareStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_session_compare_safety(self) -> IBKRSessionCompareReport:
+        if self.broker_contacted or self.submitted_orders:
+            raise ValueError("ibkr-session-compare must remain offline and submit no orders")
+        if self.order_routing_enabled or self.order_api_invoked:
+            raise ValueError("ibkr-session-compare must not invoke order routing")
+        if not self.no_order_guarantee:
+            raise ValueError("ibkr-session-compare requires no_order_guarantee=true")
+        return self
 
 
 class HistoricalDataQualityIssue(SerializableModel):
@@ -5162,6 +5292,7 @@ class PaperOrderSmokeReport(SerializableModel):
 
     title: str = "IBKR Paper Order Smoke Run"
     report_type: str = "paper_order_smoke"
+    schema_version: int = 2
     command: str = "paper-order-smoke"
     commit_sha: str | None = None
     campaign_id: str | None = None
@@ -5329,6 +5460,7 @@ class AlphaPaperRunReport(SerializableModel):
 
     title: str = "IBKR Alpha Paper Run"
     report_type: str = "alpha_paper_run"
+    schema_version: int = 2
     command: str = "alpha-paper-run"
     ok: bool
     request: AlphaPaperRunRequest
@@ -5506,6 +5638,7 @@ class PaperReconcileReport(SerializableModel):
 
     title: str = "IBKR Paper Reconciliation"
     report_type: str = "paper_reconcile"
+    schema_version: int = 2
     command: str = "paper-reconcile"
     ok: bool
     request: PaperReconcileRequest
@@ -5530,13 +5663,20 @@ class PaperReconcileReport(SerializableModel):
     open_orders: list[BrokerOpenOrderSnapshot] = Field(default_factory=list)
     open_order_count: int = 0
     open_order_source: str = "broker_read_only_open_orders"
+    open_orders_query_completed: bool = False
+    zero_open_orders_confirmed: bool = False
     executions_snapshot: list[dict[str, Any]] = Field(default_factory=list)
     executions_available: bool = False
     executions_source: str = "not_implemented_in_current_ibkr_adapter"
+    executions_query_completed: bool = False
+    zero_executions_confirmed: bool = False
     execution_order_ids: list[int] = Field(default_factory=list)
     commission_reports: list[dict[str, Any]] = Field(default_factory=list)
     broker_state_fingerprint: str | None = None
     source_report_paths: dict[str, str] = Field(default_factory=dict)
+    source_report_compatibility: dict[str, ReportCompatibilityStatus] = Field(
+        default_factory=dict
+    )
     source_report_campaign_ids: dict[str, str | None] = Field(default_factory=dict)
     latest_order_evidence: list[PaperOrderEvidence] = Field(default_factory=list)
     latest_order_ids: list[int] = Field(default_factory=list)
@@ -5592,6 +5732,16 @@ class PaperReconcileReport(SerializableModel):
             raise ValueError("no_order_guarantee must remain true")
         if self.open_order_count != len(self.open_orders):
             raise ValueError("open_order_count must match open_orders length")
+        if self.zero_open_orders_confirmed != (
+            self.open_orders_query_completed and self.open_order_count == 0
+        ):
+            raise ValueError("zero_open_orders_confirmed must reflect a completed empty query")
+        if self.executions_available != self.executions_query_completed:
+            raise ValueError("executions_available must describe successful query availability")
+        if self.zero_executions_confirmed != (
+            self.executions_query_completed and not self.executions_snapshot
+        ):
+            raise ValueError("zero_executions_confirmed must reflect a completed empty query")
         return self
 
 
@@ -5936,13 +6086,26 @@ class IBKRDataDiagnosticsRequest(SerializableModel):
     broker_probe_report_path: str = "reports/latest_broker_probe.json"
     history_snapshot_report_path: str = "reports/latest_history_snapshot.json"
     history_readiness_report_path: str = "reports/latest_history_readiness.json"
-    market_probe_report_path: str | None = "reports/latest_market_probe.json"
+    market_probe_report_path: str | None = "reports/latest_market_probe_live.json"
     min_bars: int = 50
     stale_after_minutes: int = 15
     expected_duration: str = "1 D"
     expected_bar_size: str = "5 mins"
     expected_what_to_show: str = "TRADES"
     expected_use_rth: int = 1
+
+    @model_validator(mode="before")
+    @classmethod
+    def select_market_probe_alias(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "market_probe_report_path" in value:
+            return value
+        selected = dict(value)
+        data_policy = selected.get("data_policy", ShadowDataPolicy.STRICT_LIVE)
+        if str(getattr(data_policy, "value", data_policy)) == "delayed_engineering":
+            selected["market_probe_report_path"] = (
+                "reports/latest_market_probe_delayed.json"
+            )
+        return selected
 
     @field_validator("symbol")
     @classmethod
@@ -6000,6 +6163,7 @@ class IBKRDataDiagnosticsReport(SerializableModel):
 
     title: str = "IBKR Data Freshness Diagnostics"
     report_type: str = "ibkr_data_diagnostics"
+    schema_version: int = 2
     command: str = "ibkr-data-diagnostics"
     ok: bool
     request: IBKRDataDiagnosticsRequest
@@ -6023,6 +6187,13 @@ class IBKRDataDiagnosticsReport(SerializableModel):
     bar_count_passed: bool = False
     first_bar_timestamp: str | None = None
     latest_bar_timestamp: str | None = None
+    latest_bar_parse_status: str = "unavailable"
+    latest_bar_start_utc: datetime | None = None
+    latest_bar_end_utc: datetime | None = None
+    latest_bar_start_age_seconds: float | None = None
+    latest_bar_start_age_minutes: float | None = None
+    latest_bar_interval_end_age_seconds: float | None = None
+    latest_bar_interval_end_age_minutes: float | None = None
     latest_bar_age_seconds: float | None = None
     latest_bar_age_minutes: float | None = None
     stale_after_minutes: int = 15
@@ -6941,6 +7112,7 @@ class MarketDataDiagnosticReport(SerializableModel):
 
     title: str = "Read-only Market Data Probe"
     report_type: str = "market_probe"
+    schema_version: int = 2
     ok: bool
     mode: str
     host: str

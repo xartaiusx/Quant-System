@@ -208,11 +208,13 @@ class FakeOpenOrderBroker:
         orders: list[PaperBrokerOpenOrder] | None = None,
         executions: list[PaperBrokerExecution] | None = None,
         commissions: list[PaperBrokerCommissionReport] | None = None,
+        fail_open_orders: bool = False,
         fail_executions: bool = False,
     ) -> None:
         self.orders = orders or []
         self.executions = executions or []
         self.commissions = commissions or []
+        self.fail_open_orders = fail_open_orders
         self.fail_executions = fail_executions
         self.connected = False
         self.disconnected = False
@@ -226,6 +228,8 @@ class FakeOpenOrderBroker:
 
     def request_open_orders(self, *, timeout: float) -> list[PaperBrokerOpenOrder]:
         del timeout
+        if self.fail_open_orders:
+            raise RuntimeError("open-order request timed out")
         return self.orders
 
     def request_executions(
@@ -267,7 +271,13 @@ def test_paper_reconcile_success_serializes_and_keeps_no_order_guarantee(
     assert report.zero_positions_confirmed is False
     assert report.positions_unavailable_reason is None
     assert report.open_order_count == 0
+    assert report.open_orders_query_completed is True
+    assert report.zero_open_orders_confirmed is True
     assert report.executions_source == "broker_read_only_current_day_executions"
+    assert report.executions_available is True
+    assert report.executions_query_completed is True
+    assert report.zero_executions_confirmed is True
+    assert set(report.source_report_compatibility.values()) == {"current"}
     assert report.broker_state_fingerprint
     assert report.latest_order_ids == [22, 23]
     assert report.latest_perm_ids == [2200, 2300]
@@ -447,6 +457,56 @@ def test_paper_reconcile_fails_when_execution_query_fails(
     assert report.ok is False
     assert report.final_status == PaperReconcileStatus.FAILED
     assert "execution-history query is unavailable" in " ".join(report.errors)
+
+
+def test_paper_reconcile_fails_when_open_order_query_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.paper_reconcile._current_commit_sha", lambda: "abc123")
+    selected_request = write_reports(tmp_path)
+
+    report = run_paper_reconcile(
+        config(),
+        selected_request,
+        broker_client_factory=lambda _: FakeBrokerClient(broker_report()),
+        open_order_broker_factory=lambda _: FakeOpenOrderBroker(fail_open_orders=True),
+    )
+
+    assert report.ok is False
+    assert report.open_orders_query_completed is False
+    assert report.zero_open_orders_confirmed is False
+    assert "open-order query is unavailable" in " ".join(report.errors)
+
+
+def test_paper_reconcile_labels_legacy_alpha_evidence_without_blocking_broker_truth(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("trader.paper_reconcile._current_commit_sha", lambda: "abc123")
+    selected_request = request(tmp_path)
+    Path(selected_request.paper_smoke_report_path).write_text(
+        json.dumps(smoke_report().model_dump(mode="json"))
+    )
+    legacy_alpha = alpha_report().model_dump(mode="json")
+    legacy_alpha.pop("schema_version")
+    Path(selected_request.alpha_paper_report_path).write_text(json.dumps(legacy_alpha))
+
+    report = run_paper_reconcile(
+        config(),
+        selected_request,
+        broker_client_factory=lambda _: FakeBrokerClient(broker_report()),
+        open_order_broker_factory=lambda _: FakeOpenOrderBroker(),
+    )
+
+    assert report.ok is True
+    assert report.final_status == PaperReconcileStatus.COMPLETED_WITH_WARNINGS
+    assert report.source_report_compatibility["paper_smoke_report"] == "current"
+    assert (
+        report.source_report_compatibility["alpha_paper_report"]
+        == "legacy_incompatible"
+    )
+    assert any("legacy_incompatible" in warning for warning in report.warnings)
 
 
 def test_paper_reconcile_reports_open_order_warning(tmp_path: Path, monkeypatch) -> None:

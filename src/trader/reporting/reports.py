@@ -17,6 +17,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return market_probe_markdown(payload)
     if payload.get("report_type") == "history_snapshot":
         return history_snapshot_markdown(payload)
+    if payload.get("report_type") == "ibkr_session_compare":
+        return ibkr_session_compare_markdown(payload)
     if payload.get("report_type") == "history_readiness":
         return history_readiness_markdown(payload)
     if payload.get("report_type") == "ibkr_data_diagnostics":
@@ -309,8 +311,14 @@ def market_probe_markdown(payload: Mapping[str, Any]) -> str:
                 f"`{symbol}` type=`{market_type.get('received')}` "
                 f"bid=`{quote.get('bid')}` ask=`{quote.get('ask')}` "
                 f"last=`{quote.get('last')}` close=`{quote.get('close')}` "
-                f"spread=`{spread.get('spread')}` spread_bps=`{spread.get('spread_bps')}` "
-                f"stale=`{quote.get('stale')}`"
+                f"midpoint=`{spread.get('midpoint')}` spread=`{spread.get('spread')}` "
+                f"spread_bps=`{spread.get('spread_bps')}` "
+                f"received_at=`{quote.get('received_at')}` "
+                f"transport_age_seconds=`{quote.get('transport_age_seconds')}` "
+                f"transport_stale=`{quote.get('transport_stale')}` "
+                f"market_event_time=`{quote.get('market_event_time')}` "
+                f"market_event_age_seconds=`{quote.get('market_event_age_seconds')}` "
+                f"market_freshness_known=`{quote.get('market_freshness_known')}`"
             )
     else:
         lines.append("- None")
@@ -371,6 +379,8 @@ def history_snapshot_markdown(payload: Mapping[str, Any]) -> str:
         f"- Bar size: `{request.get('bar_size', 'unknown')}`",
         f"- What to show: `{request.get('what_to_show', 'unknown')}`",
         f"- Use RTH: `{request.get('use_rth', 'unknown')}`",
+        f"- End datetime: `{request.get('end_datetime') or 'now'}`",
+        f"- Volume unit: `{request.get('volume_unit', 'unknown')}`",
         f"- Connected: `{payload.get('connected', False)}`",
         f"- Order routing enabled: `{payload.get('order_routing_enabled', False)}`",
         f"- No order guarantee: `{payload.get('no_order_guarantee', False)}`",
@@ -422,6 +432,47 @@ def history_snapshot_markdown(payload: Mapping[str, Any]) -> str:
     else:
         lines.append("- None")
 
+    return "\n".join(lines) + "\n"
+
+
+def ibkr_session_compare_markdown(payload: Mapping[str, Any]) -> str:
+    """Render an offline IBKR snapshot revision comparison."""
+
+    warnings = payload.get("warnings", [])
+    errors = payload.get("errors", [])
+    revisions = payload.get("revisions", [])
+    lines = [
+        f"# {payload.get('title', 'IBKR Session Comparison')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Symbol: `{payload.get('symbol') or 'n/a'}`",
+        f"- Parameters compatible: `{payload.get('parameters_compatible', False)}`",
+        f"- Baseline bars: `{payload.get('baseline_bar_count', 0)}`",
+        f"- Candidate bars: `{payload.get('candidate_bar_count', 0)}`",
+        f"- Matching bars: `{payload.get('matching_bar_count', 0)}`",
+        f"- Revised bars: `{payload.get('revised_bar_count', 0)}`",
+        f"- Baseline-only bars: `{payload.get('baseline_only_count', 0)}`",
+        f"- Candidate-only bars: `{payload.get('candidate_only_count', 0)}`",
+        "- Volume comparison authoritative: "
+        f"`{payload.get('volume_comparison_authoritative', False)}`",
+        f"- Baseline volume unit: `{payload.get('baseline_volume_unit', 'unknown')}`",
+        f"- Candidate volume unit: `{payload.get('candidate_volume_unit', 'unknown')}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', False)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', False)}`",
+        "",
+        "## Revisions",
+        "",
+    ]
+    if revisions:
+        for revision in revisions:
+            lines.append(
+                f"- `{revision.get('timestamp', 'unknown')}` "
+                f"fields=`{', '.join(revision.get('changed_fields', []))}`"
+            )
+    else:
+        lines.append("- None")
+    lines.extend(_warnings_and_errors(warnings, errors))
     return "\n".join(lines) + "\n"
 
 
@@ -547,8 +598,14 @@ def ibkr_data_diagnostics_markdown(payload: Mapping[str, Any]) -> str:
         f"- Bar count: `{payload.get('bar_count', 0)}`",
         f"- Bar count passed: `{payload.get('bar_count_passed', False)}`",
         f"- First bar: `{payload.get('first_bar_timestamp') or 'n/a'}`",
-        f"- Latest bar: `{payload.get('latest_bar_timestamp') or 'n/a'}`",
-        f"- Latest bar age minutes: `{payload.get('latest_bar_age_minutes')}`",
+        f"- Latest raw bar: `{payload.get('latest_bar_timestamp') or 'n/a'}`",
+        f"- Latest parse status: `{payload.get('latest_bar_parse_status', 'unknown')}`",
+        f"- Latest start UTC: `{payload.get('latest_bar_start_utc') or 'n/a'}`",
+        f"- Latest end UTC: `{payload.get('latest_bar_end_utc') or 'n/a'}`",
+        "- Latest bar-start age minutes: "
+        f"`{payload.get('latest_bar_start_age_minutes')}`",
+        "- Latest completed interval-end age minutes: "
+        f"`{payload.get('latest_bar_interval_end_age_minutes')}`",
         f"- Freshness passed: `{payload.get('freshness_passed', False)}`",
         f"- Market-data type requested: `{payload.get('market_data_type_requested') or 'n/a'}`",
         f"- Market-data type received: `{payload.get('market_data_type_received') or 'n/a'}`",
@@ -2806,6 +2863,7 @@ def paper_reconcile_markdown(payload: Mapping[str, Any]) -> str:
     errors = payload.get("errors", [])
     source_paths = payload.get("source_report_paths", {})
     source_campaigns = payload.get("source_report_campaign_ids", {})
+    source_compatibility = payload.get("source_report_compatibility", {})
     account_ids = payload.get("account_ids_masked", [])
     open_orders = payload.get("open_orders", [])
     executions = payload.get("executions_snapshot", [])
@@ -2835,8 +2893,16 @@ def paper_reconcile_markdown(payload: Mapping[str, Any]) -> str:
         f"- Positions unavailable reason: `{payload.get('positions_unavailable_reason', 'n/a')}`",
         f"- Open-order count: `{payload.get('open_order_count', 0)}`",
         f"- Open-order source: `{payload.get('open_order_source', 'unknown')}`",
+        "- Open-orders query completed: "
+        f"`{payload.get('open_orders_query_completed', False)}`",
+        "- Zero open orders confirmed: "
+        f"`{payload.get('zero_open_orders_confirmed', False)}`",
         f"- Executions available: `{payload.get('executions_available', False)}`",
         f"- Executions source: `{payload.get('executions_source', 'unknown')}`",
+        "- Executions query completed: "
+        f"`{payload.get('executions_query_completed', False)}`",
+        "- Zero executions confirmed: "
+        f"`{payload.get('zero_executions_confirmed', False)}`",
         f"- Execution order IDs: `{_sample_values(payload.get('execution_order_ids', []))}`",
         f"- Latest order IDs: `{_sample_values(payload.get('latest_order_ids', []))}`",
         f"- Latest perm IDs: `{_sample_values(payload.get('latest_perm_ids', []))}`",
@@ -2864,7 +2930,15 @@ def paper_reconcile_markdown(payload: Mapping[str, Any]) -> str:
                 if isinstance(source_campaigns, Mapping)
                 else "n/a"
             )
-            lines.append(f"- `{label}`: `{path}` campaign_id=`{campaign}`")
+            compatibility = (
+                source_compatibility.get(label, "unknown")
+                if isinstance(source_compatibility, Mapping)
+                else "unknown"
+            )
+            lines.append(
+                f"- `{label}`: `{path}` campaign_id=`{campaign}` "
+                f"compatibility=`{compatibility}`"
+            )
     else:
         lines.append("- None")
 

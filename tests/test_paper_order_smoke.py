@@ -329,6 +329,23 @@ def test_ibkr_paper_order_broker_times_out_without_next_valid_id() -> None:
     assert app.disconnected is True
 
 
+def test_ibkr_paper_order_broker_open_order_timeout_fails_closed() -> None:
+    app = DelayedNextValidIdApp()
+    app.release_next_valid_id_event.set()
+    broker = IBKRPaperOrderBroker(
+        config(),
+        app_factory=lambda: app,
+        socket_probe=lambda _host, _port, _timeout: None,
+        ibapi_available=True,
+    )
+    broker.connect(timeout=0.1)
+
+    with pytest.raises(PaperOrderSmokeError, match="open-order reconciliation timed out"):
+        broker.request_open_orders(timeout=0.01)
+
+    broker.disconnect()
+
+
 def test_ibkr_fractional_size_rules_notice_is_informational() -> None:
     app = _PaperOrderIBKRApp()
 

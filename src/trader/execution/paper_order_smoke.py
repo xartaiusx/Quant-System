@@ -715,7 +715,10 @@ class IBKRPaperOrderBroker:
         app = self._require_app()
         app.open_order_end_event.clear()
         app.reqOpenOrders()
-        app.open_order_end_event.wait(timeout)
+        if not app.open_order_end_event.wait(timeout):
+            raise PaperOrderSmokeError(
+                f"open-order reconciliation timed out after {timeout:g} seconds"
+            )
         return list(app.open_orders.values())
 
     def request_executions(

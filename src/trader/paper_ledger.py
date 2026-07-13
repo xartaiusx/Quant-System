@@ -223,8 +223,31 @@ def _reconcile_errors(
         errors.append("paper-reconcile lacks verified account summary")
     if report.open_order_count != 0:
         errors.append("paper-reconcile reports open broker orders")
+    if not report.open_orders_query_completed:
+        errors.append("paper-reconcile did not complete the broker open-orders query")
+    if not report.executions_query_completed:
+        errors.append("paper-reconcile did not complete the broker executions query")
     if not report.positions_query_completed:
         errors.append("paper-reconcile did not complete the broker positions query")
+    expected_sources = {"paper_smoke_report", "alpha_paper_report"}
+    missing_compatibility = sorted(
+        expected_sources - set(report.source_report_compatibility)
+    )
+    if missing_compatibility:
+        errors.append(
+            "paper-reconcile lacks source compatibility evidence: "
+            + ", ".join(missing_compatibility)
+        )
+    incompatible_sources = sorted(
+        label
+        for label, status in report.source_report_compatibility.items()
+        if str(status) != "current"
+    )
+    if incompatible_sources:
+        errors.append(
+            "paper-reconcile contains non-current source evidence: "
+            + ", ".join(incompatible_sources)
+        )
     if not report.broker_state_fingerprint:
         errors.append("paper-reconcile lacks broker_state_fingerprint")
     if report.submitted_orders or report.order_api_invoked:

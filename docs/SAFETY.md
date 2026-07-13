@@ -208,6 +208,7 @@ Milestone 23 adds post-paper-run hardening. `paper-reconcile` requires
 read-only: it may request account summary, positions, open orders, and
 current-day executions, but it must not submit, modify, or cancel orders. It
 distinguishes completed zero-position responses from unavailable position data,
+confirms empty open-order and execution results only after their end callbacks,
 records execution and commission evidence when available, and fails if filled
 paper-order evidence lacks a matching broker execution row. It reports
 `submitted_orders=false`, `paper_orders_enabled=false`,
@@ -216,6 +217,9 @@ real broker account summary is unavailable. `alpha-test-summary` is offline
 only: it reads ignored local reports, validates same-commit source evidence,
 verifies the no-secret `campaign_id` across source reports, fails closed on
 campaign mismatches, and never contacts IBKR or invokes order APIs.
+Current source reports carry schema versions. Reconciliation labels missing
+schema versions `legacy_incompatible`; broker truth can still be reported with
+a warning, but campaign summary and ledger eligibility fail closed.
 
 Milestone 24 adds `alpha-campaign-run`, a sequential orchestrator over existing
 SPY-only campaign stages. Shadow mode calls the read-only alpha shadow runner.
@@ -265,8 +269,10 @@ market-hours daemon attempts. It reads ignored local `broker-probe`,
 `history-snapshot`, optional `market-probe`, and `history-readiness` reports,
 requires same-commit broker/account evidence, checks the strict `1 D`,
 `5 mins`, `TRADES`, `use_rth=1` snapshot settings, verifies at least `50` SPY
-bars in the current diagnostic snapshot, fails closed when the latest bar is
-older than `15` minutes, and treats
+bars in the current diagnostic snapshot, uses the canonical zone-aware parser,
+and measures freshness from diagnostics run time to the completed bar interval
+end. It fails closed when that end is older than `15` minutes or still forming,
+requires the type-specific live probe alias, and treats
 IBKR live-market-data subscription errors such as `10089` as strict shadow
 blockers. It never contacts IBKR, submits orders, cancels orders, enables paper
 orders, enables live orders, or expands commodity execution. The daemon's
@@ -280,6 +286,11 @@ Read-Only API expectations and `ALLOW_PAPER_ORDERS=false`, set
 `graduation_eligible=false`, and keep `strict_shadow_precheck_passed=false`.
 Delayed reports must not count toward `alpha-shadow-daemon-summary`
 graduation, paper-daemon design, or paper execution eligibility.
+
+`ibkr-session-compare` is offline-only. It compares ignored historical
+snapshot revisions, records checksums and timestamp-level changes, and treats
+volume comparisons as authoritative only with matching non-unknown volume-unit
+attestations. It does not import broker or execution modules.
 
 Commodity scope remains research-only after paper execution hardening. `GLD`
 and `USO` can be research candidates, `DBA` stays excluded from execution until

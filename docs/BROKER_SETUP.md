@@ -113,12 +113,23 @@ logging off, and every API precaution bypass disabled.
 - Socket failures report `failure_stage=socket_connect`.
 - Request timeouts report `failure_stage=timeout`.
 - Successful probes report current server time and masked managed accounts when returned.
-- `market-probe` defaults to delayed data and writes `market_probe` reports.
-- `history-snapshot` writes ignored JSONL snapshots and manifests under `data/historical/`.
+- `market-probe` defaults to delayed data and writes generic plus type-specific
+  `latest_market_probe_delayed` or `latest_market_probe_live` aliases. Strict
+  and delayed diagnostics never consume the generic alias.
+- Quote callback receipt time is transport evidence only. Market-event age and
+  freshness stay unknown unless IBKR supplies an exchange-event timestamp.
+- `history-snapshot` writes ignored JSONL snapshots and manifests under
+  `data/historical/`; timezone-aware `--end-datetime` and operator-attested
+  `--volume-unit` make dated revision captures reproducible.
+- `ibkr-session-compare` compares two ignored manifests offline and never
+  contacts IBKR.
 - `paper-readiness-run` runs broker probe, broker account summary, historical snapshot, offline load, commodity proxy universe, and analytical signal evaluation sequentially.
 - `paper-readiness-run` uses distinct IBKR client IDs for broker-contact stages and pauses between those stages by default; override with `--broker-stage-pause` if needed.
 - `paper-readiness-run` fails if broker account summary is unavailable or only mock fallback data is available.
-- `paper-reconcile` is the read-only post-paper-run broker-state check. Run it after re-enabling Read-Only API and setting `ALLOW_PAPER_ORDERS=false`.
+- `paper-reconcile` is the read-only post-paper-run broker-state check. Run it
+  after re-enabling Read-Only API and setting `ALLOW_PAPER_ORDERS=false`. Zero
+  open orders or executions are confirmed only after the corresponding end
+  callback; timeout remains unavailable and fails closed.
 - `alpha-test-summary` is offline-only and aggregates ignored local run reports into a no-secret paper campaign summary.
 - `paper-ledger-update` is offline-only and writes one masked campaign row to ignored local `state/paper_ledger.jsonl` after reconciliation and summary evidence pass.
 - `alpha-shadow-run` assembles complete cached XNYS sessions with the current
@@ -184,6 +195,8 @@ python -m trader.cli positions --connect
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed
 python -m trader.cli market-probe --symbols SPY,AAPL --data-type delayed --historical
 python -m trader.cli history-snapshot --symbols SPY,AAPL --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1
+python -m trader.cli history-snapshot --symbols SPY --duration "1 D" --bar-size "5 mins" --what-to-show TRADES --use-rth 1 --end-datetime "2026-07-13T16:00:00-04:00" --volume-unit shares
+python -m trader.cli ibkr-session-compare --baseline-manifest <path> --candidate-manifest <path>
 python -m trader.cli ibkr-data-diagnostics --min-bars 50 --stale-after-minutes 15
 python -m trader.cli ibkr-delayed-data-diagnostics --min-bars 50 --stale-after-minutes 30
 python -m trader.cli paper-readiness-run
