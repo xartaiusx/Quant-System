@@ -34,6 +34,7 @@ state/*
 data/historical/**/*.jsonl
 data/historical/**/*_manifest.json
 data/research/
+/research/evidence/
 logs/
 *.log
 

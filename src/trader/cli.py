@@ -53,6 +53,10 @@ from trader.data.research_catalog import (
     import_research_data_batch,
     load_research_catalog,
 )
+from trader.data.research_evidence import (
+    audit_research_evidence,
+    register_research_evidence,
+)
 from trader.data.research_instrument_master import register_research_instrument
 from trader.data.research_vendor_decision import run_research_vendor_decision
 from trader.data.snapshots import deterministic_history, deterministic_quotes, mock_positions
@@ -126,6 +130,9 @@ from trader.models import (
     ResearchDataIngestRequest,
     ResearchDerivedViewReport,
     ResearchDerivedViewRequest,
+    ResearchEvidenceAuditReport,
+    ResearchEvidenceAuditRequest,
+    ResearchEvidenceRegistrationReport,
     ResearchExperimentPhase,
     ResearchExperimentRegistrationReport,
     ResearchExperimentRegistrationRequest,
@@ -1059,6 +1066,81 @@ def research_vendor_decision(
     console.print("Network accessed: false.")
     console.print(f"Selected vendor: {report.selected_vendor or 'none'}")
     console.print(f"Procurement blocked: {str(report.procurement_blocked).lower()}")
+    console.print(f"Final status: {report.final_status}")
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("research-evidence-register")
+def research_evidence_register(
+    manifest: Annotated[
+        Path,
+        typer.Option("--manifest", help="Local point-in-time evidence JSON manifest."),
+    ],
+    root: Annotated[
+        Path,
+        typer.Option("--root", help="External immutable research-data store root."),
+    ] = Path("D:/MarketData/Quant-System"),
+) -> None:
+    """Register immutable macro/news metadata without external access."""
+
+    report = register_research_evidence(manifest, root=root)
+    json_path, md_path = Journal().write_cycle(
+        "research_evidence_registration",
+        _report_dict(report),
+    )
+    console.print("[bold]Point-in-time research evidence registration[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Credentials read: false.")
+    console.print("Network accessed: false.")
+    console.print(f"Registered records: {report.registered_record_count}")
+    console.print(f"Idempotent records: {report.idempotent_record_count}")
+    console.print("Strategy feature eligible: false.")
+    console.print("Promotion eligible: false.")
+    console.print(f"Final status: {report.final_status}")
+    console.print(f"JSON report: {json_path}")
+    console.print(f"Markdown report: {md_path}")
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("research-evidence-audit")
+def research_evidence_audit(
+    as_of: Annotated[
+        str,
+        typer.Option(
+            "--as-of",
+            help="Explicit timezone-aware point-in-time cutoff.",
+        ),
+    ],
+    root: Annotated[
+        Path,
+        typer.Option("--root", help="External immutable research-data store root."),
+    ] = Path("D:/MarketData/Quant-System"),
+) -> None:
+    """Audit point-in-time evidence availability and archive integrity offline."""
+
+    parsed_as_of = _parse_aware_datetime_option(as_of, "--as-of")
+    if parsed_as_of is None:  # pragma: no cover - Typer requires the option
+        raise typer.Exit(code=2)
+    report = audit_research_evidence(
+        ResearchEvidenceAuditRequest(root_path=root.as_posix(), as_of=parsed_as_of)
+    )
+    json_path, md_path = Journal().write_cycle(
+        "research_evidence_audit",
+        _report_dict(report),
+    )
+    console.print("[bold]Point-in-time research evidence audit[/bold]")
+    console.print("Broker contacted: false.")
+    console.print("Credentials read: false.")
+    console.print("Network accessed: false.")
+    console.print(f"Total records: {report.total_record_count}")
+    console.print(f"Usable as of cutoff: {report.usable_as_of_count}")
+    console.print(f"Late retrievals: {report.late_retrieval_count}")
+    console.print("Strategy feature eligible: false.")
+    console.print("Promotion eligible: false.")
     console.print(f"Final status: {report.final_status}")
     console.print(f"JSON report: {json_path}")
     console.print(f"Markdown report: {md_path}")
@@ -3792,6 +3874,8 @@ def _report_dict(
         | ResearchDataAuditReport
         | ResearchDataIngestReport
         | ResearchDerivedViewReport
+        | ResearchEvidenceAuditReport
+        | ResearchEvidenceRegistrationReport
         | ResearchExperimentRegistrationReport
         | ResearchExperimentReport
         | ResearchInstrumentMasterReport

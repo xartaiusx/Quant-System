@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, TypeVar
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -269,6 +270,37 @@ class ResearchSampleKind(StrEnum):
     FIVE_MINUTE_BARS = "five_minute_bars"
     DAILY_BARS = "daily_bars"
     CORPORATE_ACTIONS = "corporate_actions"
+
+
+class ResearchEvidenceSourceClass(StrEnum):
+    """Source tiers accepted by the point-in-time evidence registry."""
+
+    OFFICIAL_PRIMARY = "official_primary"
+    SECONDARY_NEWS = "secondary_news"
+    SECONDARY_BRIEF = "secondary_brief"
+
+
+class ResearchEvidenceKind(StrEnum):
+    """Epistemic role of one evidence record."""
+
+    FACT = "fact"
+    FORECAST = "forecast"
+    HYPOTHESIS = "hypothesis"
+
+
+class ResearchEvidenceRightsStatus(StrEnum):
+    """Maximum content retention authorized for one evidence artifact."""
+
+    METADATA_ONLY = "metadata_only"
+    EXCERPT_PERMITTED = "excerpt_permitted"
+    FULL_DOCUMENT_PERMITTED = "full_document_permitted"
+
+
+class ResearchEvidencePublicationPrecision(StrEnum):
+    """Whether publication time is sourced or conservatively first observed."""
+
+    EXACT = "exact"
+    FIRST_OBSERVED = "first_observed"
 
 
 class InertStrategyRunnerStatus(StrEnum):
@@ -3130,6 +3162,394 @@ class ResearchExperimentSpec(SerializableModel):
             if self.minimum_holdout_closed_trades is not None
             else self.minimum_closed_trades
         )
+
+
+_RESEARCH_EVIDENCE_ID_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._:"
+)
+_RESEARCH_EVIDENCE_OFFICIAL_DOMAINS = frozenset(
+    {
+        "cftc.gov",
+        "cpc.ncep.noaa.gov",
+        "eia.gov",
+        "federalreserve.gov",
+        "fred.stlouisfed.org",
+        "noaa.gov",
+        "sec.gov",
+        "usda.gov",
+    }
+)
+_RESEARCH_EVIDENCE_INSTRUMENTS = frozenset({"SPY", "GLD", "USO", "DBA"})
+
+
+def _normalize_research_evidence_sha256(value: str) -> str:
+    candidate = value.strip().lower()
+    digest = candidate.removeprefix("sha256:")
+    if len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
+        raise ValueError("research evidence must use a SHA-256 hash")
+    return f"sha256:{digest}"
+
+
+def _validate_research_evidence_https_url(value: str) -> str:
+    normalized = value.strip()
+    parsed = urlsplit(normalized)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("research evidence URLs must be credential-free HTTPS URLs")
+    if parsed.fragment:
+        raise ValueError("research evidence URLs must not contain fragments")
+    return normalized
+
+
+def _research_evidence_official_domain_allowed(value: str) -> bool:
+    host = (urlsplit(value).hostname or "").lower()
+    return any(
+        host == domain or host.endswith(f".{domain}")
+        for domain in _RESEARCH_EVIDENCE_OFFICIAL_DOMAINS
+    )
+
+
+class ResearchEvidenceManifestRecord(SerializableModel):
+    """One immutable point-in-time evidence revision supplied by an operator."""
+
+    model_config = ConfigDict(frozen=True, use_enum_values=True, extra="forbid")
+
+    evidence_id: str
+    revision: str
+    supersedes_revision: str | None = None
+    source_name: str
+    source_class: ResearchEvidenceSourceClass
+    source_reference: str
+    source_url: str | None = None
+    official_source_urls: list[str]
+    document_id: str
+    title: str
+    observed_start: date
+    observed_end: date
+    published_at: datetime
+    publication_time_precision: ResearchEvidencePublicationPrecision
+    first_available_at: datetime
+    retrieved_at: datetime
+    vintage: str
+    artifact_reference: str
+    artifact_path: str | None = None
+    artifact_sha256: str
+    rights_status: ResearchEvidenceRightsStatus = ResearchEvidenceRightsStatus.METADATA_ONLY
+    permitted_excerpt: str | None = Field(default=None, max_length=500)
+    evidence_kind: ResearchEvidenceKind
+    topics: list[str]
+    affected_instruments: list[str]
+
+    @field_validator("evidence_id", "revision", "supersedes_revision")
+    @classmethod
+    def validate_evidence_identifier(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized or len(normalized) > 120:
+            raise ValueError("research evidence identifiers must contain 1-120 characters")
+        if any(character not in _RESEARCH_EVIDENCE_ID_CHARS for character in normalized):
+            raise ValueError("research evidence identifiers contain unsupported characters")
+        return normalized
+
+    @field_validator(
+        "source_name",
+        "source_reference",
+        "document_id",
+        "title",
+        "vintage",
+        "artifact_reference",
+    )
+    @classmethod
+    def validate_evidence_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("research evidence text fields must not be empty")
+        return normalized
+
+    @field_validator("source_url")
+    @classmethod
+    def validate_optional_source_url(cls, value: str | None) -> str | None:
+        return _validate_research_evidence_https_url(value) if value is not None else None
+
+    @field_validator("official_source_urls")
+    @classmethod
+    def validate_official_source_urls(cls, value: list[str]) -> list[str]:
+        normalized = list(
+            dict.fromkeys(_validate_research_evidence_https_url(item) for item in value)
+        )
+        if not normalized:
+            raise ValueError("research evidence requires at least one official source URL")
+        if any(not _research_evidence_official_domain_allowed(item) for item in normalized):
+            raise ValueError("research evidence official URLs must use an approved primary domain")
+        return normalized
+
+    @field_validator("artifact_path")
+    @classmethod
+    def validate_optional_artifact_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("artifact_path must not be blank")
+        return normalized
+
+    @field_validator("artifact_sha256")
+    @classmethod
+    def validate_artifact_sha256(cls, value: str) -> str:
+        return _normalize_research_evidence_sha256(value)
+
+    @field_validator("permitted_excerpt")
+    @classmethod
+    def normalize_permitted_excerpt(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("topics")
+    @classmethod
+    def normalize_evidence_topics(cls, value: list[str]) -> list[str]:
+        normalized = list(
+            dict.fromkeys(
+                item.strip().lower().replace(" ", "_") for item in value if item.strip()
+            )
+        )
+        if not normalized:
+            raise ValueError("research evidence requires at least one topic")
+        return normalized
+
+    @field_validator("affected_instruments")
+    @classmethod
+    def validate_affected_instruments(cls, value: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(item.strip().upper() for item in value if item.strip()))
+        if not normalized:
+            raise ValueError("research evidence requires an affected instrument")
+        unsupported = sorted(set(normalized) - _RESEARCH_EVIDENCE_INSTRUMENTS)
+        if unsupported:
+            raise ValueError(
+                "research evidence instruments are limited to SPY and research-only "
+                f"commodity proxies: {', '.join(unsupported)}"
+            )
+        return normalized
+
+    @field_validator("published_at", "first_available_at", "retrieved_at")
+    @classmethod
+    def normalize_evidence_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("research evidence timestamps must include an explicit timezone")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def validate_evidence_semantics(self) -> ResearchEvidenceManifestRecord:
+        if self.observed_end < self.observed_start:
+            raise ValueError("observed_end must not precede observed_start")
+        if self.first_available_at < self.published_at:
+            raise ValueError("first_available_at must not precede published_at")
+        if self.retrieved_at < self.first_available_at:
+            raise ValueError("retrieved_at must not precede first_available_at")
+        if self.supersedes_revision == self.revision:
+            raise ValueError("an evidence revision cannot supersede itself")
+        if (
+            self.publication_time_precision
+            == ResearchEvidencePublicationPrecision.FIRST_OBSERVED
+            and self.published_at != self.first_available_at
+        ):
+            raise ValueError(
+                "first-observed publication precision requires published_at to equal "
+                "first_available_at"
+            )
+        if self.source_class == ResearchEvidenceSourceClass.OFFICIAL_PRIMARY:
+            if self.source_url is None:
+                raise ValueError("official primary evidence requires source_url")
+            if not _research_evidence_official_domain_allowed(self.source_url):
+                raise ValueError("official primary source_url must use an approved domain")
+            if self.source_url not in self.official_source_urls:
+                raise ValueError("official primary source_url must be listed as an official URL")
+        if self.rights_status == ResearchEvidenceRightsStatus.METADATA_ONLY:
+            if self.permitted_excerpt is not None:
+                raise ValueError("metadata-only evidence cannot retain an excerpt")
+        elif self.rights_status == ResearchEvidenceRightsStatus.EXCERPT_PERMITTED:
+            if self.permitted_excerpt is None:
+                raise ValueError("excerpt-permitted evidence requires a permitted excerpt")
+        elif self.artifact_path is None:
+            raise ValueError("full-document retention requires a local artifact_path")
+        return self
+
+
+class ResearchEvidenceManifest(SerializableModel):
+    """Versioned offline manifest for one atomic evidence registration."""
+
+    model_config = ConfigDict(frozen=True, use_enum_values=True, extra="forbid")
+
+    manifest_version: int = 1
+    records: list[ResearchEvidenceManifestRecord]
+
+    @model_validator(mode="after")
+    def validate_manifest(self) -> ResearchEvidenceManifest:
+        if self.manifest_version != 1:
+            raise ValueError("unsupported research evidence manifest version")
+        if not self.records:
+            raise ValueError("research evidence manifest requires at least one record")
+        keys = [(record.evidence_id, record.revision) for record in self.records]
+        if len(keys) != len(set(keys)):
+            raise ValueError("research evidence manifest record revisions must be unique")
+        successors = [
+            (record.evidence_id, record.supersedes_revision)
+            for record in self.records
+            if record.supersedes_revision is not None
+        ]
+        if len(successors) != len(set(successors)):
+            raise ValueError("one evidence revision cannot have multiple successors")
+        all_keys = set(keys)
+        seen: set[tuple[str, str]] = set()
+        for record in self.records:
+            predecessor = (record.evidence_id, record.supersedes_revision or "")
+            if record.supersedes_revision and predecessor in all_keys and predecessor not in seen:
+                raise ValueError("manifest evidence predecessors must appear before successors")
+            seen.add((record.evidence_id, record.revision))
+        return self
+
+
+class ResearchEvidenceRecordSummary(SerializableModel):
+    """No-content summary for one immutable evidence revision."""
+
+    evidence_id: str
+    revision: str
+    supersedes_revision: str | None = None
+    source_name: str
+    source_class: ResearchEvidenceSourceClass
+    source_reference: str
+    source_url: str | None = None
+    official_source_urls: list[str]
+    document_id: str
+    title: str
+    observed_start: date
+    observed_end: date
+    published_at: datetime
+    publication_time_precision: ResearchEvidencePublicationPrecision
+    first_available_at: datetime
+    retrieved_at: datetime
+    vintage: str
+    artifact_reference: str
+    artifact_sha256: str
+    rights_status: ResearchEvidenceRightsStatus
+    evidence_kind: ResearchEvidenceKind
+    topics: list[str]
+    affected_instruments: list[str]
+    archived: bool = False
+    record_fingerprint: str
+
+
+class ResearchEvidenceRegistrationReport(SerializableModel):
+    """Offline registration evidence for immutable macro/news metadata."""
+
+    title: str = "Point-in-Time Research Evidence Registration"
+    report_type: str = "research_evidence_registration"
+    command: str = "research-evidence-register"
+    ok: bool
+    manifest_path: str
+    root_path: str
+    catalog_path: str | None = None
+    registered_record_count: int = Field(default=0, ge=0)
+    idempotent_record_count: int = Field(default=0, ge=0)
+    records: list[ResearchEvidenceRecordSummary] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    credentials_read: bool = False
+    network_accessed: bool = False
+    strategy_feature_eligible: bool = False
+    promotion_eligible: bool = False
+    execution_eligible: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_evidence_registration_safety(self) -> ResearchEvidenceRegistrationReport:
+        if self.broker_contacted or self.credentials_read or self.network_accessed:
+            raise ValueError("research evidence registration must remain offline")
+        if self.strategy_feature_eligible or self.promotion_eligible or self.execution_eligible:
+            raise ValueError("research evidence registration cannot enable strategy promotion")
+        if self.order_routing_enabled or self.submitted_orders or self.order_api_invoked:
+            raise ValueError("research evidence registration cannot route orders")
+        return self
+
+
+class ResearchEvidenceAuditRequest(SerializableModel):
+    """Explicit point-in-time boundary for an offline evidence audit."""
+
+    model_config = ConfigDict(frozen=True, use_enum_values=True, extra="forbid")
+
+    root_path: str
+    as_of: datetime
+
+    @field_validator("as_of")
+    @classmethod
+    def normalize_as_of(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("research evidence audit as_of must include an explicit timezone")
+        return value.astimezone(UTC)
+
+
+class ResearchEvidenceAuditItem(ResearchEvidenceRecordSummary):
+    """As-of availability and integrity state for one evidence revision."""
+
+    publicly_available_as_of: bool
+    locally_retrieved_as_of: bool
+    usable_as_of: bool
+    superseded_as_of: bool
+    archived_integrity_ok: bool | None = None
+
+
+class ResearchEvidenceAuditReport(SerializableModel):
+    """Offline point-in-time evidence audit with permanent non-promotion flags."""
+
+    title: str = "Point-in-Time Research Evidence Audit"
+    report_type: str = "research_evidence_audit"
+    command: str = "research-evidence-audit"
+    ok: bool
+    request: ResearchEvidenceAuditRequest
+    catalog_path: str | None = None
+    total_record_count: int = Field(default=0, ge=0)
+    publicly_available_count: int = Field(default=0, ge=0)
+    locally_retrieved_count: int = Field(default=0, ge=0)
+    usable_as_of_count: int = Field(default=0, ge=0)
+    current_as_of_count: int = Field(default=0, ge=0)
+    superseded_as_of_count: int = Field(default=0, ge=0)
+    future_evidence_count: int = Field(default=0, ge=0)
+    late_retrieval_count: int = Field(default=0, ge=0)
+    source_class_counts: dict[str, int] = Field(default_factory=dict)
+    evidence_kind_counts: dict[str, int] = Field(default_factory=dict)
+    topic_counts: dict[str, int] = Field(default_factory=dict)
+    records: list[ResearchEvidenceAuditItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    credentials_read: bool = False
+    network_accessed: bool = False
+    strategy_feature_eligible: bool = False
+    promotion_eligible: bool = False
+    execution_eligible: bool = False
+    order_routing_enabled: bool = False
+    submitted_orders: bool = False
+    order_api_invoked: bool = False
+    final_status: str
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_evidence_audit_safety(self) -> ResearchEvidenceAuditReport:
+        if self.broker_contacted or self.credentials_read or self.network_accessed:
+            raise ValueError("research evidence audit must remain offline")
+        if self.strategy_feature_eligible or self.promotion_eligible or self.execution_eligible:
+            raise ValueError("research evidence audit cannot enable strategy promotion")
+        if self.order_routing_enabled or self.submitted_orders or self.order_api_invoked:
+            raise ValueError("research evidence audit cannot route orders")
+        return self
 
 
 class ResearchVendorDecisionCandidate(SerializableModel):
