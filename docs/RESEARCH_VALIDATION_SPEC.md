@@ -58,7 +58,7 @@ research-review ready.
 
 The final phase reruns and verifies development from the same immutable spec and
 catalog lineage. It then requires the exact confirmation string. Before loading
-2024-2025, it appends a `holdout_access` row to catalog v3. Only then can the
+2024-2025, it appends a `holdout_access` row to catalog v4. Only then can the
 capability-scoped final-holdout loader read the exact registered seal. That
 record is the point of consumption: a missing dataset, failed simulation, interruption, or
 unsatisfactory result still consumes the experiment. A second final access for

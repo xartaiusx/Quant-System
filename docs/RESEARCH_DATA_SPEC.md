@@ -63,10 +63,56 @@ standalone downloader is documented in `docs/ALPACA_DATA_ACQUISITION.md`.
 Acquired files remain non-promoting until written rights and the full technical
 bake-off pass.
 
-## Catalog V3
+## Point-in-Time Macro Evidence
+
+`research-evidence-register` is an offline metadata registry for primary-source
+releases, news references, and operator briefs. It never downloads a source,
+reads credentials, contacts IBKR, evaluates a strategy, accesses the sealed
+holdout, or changes execution eligibility. Every record is permanently
+`strategy_feature_eligible=false`, `promotion_eligible=false`, and
+`execution_eligible=false`.
+
+Each immutable revision records the observed period, publication time and its
+precision, public first-availability time, local retrieval time, source URL,
+official corroborating URLs, vintage, SHA-256, rights status, topics, and
+affected instruments. An exact publication time must be timezone-aware. When a
+source exposes only a date, use `first_observed` precision and set publication
+time equal to the first time the operator actually observed it; never invent a
+midnight release time. `research-evidence-audit --as-of` reports public and
+local availability separately so a later retrieval cannot masquerade as data
+available to an earlier decision.
+
+The approved primary-source hierarchy is:
+
+- EIA energy releases and API: https://www.eia.gov/opendata/documentation.php
+- NOAA CPC weather and ENSO: https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.html
+- USDA WASDE agriculture releases: https://www.usda.gov/about-usda/general-information/staff-offices/office-chief-economist/commodity-markets/wasde-report
+- CFTC historical Commitments of Traders: https://www.cftc.gov/MarketReports/CommitmentsofTraders/HistoricalCompressed/index.htm
+- FRED/ALFRED observations and vintages: https://fred.stlouisfed.org/docs/api/fred/series_observations.html
+- SEC EDGAR identity and filing APIs: https://www.sec.gov/search-filings/edgar-application-programming-interfaces
+
+Secondary news and user-supplied briefs are hypothesis context only. They must
+reference at least one approved official source and cannot become a model
+feature or alter the preregistered v2 SMA experiment. Metadata-only artifacts
+are hash-verified but not copied. Permitted excerpts are capped and explicit.
+Full documents are copied into a content-addressed external archive only when
+the manifest declares retention rights.
+
+```powershell
+python -m trader.cli research-evidence-register `
+  --manifest D:\MarketData\Quant-System\incoming\evidence\manifest.json `
+  --root D:\MarketData\Quant-System
+
+python -m trader.cli research-evidence-audit `
+  --as-of 2026-07-13T16:00:00-04:00 `
+  --root D:\MarketData\Quant-System
+```
+
+## Catalog V4
 
 The SQLite catalog runs in WAL mode with full synchronous writes and foreign
-keys. Schema v3 retains earlier ingestion and lineage tables and adds:
+keys. Schema v4 retains earlier ingestion, lineage, identity, and experiment
+tables and adds immutable point-in-time evidence revisions:
 
 - immutable source artifacts and ingestion runs;
 - raw and canonical partitions with active revisions;
@@ -78,6 +124,8 @@ keys. Schema v3 retains earlier ingestion and lineage tables and adds:
 - permanent sealed-period records that generic loaders cannot bypass;
 - experiment supersession state;
 - immutable versioned SPY identity records keyed by `spy-us-equity`.
+- linear evidence revision chains, as-of indexes, content hashes, and optional
+  rights-approved content-addressed archives.
 
 Corrections never overwrite raw or derived data. A changed source creates a new
 parent revision, deactivates the prior parent, invalidates dependent derived
@@ -92,6 +140,7 @@ D:/MarketData/Quant-System/
   raw/<vendor>/<dataset>/
   curated/<vendor>/<dataset>/
   derived/<price-view>/<bar-size>/
+  evidence/artifacts/<sha256>
   catalog/research.sqlite3
   quarantine/
 ```
@@ -131,7 +180,7 @@ hard provenance blocker rather than a gap to fill with a convenience feed.
 
 ## Derived Views
 
-`research-data-derive` creates deterministic catalog-v3 revisions:
+`research-data-derive` creates deterministic catalog-v4 revisions:
 
 1. `raw_execution`, `5 mins`: XNYS-anchored OHLCV aggregated from immutable raw
    one-minute observations for simulated execution.

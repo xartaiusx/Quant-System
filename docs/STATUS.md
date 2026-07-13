@@ -35,9 +35,14 @@
 - Offline SPY vendor bake-off validates manually supplied Massive/Norgate samples,
   session alignment, corrections, overlap, corporate-action fixtures, checksums,
   and written data rights without network or credential access.
-- Catalog schema v3 adds deterministic batch imports, corporate-action sets,
+- Catalog schema v4 adds deterministic batch imports, corporate-action sets,
   immutable derived revisions, parent lineage, permanent holdout seals,
-  experiment supersession/access records, and versioned SPY identity.
+  experiment supersession/access records, versioned SPY identity, and immutable
+  point-in-time macro/news evidence revisions.
+- Offline `research-evidence-register` and `research-evidence-audit` distinguish
+  publication, first availability, and local retrieval; enforce official-source
+  and content-rights rules; and permanently refuse strategy, promotion, and
+  execution eligibility.
 - Offline vendor decisions enforce written-rights and budget hard gates before
   weighted technical scoring; contracts and responses remain outside Git.
 - Dual research views are implemented: raw five-minute execution bars,
@@ -159,6 +164,13 @@
   use the current `OrderCancel` payload, and capture current
   `commissionAndFeesReport` callbacks.
 - IB Gateway paper on `127.0.0.1:4002` accepted a read-only broker probe.
+- The July 13 dated Gateway baseline contains exactly `78` delayed SPY
+  five-minute bars from `09:30` through `15:55` ET, passed OHLC/volume/hash
+  checks, and records every order flag false. Its T+1 comparison remains
+  scheduled and the evidence is non-graduating.
+- The latest July 13 delayed Gateway daemon completed `5/5` clean cycles with
+  broker/account verification and no order API use. It remains explicitly
+  ineligible for strict-live graduation or paper-daemon implementation.
 - Latest successful broker-probe returned current server time, masked managed-account output, `order_routing_enabled=false`, and `no_order_guarantee=true`.
 - Before market-data diagnostics in a new environment, rerun a successful read-only current-time broker probe.
 - Market-data and historical snapshot diagnostics may still be limited by IBKR data permissions, delayed-data availability, market hours, or pacing.
@@ -209,24 +221,26 @@
 
 ## Next Recommended Steps
 
-1. After this milestone is merged, migrate the empty external catalog to v3,
-   register `research/instruments/spy_v1.json`, and register the committed v2
-   experiment from a clean worktree so 2024-2025 is sealed before import.
-2. Send the common RFI and complete the offline bake-off/vendor decision,
+1. Complete the July 13 T+1 Gateway recapture and classify every session
+   revision without treating delayed evidence as graduating.
+2. Register current briefs as metadata-only secondary hypotheses, then add
+   official EIA/NOAA/USDA/CFTC/FRED/SEC releases only with exact point-in-time
+   provenance. Do not expose evidence to strategy code.
+3. Send the common RFI and complete the offline bake-off/vendor decision,
    including written rights and trial/export validation, before purchasing.
-3. Import licensed 2016-2025 SPY minute files plus approved daily/action
+4. Import licensed 2016-2025 SPY minute files plus approved daily/action
    history, derive all views, and require passing catalog load/audit evidence.
-4. Run v2 development only. Do not use the final-holdout confirmation until
+5. Run v2 development only. Do not use the final-holdout confirmation until
    development, lineage, cost calibration, and independent review are complete.
-5. Fund/subscribe the IBKR account for live SPY API market data and complete the
+6. Fund/subscribe the IBKR account for live SPY API market data and complete the
    required API acknowledgement; delayed mode remains non-graduating.
-6. Collect five clean strict-live sessions on five XNYS dates to unlock a separate
+7. Collect five clean strict-live sessions on five XNYS dates to unlock a separate
    paper-daemon implementation milestone.
-7. Collect ten clean strict-live sessions across opening, midday, and closing
+8. Collect ten clean strict-live sessions across opening, midday, and closing
    windows before any lifecycle engineering pilot.
-8. Require `research_review_ready=true` in addition to operational evidence
+9. Require `research_review_ready=true` in addition to operational evidence
    before any strategy-driven paper alpha mode.
-9. Keep the paper daemon unimplemented until those gates pass. Continue manual
+10. Keep the paper daemon unimplemented until those gates pass. Continue manual
    reconciliation, summary, and ledger updates after every approved paper window.
-10. Keep GLD/USO research-only, DBA excluded, and direct futures blocked until a
+11. Keep GLD/USO research-only, DBA excluded, and direct futures blocked until a
    separate contract/roll/margin/liquidity/permission/delivery-risk program exists.

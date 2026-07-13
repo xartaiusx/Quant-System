@@ -3,7 +3,7 @@
 ## Scope
 
 `research-backtest` is a broker-free, SPY-only simulation command. It loads only
-passing active catalog-v3 revisions and never imports broker/execution modules,
+passing active catalog-v4 revisions and never imports broker/execution modules,
 opens an IBKR socket, invokes an order API, or submits an order. It is an
 accounting and hypothesis-testing tool, not proof of profitability.
 

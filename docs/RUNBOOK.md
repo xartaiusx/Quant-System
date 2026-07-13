@@ -295,15 +295,22 @@ command.
 ## Post-Paper-Run Reconciliation
 
 Run this immediately after `paper-order-smoke` or `alpha-paper-run`, once the
-paper execution window is closed.
+paper execution lease is closed. Normal shadow and delayed-data operation keeps
+IBKR Read-Only API enabled. Full post-order reconciliation uses a separate,
+deliberate operator-controlled Read-Only-off window because a completed empty
+open-order callback is required and an open-order timeout must never be treated
+as proof of zero orders.
 
-Required operator setup:
+Pre-window requirements:
 
-- Re-enable IBKR Read-Only API.
 - Set `ALLOW_PAPER_ORDERS=false`.
 - Keep `ALLOW_LIVE_ORDERS=false`.
 - Keep paper IB Gateway on `127.0.0.1:4002` or paper TWS on
   `127.0.0.1:7497`; live ports `4001` and `7496` remain rejected.
+- Verify the expected masked paper account, no active execution command, no
+  paper-execution lease, and no unknown client session.
+- Record the operator attestation locally, then manually disable IBKR Read-Only
+  API. The program never changes this setting.
 - Run the commands sequentially, not in parallel.
 
 For IB Gateway paper:
@@ -326,8 +333,8 @@ python -m trader.cli paper-reconcile --campaign-id "$CAMPAIGN_ID" --timeout 30
 
 Expected behavior:
 
-- contacts IBKR through read-only account, positions, open-order, and
-  current-day execution requests
+- contacts IBKR only through account, positions, open-order, and current-day
+  execution read requests; it never places, modifies, or cancels an order
 - reads latest ignored `paper-order-smoke` and `alpha-paper-run` reports for
   order ID and perm ID evidence
 - derives or verifies the same no-secret `campaign_id` across source reports
@@ -337,9 +344,24 @@ Expected behavior:
   IDs, commission rows, broker-state fingerprint, warnings, and errors
 - reports `submitted_orders=false`, `paper_orders_enabled=false`,
   `order_routing_enabled=false`, and `order_api_invoked=false`
+- requires completed account, position, open-order, and execution end callbacks;
+  zero rows are confirmed only after the corresponding callback completes
 - fails if filled order evidence lacks a matching broker execution row
 - fails if a real broker account summary is unavailable; mock fallback data is
   not accepted as success
+- fails closed on any timeout, unknown open order, residual order, or unmatched
+  execution; do not continue to summary or ledger eligibility
+
+Immediately after `paper-reconcile` returns, regardless of success:
+
+1. Manually re-enable IBKR Read-Only API and visually verify it is enabled.
+2. Keep `ALLOW_PAPER_ORDERS=false` and `ALLOW_LIVE_ORDERS=false`.
+3. Run `broker-probe` with a fresh client ID and require a clean disconnect.
+4. Halt all paper progression if Read-Only restoration cannot be confirmed.
+
+Never use `reqGlobalCancel`, order submission, or a broad cancellation action to
+repair reconciliation uncertainty. Cancel behavior remains confined to the
+known-order paper smoke executor during an explicitly approved execution window.
 
 Finally summarize the local campaign evidence:
 
@@ -809,6 +831,27 @@ offline local-file workflows. Common failures:
 - Partial feed: review missing-bar diagnostics in the run report.
 
 ## Canonical SPY Research Data
+
+Register macro/news context only from an operator-supplied local manifest. This
+lane is offline, broker-free, credential-free, and permanently non-promoting:
+
+```powershell
+python -m trader.cli research-evidence-register `
+  --manifest D:\MarketData\Quant-System\incoming\evidence\manifest.json `
+  --root D:\MarketData\Quant-System
+
+python -m trader.cli research-evidence-audit `
+  --as-of 2026-07-13T16:00:00-04:00 `
+  --root D:\MarketData\Quant-System
+```
+
+Require timezone-aware publication, first-availability, retrieval, and audit
+times. Use `first_observed` publication precision when exact release time is
+unknown; never infer midnight. Primary records are restricted to approved EIA,
+NOAA, USDA, CFTC, FRED/ALFRED, Federal Reserve, and SEC domains. Secondary news
+and operator briefs remain `hypothesis` evidence and cannot feed v2 strategy,
+paper eligibility, or execution. Keep manifests and artifacts outside Git; copy
+full content only when retention rights explicitly permit it.
 
 Install the hash-locked environment. Before purchase or bulk import, register
 SPY identity and run the offline vendor bake-off plus rights-first decision

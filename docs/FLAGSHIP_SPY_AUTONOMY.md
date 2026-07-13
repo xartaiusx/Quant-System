@@ -16,7 +16,7 @@ Required evidence:
 - passing offline vendor bake-off and written usage/retention rights;
 - complete immutable SPY minute data for calendar years 2016-2025;
 - approved daily and corporate-action coverage from SPY inception through 2025;
-- active checksum-valid catalog-v3 revisions and an immutable SPY identity;
+- active checksum-valid catalog-v4 revisions and an immutable SPY identity;
 - exact XNYS normal-session and early-close coverage;
 - raw execution, split-adjusted signal, and total-return benchmark views;
 - no stale parents, missing actions, or checksum drift.

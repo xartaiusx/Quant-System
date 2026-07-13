@@ -20,7 +20,7 @@ This project is infrastructure-first. It is not a profitability claim or a live 
 - Permanently sealed chronological research experiments with clean-release and
   hash-locked environment evidence plus append-only final-holdout access.
 - Offline vendor bake-off and rights-first vendor decision reports, immutable
-  catalog-v3 lineage, versioned SPY identity, batch import, derived views, and
+  catalog-v4 lineage, point-in-time evidence, versioned SPY identity, batch import, derived views, and
   checksum-valid catalog loading.
 - Standalone, resumable historical Alpaca SPY SIP acquisition with immutable
   checksums and a fail-closed written-rights import gate; Alpaca is data-only.
@@ -159,6 +159,8 @@ python -m trader.cli research-data-ingest --source-file <licensed-massive.csv.gz
 python -m trader.cli research-data-audit
 python -m trader.cli research-data-bakeoff --manifest <local-manifest.json>
 python -m trader.cli research-vendor-decision --manifest <local-decision.json>
+python -m trader.cli research-evidence-register --manifest <local-evidence.json>
+python -m trader.cli research-evidence-audit --as-of <timezone-aware-timestamp>
 python scripts/acquire_alpaca_spy.py --symbol SPY --feed sip --timeframe 1Min --start 2016-01-01 --end 2025-12-31 --output-root D:\MarketData\Quant-System\incoming\alpaca_sip --plan-only
 python -m trader.cli research-instrument-register --manifest research/instruments/spy_v1.json
 python -m trader.cli research-data-import-batch --source-dir <licensed-files> --vendor massive --kind minute_bars
@@ -311,10 +313,14 @@ reported separately from execution promotion and never routes orders.
 The research-data commands maintain an external, offline-only SPY store.
 `research-data-bakeoff` validates manually supplied vendor samples and written
 rights without downloading data or reading credentials. Import commands archive
-licensed raw files immutably; catalog v3 records revisions, corporate actions,
-derived lineage, permanent seals, experiment access, and a versioned SPY
-instrument master. `research-vendor-decision` applies the rights hard gate and
-the fixed weighted score without reading contracts or credentials.
+licensed raw files immutably; catalog v4 records revisions, corporate actions,
+derived lineage, permanent seals, experiment access, point-in-time macro/news
+metadata, and a versioned SPY instrument master. `research-vendor-decision`
+applies the rights hard gate and the fixed weighted score without reading
+contracts or credentials. `research-evidence-register` and
+`research-evidence-audit` store and inspect publication/availability/retrieval
+lineage offline while permanently refusing strategy, promotion, and execution
+eligibility.
 `research-data-derive` creates raw
 execution, split-adjusted signal, and total-return benchmark views, while
 `research-catalog-load` accepts only active checksum-valid revisions with exact
@@ -411,13 +417,14 @@ cancels it if unfilled:
 python -m trader.cli paper-order-smoke --symbol SPY --quantity 1 --transmit true --allow-fill false --cancel-after-seconds 30 --confirm PAPER_SMOKE_SPY_1
 ```
 
-After the smoke run, set `ALLOW_PAPER_ORDERS=false` again and re-enable the
-Gateway/TWS Read-Only API unless actively running the gated paper execution command.
+After the smoke run, set `ALLOW_PAPER_ORDERS=false` again. Run full broker-state
+reconciliation in the bounded operator-controlled Read-Only-off window described
+in `docs/RUNBOOK.md`, then immediately re-enable and visually verify Read-Only.
 Reports are written to `reports/paper_order_smoke_<timestamp>.json` plus `.md`
 with masked account IDs, order/cancel callback evidence, and no secrets.
 
-After any paper order smoke or alpha paper window, run the read-only
-post-run checks before continuing development:
+After any paper order smoke or alpha paper window, run the no-order post-run
+checks before continuing development:
 
 ```bash
 python -m trader.cli paper-reconcile --campaign-id campaign-YYYYMMDD-spy-001 --timeout 30
@@ -425,13 +432,17 @@ python -m trader.cli alpha-test-summary --campaign-id campaign-YYYYMMDD-spy-001
 python -m trader.cli paper-ledger-update --campaign-id campaign-YYYYMMDD-spy-001
 ```
 
-`paper-reconcile` expects Read-Only API to be re-enabled and
-`ALLOW_PAPER_ORDERS=false`. It captures masked account evidence, broker
+`paper-reconcile` requires `ALLOW_PAPER_ORDERS=false`, both live-order gates
+closed, and a deliberate operator-controlled Read-Only-off evidence window. The
+program never toggles Read-Only. It captures masked account evidence, broker
 positions, broker open orders, current-day execution/commission evidence,
 latest local order IDs/perm IDs, and a broker-state fingerprint without
 placing, modifying, or canceling orders. It distinguishes a completed
 zero-position response from unavailable positions, and does the same for empty
 open-order and execution responses only after their IBKR end callbacks arrive.
+Immediately afterward, the operator restores and visually verifies Read-Only,
+then runs a fresh `broker-probe`. Any timeout or unconfirmed restoration halts
+paper progression.
 Current reports carry schema versions; legacy order artifacts are labeled
 `legacy_incompatible`. Standalone broker reconciliation may finish with that
 warning, but campaign eligibility and ledger updates reject non-current source
