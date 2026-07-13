@@ -10,7 +10,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from trader.data.historical import DEFAULT_HISTORICAL_ROOT
+from trader.data.historical import DEFAULT_HISTORICAL_ROOT, parse_ibkr_bar_timestamp
 from trader.models import (
     HistoricalDatasetSummary,
     HistoricalLoadedBar,
@@ -343,7 +343,7 @@ def _normalize_bar(
     snapshot_timestamp: str,
 ) -> tuple[HistoricalLoadedBar | None, list[HistoricalLoadIssue]]:
     issues: list[HistoricalLoadIssue] = []
-    parsed_timestamp = _parse_bar_timestamp(bar.timestamp)
+    parsed_timestamp = parse_ibkr_bar_timestamp(bar.timestamp)
     if parsed_timestamp is None:
         issues.append(
             HistoricalLoadIssue(
@@ -651,27 +651,6 @@ def _parse_snapshot_timestamp(value: str) -> datetime:
         return datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
     except ValueError:
         return datetime.min.replace(tzinfo=UTC)
-
-
-def _parse_bar_timestamp(value: str) -> datetime | None:
-    normalized = " ".join(value.strip().split())
-    if not normalized:
-        return None
-    for fmt in ("%Y%m%d %H:%M:%S", "%Y%m%d", "%Y-%m-%dT%H:%M:%S%z"):
-        try:
-            parsed = datetime.strptime(normalized, fmt)
-        except ValueError:
-            continue
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=UTC)
-        return parsed.astimezone(UTC)
-    try:
-        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
 
 
 def _bar_size_seconds(value: str) -> float | None:

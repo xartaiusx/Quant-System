@@ -173,6 +173,23 @@ def test_loads_valid_jsonl_bars_and_manifest(tmp_path: Path) -> None:
     )
 
 
+def test_loads_zone_qualified_ibkr_bar_timestamps(tmp_path: Path) -> None:
+    bars = [
+        fixture_bar(timestamp="20260713 09:30:00 US/Eastern"),
+        fixture_bar(timestamp="20260713 09:35:00 America/New_York"),
+    ]
+    write_fixture_snapshot(tmp_path, symbol="SPY", bars=bars)
+
+    report = load_historical_snapshots(load_request(tmp_path, "SPY"))
+
+    assert report.ok is True
+    assert report.results[0].dataset is not None
+    assert [bar.timestamp for bar in report.results[0].dataset.bars] == [
+        datetime(2026, 7, 13, 13, 30, tzinfo=UTC),
+        datetime(2026, 7, 13, 13, 35, tzinfo=UTC),
+    ]
+
+
 def test_detects_missing_manifest(tmp_path: Path) -> None:
     entry = HistoricalSnapshotIndexEntry(
         symbol="SPY",
