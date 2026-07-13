@@ -43,7 +43,7 @@ def test_prior_complete_session_satisfies_warmup_without_weakening_freshness() -
     assert report.prior_complete_session_dates == ["2026-07-02"]
     assert report.current_live_bar_count == 5
     assert report.assembled_bar_count == 83
-    assert report.newest_live_bar_age_minutes == Decimal("10.0000")
+    assert report.newest_live_bar_age_minutes == Decimal("5.0000")
     assert report.current_session_starts_at_open is True
     assert report.current_session_contiguous is True
     assert report.completed_bars_only is True
@@ -118,6 +118,49 @@ def test_conflicting_overlap_fails_boundary_agreement() -> None:
     assert assembled is None
     assert report.boundary_agreement_passed is False
     assert any("overlap values disagree" in error for error in report.errors)
+
+
+def test_ignores_off_grid_legacy_bars_and_provisional_snapshot_tails() -> None:
+    prior = _session_bars(date(2026, 7, 10))
+    current = _session_bars(date(2026, 7, 13))[:57]
+    older_current = _session_bars(date(2026, 7, 13))[:48]
+    older_current[-1] = older_current[-1].model_copy(
+        update={"close": older_current[-1].close + Decimal("1")}
+    )
+    legacy_off_grid = prior[0].model_copy(
+        update={
+            "timestamp": datetime(2026, 7, 10, 6, 30, tzinfo=UTC),
+            "raw_timestamp": "20260710 06:30:00",
+        }
+    )
+    latest = _loader([_dataset("20260713T182929Z", current)], latest=True)
+    all_report = _loader(
+        [
+            _dataset("20260712T210330Z", prior),
+            _dataset("20260710T142107Z", [legacy_off_grid]),
+            _dataset("20260713T174505Z", older_current),
+            _dataset("20260713T182929Z", current),
+        ],
+        latest=False,
+    )
+
+    report, assembled = assemble_shadow_warmup(
+        latest,
+        all_report,
+        minimum_bars=50,
+        stale_after_minutes=30,
+        now=datetime(2026, 7, 13, 18, 29, 30, tzinfo=UTC),
+    )
+
+    assert report.ok is True
+    assert assembled is not None
+    assert report.prior_complete_session_dates == ["2026-07-10"]
+    assert report.current_live_bar_count == 57
+    assert report.assembled_bar_count == 135
+    assert report.newest_live_bar_age_minutes == Decimal("14.5000")
+    assert report.boundary_agreement_passed is True
+    assert any("outside relevant XNYS" in warning for warning in report.warnings)
+    assert any("stabilization window" in warning for warning in report.warnings)
 
 
 def test_missing_opening_bar_fails_current_session_prefix() -> None:

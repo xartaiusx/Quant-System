@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -213,21 +213,19 @@ def test_alpha_shadow_daemon_fails_on_stale_source_data(tmp_path: Path) -> None:
     assert "stale source data" in " ".join(report.errors)
 
 
-def test_alpha_shadow_daemon_parses_ibkr_raw_bar_time_as_local(
+def test_alpha_shadow_daemon_uses_zoned_bar_interval_end_for_freshness(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "trader.alpha_shadow_daemon._local_tzinfo",
-        lambda: timezone(timedelta(hours=-7)),
-    )
-
     def fake_shadow(
         _config: TraderConfig,
         shadow_request: AlphaShadowRunRequest,
     ) -> AlphaShadowRunReport:
         return shadow_report(shadow_request).model_copy(
-            update={"source_bar_timestamp_by_symbol": {"SPY": "20260706 12:20:00"}}
+            update={
+                "source_bar_timestamp_by_symbol": {
+                    "SPY": "20260706 12:10:00 US/Eastern"
+                }
+            }
         )
 
     report = run_alpha_shadow_daemon(
@@ -235,7 +233,7 @@ def test_alpha_shadow_daemon_parses_ibkr_raw_bar_time_as_local(
         request(tmp_path, max_cycles=1, stale_after_minutes=30),
         journal=Journal(tmp_path / "reports"),
         alpha_shadow_runner=fake_shadow,
-        now_fn=lambda: datetime(2026, 7, 6, 19, 38, tzinfo=UTC),
+        now_fn=lambda: datetime(2026, 7, 6, 16, 42, tzinfo=UTC),
     )
 
     assert report.ok is True

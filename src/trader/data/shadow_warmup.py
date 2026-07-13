@@ -104,23 +104,61 @@ def assemble_shadow_warmup(
     if not completed_only:
         errors.append("current SPY warmup contains an incomplete forming bar")
 
+    prior_session_dates: list[date] = []
+    prior_date = calendar.previous_session(current_session_date).date()
+    for _ in range(10):
+        prior_session_dates.append(prior_date)
+        prior_date = calendar.previous_session(prior_date).date()
+    relevant_session_dates = {current_session_date, *prior_session_dates}
+    expected_by_session = {
+        session_date: set(_expected_five_minute_timestamps(session_date))
+        for session_date in relevant_session_dates
+    }
+
     bars_by_timestamp: dict[datetime, HistoricalLoadedBar] = {}
     conflicts: list[str] = []
     all_bars_by_session: dict[date, list[HistoricalLoadedBar]] = defaultdict(list)
     latest_path = latest_dataset.bars_path
     older_values: dict[datetime, HistoricalLoadedBar] = {}
+    ignored_off_grid_bars = 0
+    ignored_provisional_bars = 0
     for dataset in all_datasets:
+        captured_at = _snapshot_capture_time(dataset.snapshot_timestamp)
+        stable_cutoff = (
+            captured_at - timedelta(minutes=stale_after_minutes)
+            if captured_at is not None
+            else None
+        )
         for bar in dataset.bars:
             timestamp = bar.timestamp.astimezone(UTC)
+            session_date = timestamp.astimezone(_EASTERN).date()
+            if timestamp not in expected_by_session.get(session_date, set()):
+                ignored_off_grid_bars += 1
+                continue
+            if (
+                dataset.bars_path != latest_path
+                and stable_cutoff is not None
+                and timestamp + timedelta(seconds=interval_seconds) > stable_cutoff
+            ):
+                ignored_provisional_bars += 1
+                continue
             existing = bars_by_timestamp.get(timestamp)
             if existing is not None and not _bar_values_equal(existing, bar):
                 conflicts.append(timestamp.isoformat())
                 continue
             bars_by_timestamp[timestamp] = bar
-            session_date = timestamp.astimezone(_EASTERN).date()
             all_bars_by_session[session_date].append(bar)
             if dataset.bars_path != latest_path:
                 older_values[timestamp] = bar
+    if ignored_off_grid_bars:
+        warnings.append(
+            f"Ignored {ignored_off_grid_bars} bars outside relevant XNYS five-minute grids"
+        )
+    if ignored_provisional_bars:
+        warnings.append(
+            f"Ignored {ignored_provisional_bars} older snapshot bars without the "
+            f"{stale_after_minutes}-minute stabilization window"
+        )
     if conflicts:
         errors.append(
             f"snapshot overlap values disagree at {len(set(conflicts))} timestamp(s)"
@@ -143,9 +181,9 @@ def assemble_shadow_warmup(
     )
 
     selected_prior: list[tuple[date, list[HistoricalLoadedBar]]] = []
-    prior_date = calendar.previous_session(current_session_date).date()
-    examined = 0
-    while examined < 10 and len(selected_prior) < prior_session_limit:
+    for prior_date in prior_session_dates:
+        if len(selected_prior) >= prior_session_limit:
+            break
         candidates = _deduplicate_bars(all_bars_by_session.get(prior_date, []))
         expected = _expected_five_minute_timestamps(prior_date)
         timestamps = [bar.timestamp.astimezone(UTC) for bar in candidates]
@@ -154,8 +192,6 @@ def assemble_shadow_warmup(
         elif not selected_prior:
             errors.append(f"most recent prior XNYS session is incomplete: {prior_date}")
             break
-        prior_date = calendar.previous_session(prior_date).date()
-        examined += 1
     if not selected_prior:
         errors.append("no complete prior XNYS session is available for warmup")
 
@@ -186,8 +222,11 @@ def assemble_shadow_warmup(
         errors.append(
             f"assembled SPY bars observed {len(assembled_bars)}; expected at least {minimum_bars}"
         )
+    newest_interval_end = newest_live.timestamp.astimezone(UTC) + timedelta(
+        seconds=interval_seconds
+    )
     newest_age = Decimal(
-        str((current_time - newest_live.timestamp.astimezone(UTC)).total_seconds() / 60)
+        str((current_time - newest_interval_end).total_seconds() / 60)
     ).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
     if newest_age < 0:
         errors.append("newest current-live SPY bar is in the future")
@@ -321,6 +360,13 @@ def _first_dataset(report: HistoricalLoaderReport) -> HistoricalLoadedDataset | 
 def _interval_seconds(bars: list[HistoricalLoadedBar]) -> int:
     values = {int(bar.interval_seconds or 0) for bar in bars}
     return next(iter(values)) if len(values) == 1 else 0
+
+
+def _snapshot_capture_time(value: str) -> datetime | None:
+    try:
+        return datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
 
 
 def _expected_five_minute_timestamps(session_date: date) -> list[datetime]:

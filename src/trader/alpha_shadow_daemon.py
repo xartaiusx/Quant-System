@@ -7,13 +7,14 @@ import json
 import subprocess
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from trader.alpha_shadow import run_alpha_shadow_run
 from trader.config import PAPER_PORTS, TraderConfig, TradingMode
+from trader.data.historical import bar_size_seconds, parse_ibkr_bar_timestamp
 from trader.models import (
     AlphaShadowDaemonCycle,
     AlphaShadowDaemonReport,
@@ -217,6 +218,7 @@ def _run_cycle(
             shadow_report.source_bar_timestamp_by_symbol,
             now=now_fn(),
             stale_after_minutes=request.stale_after_minutes,
+            bar_size=request.bar_size,
         )
         if stale_symbols:
             errors.append(
@@ -431,16 +433,19 @@ def _stale_symbols(
     *,
     now: datetime,
     stale_after_minutes: int,
+    bar_size: str,
 ) -> list[str]:
     stale_symbols: list[str] = []
+    interval_seconds = bar_size_seconds(bar_size)
+    if interval_seconds is None:
+        return sorted(source_timestamps) or ["SPY"]
     for symbol, raw_timestamp in source_timestamps.items():
         parsed = _parse_timestamp(raw_timestamp)
         if parsed is None:
             stale_symbols.append(symbol)
             continue
-        if (now.astimezone(UTC) - parsed.astimezone(UTC)).total_seconds() > (
-            stale_after_minutes * 60
-        ):
+        interval_end = parsed.astimezone(UTC) + timedelta(seconds=interval_seconds)
+        if (now.astimezone(UTC) - interval_end).total_seconds() > stale_after_minutes * 60:
             stale_symbols.append(symbol)
     if not source_timestamps:
         stale_symbols.append("SPY")
@@ -452,24 +457,7 @@ def _parse_timestamp(value: object) -> datetime | None:
         return value if value.tzinfo else value.replace(tzinfo=UTC)
     if not isinstance(value, str) or not value.strip():
         return None
-    normalized = " ".join(value.split())
-    for fmt in ("%Y%m%d %H:%M:%S", "%Y%m%d"):
-        try:
-            parsed = datetime.strptime(normalized, fmt)
-        except ValueError:
-            continue
-        return parsed.replace(tzinfo=_local_tzinfo()).astimezone(UTC)
-    try:
-        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo:
-        return parsed.astimezone(UTC)
-    return parsed.replace(tzinfo=_local_tzinfo()).astimezone(UTC)
-
-
-def _local_tzinfo() -> tzinfo:
-    return datetime.now().astimezone().tzinfo or UTC
+    return parse_ibkr_bar_timestamp(value)
 
 
 def _config_errors(config: TraderConfig) -> list[str]:
