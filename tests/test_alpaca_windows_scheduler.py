@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -64,15 +65,19 @@ def _invoke_extracted_functions(
 
 
 def test_task_plan_has_local_dst_boundary_and_exact_failover_settings(tmp_path: Path) -> None:
+    script_path = Path("scripts/manage-alpaca-spy-eod-task.ps1").resolve()
     result = _pwsh(
-        "-File",
-        "scripts/manage-alpaca-spy-eod-task.ps1",
-        "-Mode",
-        "Plan",
-        "-OutputRoot",
-        str(tmp_path / "market-data"),
-        "-CaptureStartDate",
-        "2026-07-16",
+        "-Command",
+        (
+            "function Get-TimeZone { [pscustomobject]@{ Id = 'Pacific Standard Time' } }; "
+            ". $env:TASK_SCRIPT -Mode Plan -OutputRoot $env:OUTPUT_ROOT "
+            "-CaptureStartDate 2026-07-16 -PythonPath $env:PYTHON_PATH"
+        ),
+        environment={
+            "TASK_SCRIPT": str(script_path),
+            "OUTPUT_ROOT": str(tmp_path / "market-data"),
+            "PYTHON_PATH": sys.executable,
+        },
     )
 
     assert result.returncode == 0, result.stderr
@@ -107,17 +112,19 @@ def test_task_install_refuses_duplicate_before_credentials_or_rights(
         "-Command",
         (
             "Import-Module ScheduledTasks; "
+            "function Get-TimeZone { [pscustomobject]@{ Id = 'Pacific Standard Time' } }; "
             "function Get-ScheduledTask { param($TaskName, $ErrorAction) "
             "[pscustomobject]@{ TaskName = $TaskName } }; "
             ". $env:TASK_SCRIPT -Mode Install -OutputRoot $env:OUTPUT_ROOT "
             "-CaptureStartDate 2026-07-16 -CredentialPath $env:CREDENTIAL_PATH "
-            "-RightsDecisionReport $env:RIGHTS_PATH"
+            "-RightsDecisionReport $env:RIGHTS_PATH -PythonPath $env:PYTHON_PATH"
         ),
         environment={
             "TASK_SCRIPT": str(script_path),
             "OUTPUT_ROOT": str(output_root),
             "CREDENTIAL_PATH": str(credential_path),
             "RIGHTS_PATH": str(rights_path),
+            "PYTHON_PATH": sys.executable,
         },
     )
 
@@ -142,6 +149,8 @@ def test_eod_runner_plan_only_reads_no_credentials_and_writes_nothing(tmp_path: 
         str(missing_credentials),
         "-RightsDecisionReport",
         str(tmp_path / "must-not-be-read.json"),
+        "-PythonPath",
+        sys.executable,
         "-PlanOnly",
     )
 
