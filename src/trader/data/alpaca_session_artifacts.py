@@ -130,6 +130,32 @@ def _validate_manifest_contract(manifest: Mapping[str, Any]) -> None:
     )
     if any(manifest.get(field) is not False for field in false_fields):
         raise AlpacaSessionArtifactError("session manifest safety flags must remain false")
+    rights_validated = manifest.get("acquisition_rights_validated", False)
+    decision_path = manifest.get("vendor_decision_report")
+    decision_sha256 = manifest.get("vendor_decision_sha256")
+    if rights_validated is True:
+        if not isinstance(decision_path, str) or not decision_path.strip():
+            raise AlpacaSessionArtifactError(
+                "validated acquisition rights require a canonical decision path"
+            )
+        if (
+            not isinstance(decision_sha256, str)
+            or len(decision_sha256) != 64
+            or decision_sha256 != decision_sha256.lower()
+            or any(character not in "0123456789abcdef" for character in decision_sha256)
+        ):
+            raise AlpacaSessionArtifactError(
+                "validated acquisition rights require a lowercase decision SHA-256"
+            )
+    elif rights_validated is False:
+        if decision_path is not None or decision_sha256 is not None:
+            raise AlpacaSessionArtifactError(
+                "unvalidated acquisition rights must not claim decision provenance"
+            )
+    else:
+        raise AlpacaSessionArtifactError(
+            "acquisition rights validation flag must be boolean"
+        )
     request = manifest.get("request")
     if not isinstance(request, dict):
         raise AlpacaSessionArtifactError("session manifest request is missing")

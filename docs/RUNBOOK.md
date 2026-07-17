@@ -853,9 +853,12 @@ and operator briefs remain `hypothesis` evidence and cannot feed v2 strategy,
 paper eligibility, or execution. Keep manifests and artifacts outside Git; copy
 full content only when retention rights explicitly permit it.
 
-Install the hash-locked environment. Before purchase or bulk import, register
-SPY identity and run the offline vendor bake-off plus rights-first decision
-against manually supplied trial/export files and written rights evidence:
+Install the hash-locked environment and register SPY identity. Before obtaining
+or opening any provider sample or trial, require written evidence authorizing
+that exact provider/data-kind sample and the required evaluation, storage,
+encrypted Proton Drive backup, correction, and post-cancellation uses. Only
+after an operator supplies those authorized files may the offline bake-off and
+rights-first decision run:
 
 ```powershell
 python -m pip install --only-binary=:all: --require-hashes -r requirements.lock
@@ -888,11 +891,19 @@ pwsh scripts/manage-alpaca-spy-eod-task.ps1 `
   -CaptureStartDate 2026-07-16
 ```
 
-The manifest must cover a normal session, early close, ex-dividend date,
-before/after correction, cross-vendor daily overlap, synthetic split, expected
-checksums, and written rights for storage, training, derived data, corrections,
-and retention after cancellation. The command reads no credentials and performs
-no network request.
+The manifest binds every sample to its provider and data kind. A minute-data
+candidate must cover a normal session, early close, both daylight-saving
+offsets, before/after correction, cross-provider intraday overlap, and expected
+checksums. A daily/reference candidate must cover an ex-dividend date,
+corporate-action and adjustment history, identifier history where available,
+before/after correction, cross-provider daily overlap, and expected checksums.
+Norgate is daily/reference-only unless later written product evidence and an
+authorized sample prove otherwise. Written rights must explicitly cover raw
+storage, training, derived data, encrypted Proton Drive backup, correction and
+superseded-revision replay, and continued private retention and use of raw data,
+backups, revisions, and derived artifacts after cancellation. The offline
+bake-off/decision and plan-only commands read no credentials and perform no
+network request.
 
 Session capture uses exact XNYS regular-session one-minute labels and is blocked
 until the official close plus 20 minutes. It retains every failed HTTP response
@@ -913,10 +924,12 @@ the two plan commands above. Do not create DPAPI credentials from automation,
 install the task, or make an Alpaca request.
 
 Alpaca is data-only; IBKR remains the sole broker. A real Alpaca acquisition is
-kept outside Git and does not import or activate its output. Before import, send
-the standard RFI, hash the written response, pass the technical bake-off, and
-produce a vendor-decision report that selects `alpaca_sip`. Then import one
-complete acquisition run with:
+kept outside Git and does not import or activate its output. Only after the user
+explicitly opens the final data-farm gate may the standard RFI be sent; a saved
+draft is not authorization. After the written response authorizes the exact
+sample/data kind, hash that evidence, obtain only the authorized sample, pass
+the technical bake-off, and produce a vendor-decision report that selects
+`alpaca_sip` for `minute_bars`. Then import one complete acquisition run with:
 
 ```powershell
 python -m trader.cli research-data-import-batch `
@@ -929,27 +942,34 @@ python -m trader.cli research-data-import-batch `
 ```
 
 Acquisition and import details are in `docs/ALPACA_DATA_ACQUISITION.md`.
+The dashboard, entitlement, MFA, MCP, and final procurement boundary is in
+`docs/DATA_PROVIDER_SETUP.md`.
 
-After a vendor passes procurement review, batch-import local licensed files in
-deterministic filename order, import complete actions, derive views, and audit:
+After the exact provider and data kind pass written-rights, authorized-sample,
+bake-off, budget, and explicit purchase gates, batch-import local licensed files
+in deterministic filename order, import complete actions, derive views, and
+audit:
 
 ```powershell
 python -m trader.cli research-data-import-batch `
   --source-dir D:\MarketData\incoming\massive `
   --vendor massive `
   --kind minute_bars `
+  --vendor-decision-report <passing-massive-decision-report.json> `
   --root D:\MarketData\Quant-System
 
 python -m trader.cli research-data-import-batch `
   --source-dir D:\MarketData\incoming\daily `
   --vendor norgate `
   --kind daily_bars `
+  --vendor-decision-report <passing-norgate-daily-decision-report.json> `
   --root D:\MarketData\Quant-System
 
 python -m trader.cli research-data-import-batch `
   --source-dir D:\MarketData\incoming\actions `
   --vendor norgate `
   --kind corporate_actions `
+  --vendor-decision-report <passing-norgate-actions-decision-report.json> `
   --coverage-start 1993-01-22 `
   --coverage-end 2025-12-31 `
   --root D:\MarketData\Quant-System

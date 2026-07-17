@@ -36,6 +36,11 @@ from trader.models import (
     ResearchSampleKind,
 )
 from trader.reporting.reports import markdown_summary
+from vendor_rights_helpers import (
+    write_authoritative_action_vendor_decision,
+    write_authoritative_daily_vendor_decision,
+    write_authoritative_vendor_decision,
+)
 
 _MASSIVE_FIELDS = [
     "ticker",
@@ -304,10 +309,7 @@ def test_daily_import_and_dividend_total_return_benchmark(tmp_path: Path) -> Non
         ],
     )
     daily_report = ingest_canonical_daily_file(
-        ResearchCanonicalDailyIngestRequest(
-            source_path=daily.as_posix(),
-            root_path=root.as_posix(),
-        )
+        _daily_request(daily, root)
     )
     assert daily_report.ok is True
     assert len(daily_report.partitions) == 2
@@ -345,16 +347,36 @@ def test_daily_import_and_dividend_total_return_benchmark(tmp_path: Path) -> Non
 
 
 def test_missing_daily_source_fails_closed(tmp_path: Path) -> None:
+    root = tmp_path / "store"
     report = ingest_canonical_daily_file(
-        ResearchCanonicalDailyIngestRequest(
-            source_path=(tmp_path / "missing.csv").as_posix(),
-            root_path=(tmp_path / "store").as_posix(),
-        )
+        _daily_request(tmp_path / "missing.csv", root)
     )
 
     assert report.ok is False
     assert report.final_status == "failed"
     assert "source file not found" in report.errors[0]
+
+
+def test_direct_daily_and_action_requests_require_vendor_evidence(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "store"
+    with pytest.raises(ValueError, match="vendor-decision report"):
+        ResearchCanonicalDailyIngestRequest(
+            source_path=(tmp_path / "daily.csv").as_posix(),
+            root_path=root.as_posix(),
+            source_name="databento",
+        )
+    with pytest.raises(ValueError, match="vendor-decision report"):
+        ResearchCorporateActionIngestRequest(
+            source_path=(tmp_path / "actions.csv").as_posix(),
+            root_path=root.as_posix(),
+            source_name="algoseek",
+            coverage_start="2025-01-01",
+            coverage_end="2025-12-31",
+        )
+
+    assert root.exists() is False
 
 
 def test_daily_source_rejects_fractional_volume(tmp_path: Path) -> None:
@@ -363,12 +385,7 @@ def test_daily_source_rejects_fractional_volume(tmp_path: Path) -> None:
         [("2026-07-02", "100", "101", "99", "100", "1000.5")],
     )
 
-    report = ingest_canonical_daily_file(
-        ResearchCanonicalDailyIngestRequest(
-            source_path=source.as_posix(),
-            root_path=(tmp_path / "store").as_posix(),
-        )
-    )
+    report = ingest_canonical_daily_file(_daily_request(source, tmp_path / "store"))
 
     assert report.ok is False
     assert "invalid daily volume" in report.errors[0]
@@ -461,10 +478,7 @@ def test_prior_daily_correction_invalidates_later_benchmark(tmp_path: Path) -> N
         ],
     )
     assert ingest_canonical_daily_file(
-        ResearchCanonicalDailyIngestRequest(
-            source_path=daily.as_posix(),
-            root_path=root.as_posix(),
-        )
+        _daily_request(daily, root)
     ).ok is True
     actions = _write_actions(tmp_path / "source/actions.csv", [])
     assert _ingest_actions(actions, root, "2026-07-01", "2026-07-02").ok is True
@@ -477,10 +491,7 @@ def test_prior_daily_correction_invalidates_later_benchmark(tmp_path: Path) -> N
         [("2026-07-01", "100", "102", "99", "101", "1000000")],
     )
     assert ingest_canonical_daily_file(
-        ResearchCanonicalDailyIngestRequest(
-            source_path=correction.as_posix(),
-            root_path=root.as_posix(),
-        )
+        _daily_request(correction, root)
     ).ok is True
     request = ResearchCatalogLoadRequest(
         root_path=root.as_posix(),
@@ -562,6 +573,10 @@ def test_batch_import_is_sorted_local_and_broker_free(tmp_path: Path) -> None:
     source_dir = tmp_path / "minute"
     _write_massive_file(source_dir / "2026-07-02.csv.gz", date(2026, 7, 2))
     _write_massive_file(source_dir / "2026-07-01.csv.gz", date(2026, 7, 1))
+    decision = write_authoritative_vendor_decision(
+        tmp_path / "massive-rights",
+        vendor="massive",
+    )
 
     report = import_research_data_batch(
         ResearchDataBatchImportRequest(
@@ -569,6 +584,7 @@ def test_batch_import_is_sorted_local_and_broker_free(tmp_path: Path) -> None:
             root_path=root.as_posix(),
             vendor="massive",
             kind=ResearchSampleKind.MINUTE_BARS,
+            vendor_decision_report_path=decision.as_posix(),
         )
     )
 
@@ -582,6 +598,109 @@ def test_batch_import_is_sorted_local_and_broker_free(tmp_path: Path) -> None:
     assert report.credentials_read is False
     assert report.network_accessed is False
     assert report.order_api_invoked is False
+
+
+def test_massive_batch_rejects_missing_evidence_before_catalog_write(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "store"
+    source_dir = tmp_path / "minute"
+    _write_massive_file(source_dir / "2026-07-02.csv.gz", date(2026, 7, 2))
+
+    report = import_research_data_batch(
+        ResearchDataBatchImportRequest(
+            source_dir=source_dir.as_posix(),
+            root_path=root.as_posix(),
+            vendor="massive",
+            kind=ResearchSampleKind.MINUTE_BARS,
+            vendor_decision_report_path=(tmp_path / "missing.json").as_posix(),
+        )
+    )
+
+    assert report.ok is False
+    assert "vendor-decision report failed validation" in report.errors[0]
+    assert root.exists() is False
+
+
+def test_massive_batch_rejects_forged_evidence_before_catalog_write(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "store"
+    source_dir = tmp_path / "minute"
+    _write_massive_file(source_dir / "2026-07-02.csv.gz", date(2026, 7, 2))
+    decision = write_authoritative_vendor_decision(
+        tmp_path / "massive-rights",
+        vendor="massive",
+    )
+    payload = json.loads(decision.read_text(encoding="utf-8"))
+    payload["candidate_results"][0]["weighted_score"] = "99.99"
+    decision.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = import_research_data_batch(
+        ResearchDataBatchImportRequest(
+            source_dir=source_dir.as_posix(),
+            root_path=root.as_posix(),
+            vendor="massive",
+            kind=ResearchSampleKind.MINUTE_BARS,
+            vendor_decision_report_path=decision.as_posix(),
+        )
+    )
+
+    assert report.ok is False
+    assert "authoritative validation" in report.errors[0]
+    assert root.exists() is False
+
+
+def test_massive_batch_rejects_wrong_vendor_before_catalog_write(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "store"
+    source_dir = tmp_path / "minute"
+    _write_massive_file(source_dir / "2026-07-02.csv.gz", date(2026, 7, 2))
+    alpaca_decision = write_authoritative_vendor_decision(
+        tmp_path / "alpaca-rights",
+        vendor="alpaca_sip",
+    )
+
+    report = import_research_data_batch(
+        ResearchDataBatchImportRequest(
+            source_dir=source_dir.as_posix(),
+            root_path=root.as_posix(),
+            vendor="massive",
+            kind=ResearchSampleKind.MINUTE_BARS,
+            vendor_decision_report_path=alpaca_decision.as_posix(),
+        )
+    )
+
+    assert report.ok is False
+    assert "authoritative validation" in report.errors[0]
+    assert root.exists() is False
+
+
+def test_massive_minute_batch_rejects_daily_only_decision_before_write(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "store"
+    source_dir = tmp_path / "minute"
+    _write_massive_file(source_dir / "2026-07-02.csv.gz", date(2026, 7, 2))
+    daily_decision = write_authoritative_daily_vendor_decision(
+        tmp_path / "massive-daily-rights",
+        vendor="massive",
+    )
+
+    report = import_research_data_batch(
+        ResearchDataBatchImportRequest(
+            source_dir=source_dir.as_posix(),
+            root_path=root.as_posix(),
+            vendor="massive",
+            kind=ResearchSampleKind.MINUTE_BARS,
+            vendor_decision_report_path=daily_decision.as_posix(),
+        )
+    )
+
+    assert report.ok is False
+    assert "authoritative validation" in report.errors[0]
+    assert root.exists() is False
 
 
 def test_alpaca_batch_import_requires_rights_and_maps_sip_fields(tmp_path: Path) -> None:
@@ -604,7 +723,10 @@ def test_alpaca_batch_import_requires_rights_and_maps_sip_fields(tmp_path: Path)
     assert missing.ok is False
     assert "vendor-decision report" in missing.errors[0]
 
-    decision = _write_alpaca_vendor_decision(tmp_path / "alpaca-decision.json")
+    decision = write_authoritative_vendor_decision(
+        tmp_path / "alpaca-rights",
+        vendor="alpaca_sip",
+    )
     report = import_research_data_batch(
         ResearchDataBatchImportRequest(
             source_dir=source_dir.as_posix(),
@@ -666,9 +788,29 @@ def test_catalog_reports_render_and_commands_are_registered(tmp_path: Path) -> N
 
 
 def _minute_request(source: Path, root: Path) -> ResearchDataIngestRequest:
+    decision = write_authoritative_vendor_decision(
+        root.parent / f"{root.name}-massive-rights",
+        vendor="massive",
+    )
     return ResearchDataIngestRequest(
         source_path=source.as_posix(),
         root_path=root.as_posix(),
+        vendor_decision_report_path=decision.as_posix(),
+    )
+
+
+def _daily_request(
+    source: Path,
+    root: Path,
+) -> ResearchCanonicalDailyIngestRequest:
+    decision = write_authoritative_daily_vendor_decision(
+        root.parent / f"{root.name}-norgate-daily-rights",
+        vendor="norgate",
+    )
+    return ResearchCanonicalDailyIngestRequest(
+        source_path=source.as_posix(),
+        root_path=root.as_posix(),
+        vendor_decision_report_path=decision.as_posix(),
     )
 
 
@@ -678,12 +820,17 @@ def _ingest_actions(
     coverage_start: str,
     coverage_end: str,
 ):
+    decision = write_authoritative_action_vendor_decision(
+        root.parent / f"{root.name}-norgate-action-rights",
+        vendor="norgate",
+    )
     return ingest_corporate_action_file(
         ResearchCorporateActionIngestRequest(
             source_path=source.as_posix(),
             root_path=root.as_posix(),
             coverage_start=coverage_start,
             coverage_end=coverage_end,
+            vendor_decision_report_path=decision.as_posix(),
         )
     )
 
@@ -754,36 +901,6 @@ def _write_alpaca_sip_file(path: Path, session_date: date) -> Path:
             },
             stream,
         )
-    return path.resolve()
-
-
-def _write_alpaca_vendor_decision(path: Path) -> Path:
-    path.write_text(
-        json.dumps(
-            {
-                "ok": True,
-                "manifest_path": "local/alpaca-decision.json",
-                "candidate_results": [
-                    {
-                        "vendor": "alpaca_sip",
-                        "weighted_score": "90",
-                        "three_year_tco_usd": "0",
-                        "estimated_storage_gb": "25",
-                        "written_evidence_sha256": ["sha256:" + "a" * 64],
-                        "rights_gate_passed": True,
-                        "bakeoff_gate_passed": True,
-                        "budget_gate_passed": True,
-                        "eligible": True,
-                        "selected": True,
-                    }
-                ],
-                "selected_vendor": "alpaca_sip",
-                "procurement_blocked": False,
-                "final_status": "completed",
-            }
-        ),
-        encoding="utf-8",
-    )
     return path.resolve()
 
 

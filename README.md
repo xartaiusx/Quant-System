@@ -157,7 +157,7 @@ python -m trader.cli backtest-feed --symbols SPY,AAPL
 python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment intersection
 python -m trader.cli backtest-run --symbols SPY,AAPL
 python -m trader.cli backtest-run --symbols SPY,AAPL --alignment intersection
-python -m trader.cli research-data-ingest --source-file <licensed-massive.csv.gz>
+python -m trader.cli research-data-ingest --source-file <licensed-massive.csv.gz> --vendor-decision-report <passing-massive-decision-report.json>
 python -m trader.cli research-data-audit
 python -m trader.cli research-data-bakeoff --manifest <local-manifest.json>
 python -m trader.cli research-vendor-decision --manifest <local-decision.json>
@@ -168,7 +168,7 @@ python scripts/acquire_alpaca_spy.py --session-date 2026-07-16 --output-root D:\
 python -m trader.alpaca_session_compare_cli --baseline-manifest <earlier-manifest.json> --candidate-manifest <later-manifest.json>
 pwsh scripts/manage-alpaca-spy-eod-task.ps1 -Mode Plan -OutputRoot D:\MarketData\Quant-System\incoming\alpaca_sip -CaptureStartDate 2026-07-16
 python -m trader.cli research-instrument-register --manifest research/instruments/spy_v1.json
-python -m trader.cli research-data-import-batch --source-dir <licensed-files> --vendor massive --kind minute_bars
+python -m trader.cli research-data-import-batch --source-dir <licensed-files> --vendor massive --kind minute_bars --vendor-decision-report <passing-massive-decision-report.json>
 python -m trader.cli research-data-derive
 python -m trader.cli research-catalog-load --price-view split_adjusted_signal
 python -m trader.cli research-backtest --symbol SPY --short-window 5 --long-window 20

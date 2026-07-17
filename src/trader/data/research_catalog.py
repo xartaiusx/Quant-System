@@ -21,6 +21,10 @@ import exchange_calendars as xcals  # type: ignore[import-untyped]
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
+from trader.data.alpaca_rights_gate import (
+    VendorRightsGateError,
+    load_passing_vendor_rights_decision,
+)
 from trader.data.research_store import (
     CATALOG_RELATIVE_PATH,
     ingest_alpaca_sip_minute_file,
@@ -51,7 +55,6 @@ from trader.models import (
     ResearchDerivedViewReport,
     ResearchDerivedViewRequest,
     ResearchSampleKind,
-    ResearchVendorDecisionReport,
 )
 
 _DAILY_COLUMNS = {"symbol", "timestamp", "open", "high", "low", "close", "volume"}
@@ -66,6 +69,13 @@ _ACTION_COLUMNS = {
 }
 _ALLOWED_ACTIONS = {"split", "dividend"}
 _PRICE_QUANTUM = Decimal("0.00000001")
+_RIGHTS_GATED_VENDORS = {
+    "alpaca_sip",
+    "massive",
+    "algoseek",
+    "databento",
+    "norgate",
+}
 
 
 @dataclass(frozen=True)
@@ -111,6 +121,21 @@ def ingest_canonical_daily_file(
     warnings = ["Offline licensed daily-data ingestion only; no broker contacted"]
     errors: list[str] = []
     artifact: ResearchDataArtifact | None = None
+    rights_error = _vendor_rights_error(
+        request.source_name,
+        request.vendor_decision_report_path,
+        required_data_kind=ResearchSampleKind.DAILY_BARS,
+    )
+    if rights_error is not None:
+        return ResearchCanonicalDailyIngestReport(
+            ok=False,
+            request=request,
+            root_path=root.as_posix(),
+            catalog_path=catalog_path.as_posix(),
+            errors=[rights_error],
+            warnings=warnings,
+            final_status="failed",
+        )
     try:
         catalog_path = initialize_research_store(root)
         artifact, artifact_id = _archive_artifact(
@@ -230,6 +255,21 @@ def ingest_corporate_action_file(
     catalog_path = root / CATALOG_RELATIVE_PATH
     warnings = ["Offline corporate-action ingestion only; no broker contacted"]
     artifact: ResearchDataArtifact | None = None
+    rights_error = _vendor_rights_error(
+        request.source_name,
+        request.vendor_decision_report_path,
+        required_data_kind=ResearchSampleKind.CORPORATE_ACTIONS,
+    )
+    if rights_error is not None:
+        return ResearchCorporateActionIngestReport(
+            ok=False,
+            request=request,
+            root_path=root.as_posix(),
+            catalog_path=catalog_path.as_posix(),
+            errors=[rights_error],
+            warnings=warnings,
+            final_status="failed",
+        )
     try:
         catalog_path = initialize_research_store(root)
         artifact, artifact_id = _archive_artifact(
@@ -689,11 +729,7 @@ def _import_batch_item(
                 source_path=path.as_posix(),
                 root_path=request.root_path,
                 source_name=request.vendor,
-                vendor_decision_sha256=(
-                    f"sha256:{_sha256(Path(request.vendor_decision_report_path or ''))}"
-                    if request.vendor.strip().lower() == "alpaca_sip"
-                    else None
-                ),
+                vendor_decision_report_path=request.vendor_decision_report_path,
             )
         )
         return ResearchDataBatchImportItem(
@@ -712,6 +748,7 @@ def _import_batch_item(
                 source_path=path.as_posix(),
                 root_path=request.root_path,
                 source_name=request.vendor,
+                vendor_decision_report_path=request.vendor_decision_report_path,
             )
         )
         return ResearchDataBatchImportItem(
@@ -731,6 +768,7 @@ def _import_batch_item(
             source_name=request.vendor,
             coverage_start=request.coverage_start or "",
             coverage_end=request.coverage_end or "",
+            vendor_decision_report_path=request.vendor_decision_report_path,
         )
     )
     return ResearchDataBatchImportItem(
@@ -746,39 +784,37 @@ def _import_batch_item(
 
 
 def _batch_vendor_rights_errors(request: ResearchDataBatchImportRequest) -> list[str]:
-    if request.vendor.strip().lower() != "alpaca_sip":
+    vendor = request.vendor.strip().lower()
+    if vendor not in _RIGHTS_GATED_VENDORS:
         return []
-    report_path = Path(request.vendor_decision_report_path or "").expanduser().resolve()
-    if not report_path.is_file():
-        return ["alpaca_sip import requires an existing vendor-decision report"]
-    try:
-        report = ResearchVendorDecisionReport.model_validate_json(
-            report_path.read_text(encoding="utf-8")
-        )
-    except (OSError, ValueError) as exc:
-        return [f"alpaca_sip vendor-decision report failed validation: {exc}"]
-    selected = next(
-        (
-            item
-            for item in report.candidate_results
-            if item.selected and item.vendor.strip().lower() == "alpaca_sip"
-        ),
-        None,
+    error = _vendor_rights_error(
+        vendor,
+        request.vendor_decision_report_path,
+        required_data_kind=request.kind,
     )
-    if (
-        not report.ok
-        or report.procurement_blocked
-        or (report.selected_vendor or "").strip().lower() != "alpaca_sip"
-        or selected is None
-        or not selected.rights_gate_passed
-        or not selected.bakeoff_gate_passed
-        or not selected.budget_gate_passed
-        or not selected.eligible
-    ):
-        return [
-            "alpaca_sip import is blocked until written rights and technical bake-off gates pass"
-        ]
-    return []
+    return [error] if error is not None else []
+
+
+def _vendor_rights_error(
+    vendor: str,
+    report_path: str | None,
+    *,
+    required_data_kind: ResearchSampleKind | str,
+) -> str | None:
+    normalized_vendor = vendor.strip().lower()
+    if normalized_vendor not in _RIGHTS_GATED_VENDORS:
+        return f"unsupported research-data vendor: {normalized_vendor or 'empty'}"
+    if not report_path:
+        return f"{normalized_vendor} import requires an existing vendor-decision report"
+    try:
+        load_passing_vendor_rights_decision(
+            Path(report_path),
+            expected_vendor=normalized_vendor,
+            required_data_kind=required_data_kind,
+        )
+    except VendorRightsGateError as exc:
+        return f"{normalized_vendor} vendor-decision report failed validation: {exc}"
+    return None
 
 
 def _parse_daily_file(path: Path) -> list[_DailyBar]:

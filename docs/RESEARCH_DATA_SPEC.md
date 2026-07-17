@@ -168,6 +168,17 @@ import and accepts only these SPY source kinds:
 - `corporate_actions`: complete split/dividend event exports with declared
   coverage dates.
 
+Alpaca, Massive, AlgoSeek, Databento, and Norgate imports require the selected
+provider's authoritative vendor-decision report. The importer recomputes the
+embedded decision and bake-off chain before any catalog write and requires
+evidence for the imported data kind. Minute imports additionally require the
+selected provider's own passing normal-session, early-close, pre/post-DST,
+correction-before/after, and cross-vendor intraday-overlap evidence; another
+provider's cases cannot satisfy those gates. Daily imports require that
+provider's own `daily_overlap` sample and a passing cross-vendor daily-overlap
+comparison involving it. Corporate-action imports require that provider's own
+passing `ex_dividend` and `synthetic_split` cases.
+
 Minute partitions must exactly match the XNYS calendar: 390 one-minute rows on a
 normal session or 210 on a standard early close. Daily imports must contain every
 XNYS session between their first and last observations. Corporate-action sets
@@ -231,6 +242,7 @@ python -m trader.cli research-data-import-batch `
   --source-dir D:\MarketData\incoming\massive `
   --vendor massive `
   --kind minute_bars `
+  --vendor-decision-report <passing-massive-decision-report.json> `
   --root D:\MarketData\Quant-System
 
 # Alpaca import remains blocked until this report selects alpaca_sip and proves rights.
@@ -246,6 +258,7 @@ python -m trader.cli research-data-import-batch `
   --source-dir D:\MarketData\incoming\actions `
   --vendor norgate `
   --kind corporate_actions `
+  --vendor-decision-report <passing-norgate-decision-report.json> `
   --coverage-start 1993-01-22 `
   --coverage-end 2025-12-31 `
   --root D:\MarketData\Quant-System

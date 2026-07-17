@@ -87,6 +87,8 @@ def test_acquires_paginated_immutable_pages_and_nonpromoting_manifest(tmp_path: 
         _request(tmp_path),
         api_key_id="test-key-id",
         api_secret_key="test-secret-key",
+        vendor_decision_report=tmp_path / "rights" / "decision.json",
+        vendor_decision_sha256="a" * 64,
         transport=transport,
         now=lambda: _NOW,
         sleep=lambda _: None,
@@ -97,6 +99,8 @@ def test_acquires_paginated_immutable_pages_and_nonpromoting_manifest(tmp_path: 
     assert result.total_bars == 2
     assert result.research_eligible is False
     assert result.rights_status == "written_rights_unverified"
+    assert result.acquisition_rights_validated is True
+    assert result.vendor_decision_sha256 == "a" * 64
     assert len(requests) == 2
     first_query = parse_qs(urlparse(requests[0][0]).query)
     assert first_query["feed"] == ["sip"]
@@ -111,6 +115,11 @@ def test_acquires_paginated_immutable_pages_and_nonpromoting_manifest(tmp_path: 
     assert manifest["bar_count"] == 2
     assert manifest["research_eligible"] is False
     assert manifest["automatically_activated"] is False
+    assert manifest["acquisition_rights_validated"] is True
+    assert manifest["vendor_decision_sha256"] == "a" * 64
+    assert manifest["vendor_decision_report"] == (
+        tmp_path / "rights" / "decision.json"
+    ).resolve().as_posix()
     assert "next-secret-token" not in json.dumps(manifest)
     data_path = manifest_path.parent / manifest["data_file"]
     with gzip.open(data_path, "rt", encoding="utf-8") as handle:

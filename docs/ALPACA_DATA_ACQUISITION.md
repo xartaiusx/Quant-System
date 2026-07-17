@@ -86,13 +86,16 @@ request fingerprint.
 
 ## Acquire
 
-After credentials are loaded:
+After an authoritative vendor decision selects `alpaca_sip` and the credentials
+are loaded:
 
 ```powershell
 python scripts/acquire_alpaca_spy.py `
   --symbol SPY --feed sip --timeframe 1Min `
   --start 2016-01-01 --end 2025-12-31 `
-  --output-root D:\MarketData\Quant-System\incoming\alpaca_sip
+  --output-root D:\MarketData\Quant-System\incoming\alpaca_sip `
+  --vendor-decision-report <passing-alpaca-vendor-decision.json> `
+  --expected-vendor-decision-sha256 <exact-report-sha256>
 ```
 
 The downloader uses pagination, a conservative request rate, bounded retry and
@@ -108,6 +111,14 @@ redirect target.
 Download success is not import permission. It does not trigger catalog import,
 derivation, backtesting, experiment access, or paper execution.
 
+Every non-plan invocation validates the report through the authoritative
+offline decision and bake-off recomputation, resolves its canonical path, and
+requires its SHA-256 to match the separately pinned digest before reading either
+credential, creating an output directory, or invoking the HTTP transport.
+Acquisition output, checkpoints, and immutable manifests bind that canonical
+path and digest while keeping research, promotion, and graduation eligibility
+false. Plan-only mode reads neither the report nor the digest.
+
 ## Complete Session Capture
 
 After a passing rights decision, one EOD capture requests exactly the XNYS
@@ -119,7 +130,9 @@ close must contain the calendar-derived 210 timestamps.
 ```powershell
 python scripts/acquire_alpaca_spy.py `
   --session-date 2026-07-16 `
-  --output-root D:\MarketData\Quant-System\incoming\alpaca_sip
+  --output-root D:\MarketData\Quant-System\incoming\alpaca_sip `
+  --vendor-decision-report <passing-alpaca-vendor-decision.json> `
+  --expected-vendor-decision-sha256 <exact-report-sha256>
 ```
 
 Every HTTP response attempt, including rate-limit/error and malformed/drifted
@@ -139,6 +152,12 @@ Each completed recapture creates a distinct immutable run. Manifests record
 session boundaries, expected and received counts, request fingerprint,
 allowlisted source response IDs, raw-page/data hashes, and false broker, order,
 catalog, research, promotion, and graduation flags.
+
+The offline session loader validates the pinned path/digest pair whenever a new
+manifest claims acquisition-rights validation. Legacy version-2 manifests that
+predate these optional provenance fields remain readable for correction
+history, but they cannot claim validated acquisition rights and remain
+non-promoting evidence.
 
 Compare two completed revisions offline:
 
@@ -177,6 +196,10 @@ authoritatively parsed `ResearchVendorDecisionReport` whose selected
 `alpaca_sip` candidate passes written-rights, bake-off, and budget gates. Each
 orchestration report records the decision SHA-256, commit, configuration
 fingerprint, and comparison-report hashes.
+Installation validates the clean committed release before reading rights or
+credentials, then embeds only the validator-resolved report path and pinned
+digest in the task action. Every unattended child must revalidate that exact
+digest before credentials or network access.
 The task runs at 13:30 Pacific Monday-Friday in the logged-on current-user
 context. Its runner uses XNYS—not weekdays—to skip holidays, identify the latest
 completed session, backfill every missing date since `CaptureStartDate`, and

@@ -105,6 +105,8 @@ def test_session_capture_requires_exact_xnys_grid_and_inclusive_api_end(
         _request(tmp_path, session_date),
         api_key_id="key",
         api_secret_key="secret",
+        vendor_decision_report=tmp_path / "rights" / "decision.json",
+        vendor_decision_sha256="a" * 64,
         transport=transport,
         now=lambda: now,
         sleep=lambda _: None,
@@ -124,6 +126,8 @@ def test_session_capture_requires_exact_xnys_grid_and_inclusive_api_end(
     assert manifest["graduation_eligible"] is False
     assert manifest["broker_contacted"] is False
     assert manifest["order_api_invoked"] is False
+    assert manifest["acquisition_rights_validated"] is True
+    assert manifest["vendor_decision_sha256"] == "a" * 64
 
 
 def test_session_plan_covers_dst_and_close_plus_twenty_gate(tmp_path: Path) -> None:
@@ -319,6 +323,61 @@ def test_offline_loader_rejects_raw_to_data_lineage_drift(tmp_path: Path) -> Non
 
     with pytest.raises(AlpacaSessionArtifactError, match="raw pages do not match"):
         load_alpaca_session(manifest_path)
+
+
+def test_offline_loader_rejects_invalid_validated_rights_provenance(
+    tmp_path: Path,
+) -> None:
+    session_date = date(2025, 1, 2)
+    close = xcals.get_calendar("XNYS").session_close(session_date).to_pydatetime()
+    result = acquire_spy_session(
+        _request(tmp_path, session_date),
+        api_key_id="key",
+        api_secret_key="secret",
+        vendor_decision_report=tmp_path / "rights" / "decision.json",
+        vendor_decision_sha256="a" * 64,
+        transport=lambda _url, _headers: _response(_bars(session_date)),
+        now=lambda: close + timedelta(minutes=20),
+        sleep=lambda _: None,
+        monotonic=lambda: 100.0,
+    )
+    manifest_path = Path(result.manifest_paths[0])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["vendor_decision_sha256"] = "not-a-digest"
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AlpacaSessionArtifactError, match="lowercase decision SHA-256"):
+        load_alpaca_session(manifest_path)
+
+
+def test_offline_loader_accepts_legacy_manifest_without_rights_provenance(
+    tmp_path: Path,
+) -> None:
+    session_date = date(2025, 1, 2)
+    close = xcals.get_calendar("XNYS").session_close(session_date).to_pydatetime()
+    result = acquire_spy_session(
+        _request(tmp_path, session_date),
+        api_key_id="key",
+        api_secret_key="secret",
+        transport=lambda _url, _headers: _response(_bars(session_date)),
+        now=lambda: close + timedelta(minutes=20),
+        sleep=lambda _: None,
+        monotonic=lambda: 100.0,
+    )
+    manifest_path = Path(result.manifest_paths[0])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("acquisition_rights_validated")
+    manifest.pop("vendor_decision_report")
+    manifest.pop("vendor_decision_sha256")
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    assert load_alpaca_session(manifest_path).manifest["session_complete"] is True
 
 
 def test_offline_loader_binds_accepted_response_to_raw_page(tmp_path: Path) -> None:

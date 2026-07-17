@@ -165,7 +165,22 @@ function Invoke-RightsValidation {
         if ($process.ExitCode -ne 0) {
             throw "Alpaca rights validation failed: $stderr"
         }
-        return $stdout | ConvertFrom-Json -Depth 10
+        $evidence = $stdout | ConvertFrom-Json -Depth 10
+        $digest = ([string] $evidence.report_sha256).Trim().ToLowerInvariant()
+        if (
+            $evidence.ok -ne $true -or
+            $evidence.selected_vendor -ne 'alpaca_sip' -or
+            -not $evidence.report_path -or
+            $digest -notmatch '^[0-9a-f]{64}$'
+        ) {
+            throw 'Alpaca rights validator returned incomplete evidence.'
+        }
+        return [pscustomobject]@{
+            ok = $true
+            report_path = [string] $evidence.report_path
+            report_sha256 = $digest
+            selected_vendor = 'alpaca_sip'
+        }
     }
     finally {
         [void] $startInfo.Environment.Remove('APCA_API_KEY_ID')
@@ -302,6 +317,12 @@ if ($Mode -eq 'Uninstall') {
 if (-not $OutputRoot -or -not $CaptureStartDate) {
     throw 'Plan and Install modes require OutputRoot and CaptureStartDate.'
 }
+if (
+    $Mode -eq 'Install' -and
+    $null -ne (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
+) {
+    throw "Task '$TaskName' already exists; installation refuses to overwrite it."
+}
 if ((Get-TimeZone).Id -ne 'Pacific Standard Time') {
     throw 'The scheduled task requires the Windows Pacific Standard Time zone.'
 }
@@ -328,13 +349,15 @@ $rightsArgument = if ($RightsDecisionReport) {
 } else {
     '<required-passing-vendor-decision-report>'
 }
+$expectedRightsArgument = '<required-validated-vendor-decision-sha256>'
 foreach ($item in @(
     @{ Value = $runnerPath; Label = 'RunnerPath' },
     @{ Value = $PythonPath; Label = 'PythonPath' },
     @{ Value = $resolvedOutput; Label = 'OutputRoot' },
     @{ Value = $CaptureStartDate; Label = 'CaptureStartDate' },
     @{ Value = $CredentialPath; Label = 'CredentialPath' },
-    @{ Value = $rightsArgument; Label = 'RightsDecisionReport' }
+    @{ Value = $rightsArgument; Label = 'RightsDecisionReport' },
+    @{ Value = $expectedRightsArgument; Label = 'ExpectedRightsDecisionSha256' }
 )) {
     Assert-SafeTaskValue -Value $item.Value -Label $item.Label
 }
@@ -348,7 +371,8 @@ $actionArguments = @(
     '-OutputRoot', (Quote-TaskValue $resolvedOutput),
     '-CaptureStartDate', $CaptureStartDate,
     '-CredentialPath', (Quote-TaskValue $CredentialPath),
-    '-RightsDecisionReport', (Quote-TaskValue $rightsArgument)
+    '-RightsDecisionReport', (Quote-TaskValue $rightsArgument),
+    '-ExpectedRightsDecisionSha256', (Quote-TaskValue $expectedRightsArgument)
 ) -join ' '
 $action = New-ScheduledTaskAction -Execute $pwshPath -Argument $actionArguments -WorkingDirectory $repoRoot
 $trigger = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At '1:30 PM'
@@ -400,20 +424,11 @@ if ($Mode -eq 'Plan') {
     exit 0
 }
 
-if ($null -ne (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
-    throw "Task '$TaskName' already exists; installation refuses to overwrite it."
-}
-if (-not (Test-Path -LiteralPath $CredentialPath -PathType Leaf)) {
-    throw "DPAPI credential file not found: $CredentialPath"
-}
-$CredentialPath = Assert-DpapiCredentialFile -Path $CredentialPath
-$rightsEvidence = Invoke-RightsValidation -Path $RightsDecisionReport
-$rightsPath = [string] $rightsEvidence.report_path
 $planCheck = & $pwshPath -NoLogo -NoProfile -NonInteractive -File $runnerPath `
     -OutputRoot $resolvedOutput `
     -CaptureStartDate $CaptureStartDate `
     -CredentialPath $CredentialPath `
-    -RightsDecisionReport $rightsPath `
+    -RightsDecisionReport $rightsArgument `
     -PythonPath $PythonPath `
     -PlanOnly
 if ($LASTEXITCODE -ne 0) {
@@ -423,6 +438,47 @@ $runnerPlan = $planCheck | ConvertFrom-Json -Depth 40
 if ($runnerPlan.release.worktree_clean -ne $true) {
     throw 'Task installation requires a clean committed acquisition release.'
 }
+
+$rightsEvidence = Invoke-RightsValidation -Path $RightsDecisionReport
+$rightsPath = [string] $rightsEvidence.report_path
+$rightsSha256 = [string] $rightsEvidence.report_sha256
+if (-not (Test-Path -LiteralPath $CredentialPath -PathType Leaf)) {
+    throw "DPAPI credential file not found: $CredentialPath"
+}
+$CredentialPath = Assert-DpapiCredentialFile -Path $CredentialPath
+foreach ($item in @(
+    @{ Value = $rightsPath; Label = 'CanonicalRightsDecisionReport' },
+    @{ Value = $rightsSha256; Label = 'ExpectedRightsDecisionSha256' },
+    @{ Value = $CredentialPath; Label = 'CanonicalCredentialPath' }
+)) {
+    Assert-SafeTaskValue -Value $item.Value -Label $item.Label
+}
+$actionArguments = @(
+    '-NoLogo',
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', (Quote-TaskValue $runnerPath),
+    '-PythonPath', (Quote-TaskValue $PythonPath),
+    '-OutputRoot', (Quote-TaskValue $resolvedOutput),
+    '-CaptureStartDate', $CaptureStartDate,
+    '-CredentialPath', (Quote-TaskValue $CredentialPath),
+    '-RightsDecisionReport', (Quote-TaskValue $rightsPath),
+    '-ExpectedRightsDecisionSha256', (Quote-TaskValue $rightsSha256)
+) -join ' '
+$action = New-ScheduledTaskAction `
+    -Execute $pwshPath `
+    -Argument $actionArguments `
+    -WorkingDirectory $repoRoot
+$task = New-ScheduledTask `
+    -Action $action `
+    -Trigger $trigger `
+    -Settings $settings `
+    -Principal $principal `
+    -Description $description
+$plan.arguments = $actionArguments
+$plan.rights_decision_report = $rightsPath
+$plan.rights_decision_sha256 = $rightsSha256
 
 Install-OwnedScheduledTask `
     -Name $TaskName `

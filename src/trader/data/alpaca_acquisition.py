@@ -164,6 +164,28 @@ class AcquisitionResult:
     manifest_paths: list[str]
     research_eligible: bool
     rights_status: str
+    acquisition_rights_validated: bool = False
+    vendor_decision_report: str | None = None
+    vendor_decision_sha256: str | None = None
+
+
+def _normalize_vendor_decision_evidence(
+    *,
+    vendor_decision_report: Path | None,
+    vendor_decision_sha256: str | None,
+) -> tuple[str | None, str | None]:
+    """Normalize already-validated acquisition evidence without reading it again."""
+
+    if vendor_decision_report is None and vendor_decision_sha256 is None:
+        return None, None
+    if vendor_decision_report is None or vendor_decision_sha256 is None:
+        raise AcquisitionError("vendor decision path and SHA-256 must be supplied together")
+    digest = vendor_decision_sha256.strip().lower()
+    if len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
+        raise AcquisitionError("vendor decision SHA-256 is invalid")
+    return vendor_decision_report.expanduser().resolve().as_posix(), digest
 
 
 def plan_monthly_partitions(
@@ -265,6 +287,8 @@ def acquire_historical_spy(
     *,
     api_key_id: str,
     api_secret_key: str,
+    vendor_decision_report: Path | None = None,
+    vendor_decision_sha256: str | None = None,
     transport: HttpTransport | None = None,
     now: Callable[[], datetime] | None = None,
     sleep: Callable[[float], None] = time.sleep,
@@ -274,6 +298,10 @@ def acquire_historical_spy(
 ) -> AcquisitionResult:
     """Acquire immutable monthly raw pages without importing or activating them."""
 
+    decision_path, decision_sha256 = _normalize_vendor_decision_evidence(
+        vendor_decision_report=vendor_decision_report,
+        vendor_decision_sha256=vendor_decision_sha256,
+    )
     if not api_key_id.strip() or not api_secret_key.strip():
         raise AcquisitionError("Alpaca data credentials are required in the environment")
     if requests_per_minute <= 0 or requests_per_minute > 200:
@@ -301,6 +329,8 @@ def acquire_historical_spy(
             last_request_at=last_request_at,
             run_time=current_time,
             clock=clock,
+            vendor_decision_report=decision_path,
+            vendor_decision_sha256=decision_sha256,
         )
         manifests.append(manifest_path.as_posix())
         total_bars += bar_count
@@ -315,6 +345,9 @@ def acquire_historical_spy(
         manifest_paths=manifests,
         research_eligible=False,
         rights_status="written_rights_unverified",
+        acquisition_rights_validated=decision_sha256 is not None,
+        vendor_decision_report=decision_path,
+        vendor_decision_sha256=decision_sha256,
     )
 
 
@@ -323,6 +356,8 @@ def acquire_spy_session(
     *,
     api_key_id: str,
     api_secret_key: str,
+    vendor_decision_report: Path | None = None,
+    vendor_decision_sha256: str | None = None,
     transport: HttpTransport | None = None,
     now: Callable[[], datetime] | None = None,
     sleep: Callable[[float], None] = time.sleep,
@@ -332,6 +367,10 @@ def acquire_spy_session(
 ) -> AcquisitionResult:
     """Acquire one complete immutable XNYS session without catalog activation."""
 
+    decision_path, decision_sha256 = _normalize_vendor_decision_evidence(
+        vendor_decision_report=vendor_decision_report,
+        vendor_decision_sha256=vendor_decision_sha256,
+    )
     if not api_key_id.strip() or not api_secret_key.strip():
         raise AcquisitionError("Alpaca data credentials are required in the environment")
     if requests_per_minute <= 0 or requests_per_minute > 200:
@@ -354,6 +393,8 @@ def acquire_spy_session(
         last_request_at=None,
         run_time=current_time,
         clock=clock,
+        vendor_decision_report=decision_path,
+        vendor_decision_sha256=decision_sha256,
     )
     return AcquisitionResult(
         ok=True,
@@ -366,6 +407,9 @@ def acquire_spy_session(
         manifest_paths=[manifest_path.as_posix()],
         research_eligible=False,
         rights_status="written_rights_unverified",
+        acquisition_rights_validated=decision_sha256 is not None,
+        vendor_decision_report=decision_path,
+        vendor_decision_sha256=decision_sha256,
     )
 
 
@@ -409,6 +453,8 @@ def _acquire_partition(
     last_request_at: float | None,
     run_time: datetime,
     clock: Callable[[], datetime],
+    vendor_decision_report: str | None,
+    vendor_decision_sha256: str | None,
 ) -> tuple[Path, int, float | None]:
     root = request.output_root.expanduser().resolve() / "symbol=SPY"
     partition_dir = (
@@ -424,6 +470,8 @@ def _acquire_partition(
         request_fingerprint=request_fingerprint,
         request_metadata=request_metadata,
         run_time=run_time,
+        vendor_decision_report=vendor_decision_report,
+        vendor_decision_sha256=vendor_decision_sha256,
     )
     pages_dir = run_dir / "raw_pages"
     pages_dir.mkdir(parents=True, exist_ok=True)
@@ -605,6 +653,9 @@ def _acquire_partition(
         "order_api_invoked": False,
         "research_eligible": False,
         "rights_status": "written_rights_unverified",
+        "acquisition_rights_validated": vendor_decision_sha256 is not None,
+        "vendor_decision_report": vendor_decision_report,
+        "vendor_decision_sha256": vendor_decision_sha256,
         "promotion_eligible": False,
         "graduation_eligible": False,
         "automatically_activated": False,
@@ -646,6 +697,8 @@ def _resume_or_create_run(
     request_fingerprint: str,
     request_metadata: dict[str, str],
     run_time: datetime,
+    vendor_decision_report: str | None,
+    vendor_decision_sha256: str | None,
 ) -> tuple[Path, dict[str, Any]]:
     runs_dir = partition_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -653,6 +706,8 @@ def _resume_or_create_run(
         payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
         if (
             payload.get("request_fingerprint") == request_fingerprint
+            and payload.get("vendor_decision_report") == vendor_decision_report
+            and payload.get("vendor_decision_sha256") == vendor_decision_sha256
             and payload.get("status") in {"in_progress", "download_complete"}
         ):
             _verify_checkpoint_pages(checkpoint_path.parent, payload)
@@ -673,6 +728,8 @@ def _resume_or_create_run(
         "status": "in_progress",
         "request": request_metadata,
         "request_fingerprint": request_fingerprint,
+        "vendor_decision_report": vendor_decision_report,
+        "vendor_decision_sha256": vendor_decision_sha256,
         "acquired_at": _iso_z(run_time.astimezone(UTC)),
         "pages": [],
         "requested_page_token_sha256": [],

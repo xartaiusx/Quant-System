@@ -32,9 +32,9 @@
 - Milestone 19 implemented: broker-free analytical evaluator comparison diagnostics.
 - One versioned, fingerprinted, broker-free `SPYSmaPolicy` now supplies completed-
   bar FLAT/LONG target state to both research and alpha-shadow paths.
-- Offline SPY vendor bake-off validates manually supplied Massive/Norgate samples,
-  session alignment, corrections, overlap, corporate-action fixtures, checksums,
-  and written data rights without network or credential access.
+- Offline SPY vendor bake-off validates manually supplied provider/data-kind
+  samples, session alignment, corrections, overlap, corporate-action fixtures,
+  checksums, and written data rights without network or credential access.
 - Catalog schema v4 adds deterministic batch imports, corporate-action sets,
   immutable derived revisions, parent lineage, permanent holdout seals,
   experiment supersession/access records, versioned SPY identity, and immutable
@@ -152,12 +152,18 @@
 
 ## Current Blockers
 
-- No vendor has yet supplied written rights and passing sample evidence for the
-  required uses; standard published Massive/Norgate terms remain provisionally
-  insufficient for post-cancellation retention.
-- The common five-vendor RFI is dispatch-ready, but the configured Gmail
-  connection required reauthentication on 2026-07-17; no message or vendor
-  response is recorded as sent.
+- No vendor has yet supplied written rights and passing provider/data-kind sample
+  evidence for the required uses; standard published Massive/Norgate terms remain
+  provisionally insufficient for post-cancellation retention and private reuse
+  of raw observations, backups, correction revisions, and derived artifacts.
+- The common five-vendor RFI exists as five verified Gmail drafts held for the
+  final data-farm gate. No message or vendor response is recorded as sent.
+- Read-only dashboard review found Massive authenticated on its free Stocks
+  Basic tier with zero REST use, while Alpaca is authenticated in Paper Trading
+  but requires user-completed MFA before its entitlement can be verified. The
+  visible AlgoSeek Console remained on its public unauthenticated marketplace;
+  this audit started no trial, demo, download, API/SQL use, purchase, or direct
+  provider communication.
 - The canonical catalog has not yet been populated with licensed 2016-2025 SPY
   minute data and approved inception-through-2025 daily/corporate-action data.
 - The preregistered development/final-holdout experiment cannot run until those
@@ -242,19 +248,22 @@
 
 ## Next Recommended Steps
 
-1. Reauthenticate the configured Gmail connection, then send the prepared common
-   RFI separately to the five verified public vendor routes in `VENDOR_RFI.md`.
-   Enable no recurring acquisition and make no purchase until written storage,
-   private automated research, derived-use, backup, correction-retention, and
-   post-cancellation rights pass.
-2. Review the completed mocked and plan-only acceptance evidence. Keep DPAPI
-   production credentials and the active Windows task absent until the written-
-   rights decision passes.
+1. Review the five prepared Gmail drafts, but keep them unsent until the user
+   explicitly opens the final data-farm gate. Enable no recurring acquisition
+   and make no purchase until written storage, private automated research,
+   derived-use, backup, correction-retention, and post-cancellation rights pass.
+2. Complete the offline provider-boundary hardening and review the mocked and
+   plan-only acceptance evidence. Use the provider-neutral immutable-manifest
+   and catalog contract in `docs/DATA_PROVIDER_SETUP.md`; do not add speculative
+   SDKs or generic runtime switching. Keep Massive MCP, provider API calls,
+   demos/trials, production credentials and the active Windows task absent until
+   written evidence first authorizes the exact provider/data-kind sample or use.
 3. Register current briefs as metadata-only secondary hypotheses, then add
    official EIA/NOAA/USDA/CFTC/FRED/SEC releases only with exact point-in-time
    provenance. Do not expose evidence to strategy code.
-4. Complete the offline bake-off/vendor decision,
-   including written rights and trial/export validation, before purchasing.
+4. Only after written evidence authorizes the exact sample or trial, obtain the
+   applicable provider/data-kind files, complete the offline bake-off, and issue
+   the vendor decision before purchasing.
 5. Import licensed 2016-2025 SPY minute files plus approved daily/action
    history, derive all views, and require passing catalog load/audit evidence.
 6. Run v2 development only. Do not use the final-holdout confirmation until

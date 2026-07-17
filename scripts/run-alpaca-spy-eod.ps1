@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^\d{4}-\d{2}-\d{2}$')][string] $CaptureStartDate,
     [string] $CredentialPath,
     [string] $RightsDecisionReport,
+    [string] $ExpectedRightsDecisionSha256,
     [string] $PythonPath,
     [switch] $PlanOnly
 )
@@ -210,7 +211,9 @@ function Assert-SessionCaptureResult {
     param(
         [Parameter(Mandatory)][psobject] $Capture,
         [Parameter(Mandatory)][psobject] $ExpectedPlan,
-        [Parameter(Mandatory)][string] $SessionDate
+        [Parameter(Mandatory)][string] $SessionDate,
+        [Parameter(Mandatory)][string] $RightsPath,
+        [Parameter(Mandatory)][string] $RightsSha256
     )
 
     $manifestPaths = @($Capture.manifest_paths)
@@ -226,7 +229,10 @@ function Assert-SessionCaptureResult {
         [long] $Capture.partition_count -ne 1 -or
         [long] $Capture.total_bars -ne $expectedCount -or
         $manifestPaths.Count -ne 1 -or
-        $Capture.research_eligible -ne $false
+        $Capture.research_eligible -ne $false -or
+        $Capture.acquisition_rights_validated -ne $true -or
+        $Capture.vendor_decision_report -ne $RightsPath -or
+        $Capture.vendor_decision_sha256 -ne $RightsSha256
     ) {
         throw "$SessionDate capture returned invalid or incomplete success evidence."
     }
@@ -263,10 +269,35 @@ function Get-AlpacaRightsEvidence {
         throw "Alpaca rights validation failed: $($result.Stderr)"
     }
     $evidence = $result.Stdout | ConvertFrom-Json -Depth 10
-    if ($evidence.ok -ne $true -or -not $evidence.report_sha256) {
+    if (
+        $evidence.ok -ne $true -or
+        $evidence.selected_vendor -ne 'alpaca_sip' -or
+        -not $evidence.report_path -or
+        -not $evidence.report_sha256
+    ) {
         throw 'Alpaca rights validator returned incomplete evidence.'
     }
     return $evidence
+}
+
+function Assert-PinnedRightsEvidence {
+    param(
+        [Parameter(Mandatory)][psobject] $Evidence,
+        [Parameter(Mandatory)][string] $ExpectedSha256
+    )
+
+    $expected = $ExpectedSha256.Trim().ToLowerInvariant()
+    $actual = ([string] $Evidence.report_sha256).Trim().ToLowerInvariant()
+    if ($expected -notmatch '^[0-9a-f]{64}$') {
+        throw 'The pinned Alpaca vendor-decision SHA-256 is invalid.'
+    }
+    if ($actual -ne $expected) {
+        throw 'The Alpaca vendor-decision report does not match the pinned SHA-256.'
+    }
+    return [pscustomobject]@{
+        report_path = [string] $Evidence.report_path
+        report_sha256 = $actual
+    }
 }
 
 function Convert-SecureStringForChild {
@@ -352,9 +383,16 @@ if ($PlanOnly) {
 if ($releaseEvidence.worktree_clean -ne $true) {
     throw 'Unattended Alpaca acquisition requires a clean committed release.'
 }
+if (-not $ExpectedRightsDecisionSha256) {
+    throw 'A pinned Alpaca vendor-decision SHA-256 is required before network capture.'
+}
 
 $rightsEvidence = Get-AlpacaRightsEvidence
-$rightsPath = [string] $rightsEvidence.report_path
+$pinnedRights = Assert-PinnedRightsEvidence `
+    -Evidence $rightsEvidence `
+    -ExpectedSha256 $ExpectedRightsDecisionSha256
+$rightsPath = [string] $pinnedRights.report_path
+$rightsSha256 = [string] $pinnedRights.report_sha256
 $CredentialPath = Resolve-NonReparseCredentialPath -Value $CredentialPath
 Assert-CurrentUserOnlyCredentialAcl -ResolvedPath $CredentialPath
 $credentials = Import-Clixml -LiteralPath $CredentialPath
@@ -395,7 +433,9 @@ try {
             '--feed', 'sip',
             '--timeframe', '1Min',
             '--session-date', [string] $sessionDate,
-            '--output-root', $outputPath
+            '--output-root', $outputPath,
+            '--vendor-decision-report', $rightsPath,
+            '--expected-vendor-decision-sha256', $rightsSha256
         ) -ApiKeyId $apiKeyIdPlain -ApiSecretKey $apiSecretPlain
         if ($result.ExitCode -ne 0) {
             $errors.Add("$sessionDate capture failed: $($result.Stderr)")
@@ -406,12 +446,16 @@ try {
             Assert-SessionCaptureResult `
                 -Capture $capture `
                 -ExpectedPlan $expectedCapture `
-                -SessionDate ([string] $sessionDate)
+                -SessionDate ([string] $sessionDate) `
+                -RightsPath $rightsPath `
+                -RightsSha256 $rightsSha256
             $captureResults.Add([pscustomobject]@{
                 session_date = [string] $sessionDate
                 ok = $capture.ok
                 total_bars = $capture.total_bars
                 manifest_paths = @($capture.manifest_paths)
+                vendor_decision_report = $capture.vendor_decision_report
+                vendor_decision_sha256 = $capture.vendor_decision_sha256
             })
         }
         catch {
@@ -478,7 +522,7 @@ $report = [ordered]@{
     final_status = $(if ($ok) { 'passed' } else { 'failed' })
     capture_start_date = $CaptureStartDate
     rights_decision_report = $rightsPath
-    rights_decision_sha256 = [string] $rightsEvidence.report_sha256
+    rights_decision_sha256 = $rightsSha256
     commit_sha = [string] $releaseEvidence.commit_sha
     configuration_fingerprint = [string] $releaseEvidence.configuration_fingerprint
     configuration_file_sha256 = $releaseEvidence.file_sha256

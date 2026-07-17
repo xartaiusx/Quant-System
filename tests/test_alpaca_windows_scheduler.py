@@ -95,6 +95,7 @@ def test_task_plan_has_local_dst_boundary_and_exact_failover_settings(tmp_path: 
     assert payload["run_level"] == "Limited"
     assert "APCA_API_KEY_ID" not in payload["arguments"]
     assert "APCA_API_SECRET_KEY" not in payload["arguments"]
+    assert "-ExpectedRightsDecisionSha256" in payload["arguments"]
     assert payload["credentials_read"] is False
     assert payload["network_accessed"] is False
     assert payload["scheduler_changed"] is False
@@ -133,6 +134,21 @@ def test_task_install_refuses_duplicate_before_credentials_or_rights(
     assert not output_root.exists()
     assert not credential_path.exists()
     assert not rights_path.exists()
+
+
+def test_task_install_orders_duplicate_release_rights_and_credentials() -> None:
+    manager = Path("scripts/manage-alpaca-spy-eod-task.ps1").read_text(encoding="utf-8")
+
+    duplicate = manager.index("installation refuses to overwrite it")
+    plan_check = manager.index("$planCheck = & $pwshPath", duplicate)
+    clean_release = manager.index("$runnerPlan.release.worktree_clean", plan_check)
+    rights = manager.index("$rightsEvidence = Invoke-RightsValidation", clean_release)
+    credential_test = manager.index("DPAPI credential file not found", rights)
+    credential_import = manager.index(
+        "$CredentialPath = Assert-DpapiCredentialFile", credential_test
+    )
+
+    assert duplicate < plan_check < clean_release < rights < credential_test < credential_import
 
 
 def test_eod_runner_plan_only_reads_no_credentials_and_writes_nothing(tmp_path: Path) -> None:
@@ -277,12 +293,15 @@ def test_runner_capture_and_terminal_plan_evidence_fail_closed() -> None:
             "$expected=[pscustomobject]@{session_date='2026-07-16';expected_bar_count=390};"
             "$capture=[pscustomobject]@{ok=$true;source='alpaca_sip';symbol='SPY';feed='sip';"
             "timeframe='1Min';partition_count=1;total_bars=390;"
-            "manifest_paths=@('manifest.json');research_eligible=$false};"
+            "manifest_paths=@('manifest.json');research_eligible=$false;"
+            "acquisition_rights_validated=$true;vendor_decision_report='rights.json';"
+            "vendor_decision_sha256=('a'*64)};"
             "Assert-SessionCaptureResult -Capture $capture -ExpectedPlan $expected "
-            "-SessionDate '2026-07-16';"
+            "-SessionDate '2026-07-16' -RightsPath 'rights.json' -RightsSha256 ('a'*64);"
             "$capture.total_bars=389;$captureError=$null;"
             "try{Assert-SessionCaptureResult -Capture $capture -ExpectedPlan $expected "
-            "-SessionDate '2026-07-16'}catch{$captureError=$_.Exception.Message};"
+            "-SessionDate '2026-07-16' -RightsPath 'rights.json' "
+            "-RightsSha256 ('a'*64)}catch{$captureError=$_.Exception.Message};"
             "$pending=[pscustomobject]@{missing_sessions=@();"
             "correction_sessions_due=@('2026-07-15');capture_sessions=@('2026-07-15');"
             "compare_pairs=@([pscustomobject]@{session_date='2026-07-14'})};"
@@ -299,6 +318,47 @@ def test_runner_capture_and_terminal_plan_evidence_fail_closed() -> None:
         "Required capture remains pending: 2026-07-15",
         "Required correction comparison remains incomplete: 2026-07-14",
     ]
+
+
+def test_runner_rejects_rights_evidence_that_misses_pinned_sha() -> None:
+    result = _invoke_extracted_functions(
+        Path("scripts/run-alpaca-spy-eod.ps1"),
+        ["Assert-PinnedRightsEvidence"],
+        (
+            "$e=[pscustomobject]@{report_path='canonical.json';report_sha256=('b'*64)};"
+            "$message=$null;try{Assert-PinnedRightsEvidence -Evidence $e "
+            "-ExpectedSha256 ('a'*64)}catch{$message=$_.Exception.Message};"
+            "[pscustomobject]@{Message=$message}|ConvertTo-Json -Compress"
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert "does not match the pinned SHA-256" in payload["Message"]
+
+
+def test_installed_task_rebuilds_action_from_canonical_rights_and_sha() -> None:
+    manager = Path("scripts/manage-alpaca-spy-eod-task.ps1").read_text(encoding="utf-8")
+
+    validation = manager.index("$rightsEvidence = Invoke-RightsValidation")
+    canonical_path = manager.index("$rightsPath = [string] $rightsEvidence.report_path")
+    pinned_sha = manager.index("$rightsSha256 = [string] $rightsEvidence.report_sha256")
+    final_path_argument = manager.index(
+        "'-RightsDecisionReport', (Quote-TaskValue $rightsPath)", validation
+    )
+    final_sha_argument = manager.index(
+        "'-ExpectedRightsDecisionSha256', (Quote-TaskValue $rightsSha256)", validation
+    )
+    registration = manager.index("Install-OwnedScheduledTask", final_sha_argument)
+
+    assert (
+        validation
+        < canonical_path
+        < pinned_sha
+        < final_path_argument
+        < final_sha_argument
+        < registration
+    )
 
 
 @pytest.mark.parametrize(
