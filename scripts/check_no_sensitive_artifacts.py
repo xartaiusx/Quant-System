@@ -36,6 +36,7 @@ def main() -> int:
         blocked = (
             normalized.startswith("quant creds/")
             or normalized.startswith("data/historical/")
+            or normalized.startswith("research/evidence/")
             or (normalized.startswith("state/") and normalized != "state/.gitkeep")
             or (
                 normalized.startswith("reports/")
@@ -52,7 +53,7 @@ def main() -> int:
     if offenders:
         print("Tracked sensitive/generated artifacts:\n" + "\n".join(sorted(offenders)))
         return 1
-    print("No tracked credentials, broker reports, or market-data artifacts found.")
+    print("No tracked credentials, broker reports, evidence, or market-data artifacts found.")
     return 0
 
 

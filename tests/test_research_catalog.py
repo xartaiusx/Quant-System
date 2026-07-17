@@ -59,7 +59,7 @@ _ACTION_FIELDS = [
 ]
 
 
-def test_catalog_v1_is_migrated_to_v3(tmp_path: Path) -> None:
+def test_catalog_v1_is_migrated_to_v4(tmp_path: Path) -> None:
     root = tmp_path / "store"
     catalog = root / "catalog/research.sqlite3"
     catalog.parent.mkdir(parents=True)
@@ -84,7 +84,7 @@ def test_catalog_v1_is_migrated_to_v3(tmp_path: Path) -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-    assert versions == [(1,), (2,), (3,)]
+    assert versions == [(1,), (2,), (3,), (4,)]
     assert {
         "action_sets",
         "corporate_actions",
@@ -95,6 +95,7 @@ def test_catalog_v1_is_migrated_to_v3(tmp_path: Path) -> None:
         "holdout_access",
         "sealed_periods",
         "instrument_master",
+        "research_evidence",
     } <= tables
 
 
@@ -135,6 +136,34 @@ def test_catalog_v3_migration_rolls_back_on_schema_conflict(tmp_path: Path) -> N
     assert "status" not in columns
     assert "supersedes_experiment_id" not in columns
     assert versions == [(1,), (2,)]
+
+
+def test_catalog_v4_migration_rolls_back_on_schema_conflict(tmp_path: Path) -> None:
+    root = tmp_path / "store"
+    catalog = root / "catalog/research.sqlite3"
+    catalog.parent.mkdir(parents=True)
+    with sqlite3.connect(catalog) as connection:
+        connection.execute(
+            "CREATE TABLE schema_metadata(version INTEGER PRIMARY KEY, installed_at TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO schema_metadata(version, installed_at) VALUES (?, 'test')",
+            [(1,), (2,), (3,)],
+        )
+        connection.execute("CREATE TABLE research_evidence(conflict TEXT)")
+
+    with pytest.raises(sqlite3.Error):
+        initialize_research_store(root)
+
+    with sqlite3.connect(catalog) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(research_evidence)")
+        }
+        versions = connection.execute(
+            "SELECT version FROM schema_metadata ORDER BY version"
+        ).fetchall()
+    assert columns == {"conflict"}
+    assert versions == [(1,), (2,), (3,)]
 
 
 def test_derive_and_load_normal_session_with_split_lineage(tmp_path: Path) -> None:

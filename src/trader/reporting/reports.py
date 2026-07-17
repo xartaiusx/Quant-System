@@ -43,6 +43,10 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return research_data_bakeoff_markdown(payload)
     if payload.get("report_type") == "research_vendor_decision":
         return research_vendor_decision_markdown(payload)
+    if payload.get("report_type") == "research_evidence_registration":
+        return research_evidence_registration_markdown(payload)
+    if payload.get("report_type") == "research_evidence_audit":
+        return research_evidence_audit_markdown(payload)
     if payload.get("report_type") == "research_instrument_master":
         return research_instrument_master_markdown(payload)
     if payload.get("report_type") == "research_data_batch_import":
@@ -1590,6 +1594,89 @@ def research_vendor_decision_markdown(payload: Mapping[str, Any]) -> str:
             )
             for reason in result.get("reasons", []):
                 lines.append(f"  - Rejected: {reason}")
+    else:
+        lines.append("- None")
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
+def research_evidence_registration_markdown(payload: Mapping[str, Any]) -> str:
+    """Render immutable point-in-time evidence registration."""
+
+    records = payload.get("records", [])
+    lines = [
+        f"# {payload.get('title', 'Point-in-Time Research Evidence Registration')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Manifest: `{payload.get('manifest_path')}`",
+        f"- Catalog: `{payload.get('catalog_path')}`",
+        f"- Registered records: `{payload.get('registered_record_count', 0)}`",
+        f"- Idempotent records: `{payload.get('idempotent_record_count', 0)}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', True)}`",
+        f"- Network accessed: `{payload.get('network_accessed', True)}`",
+        f"- Strategy feature eligible: `{payload.get('strategy_feature_eligible', True)}`",
+        f"- Promotion eligible: `{payload.get('promotion_eligible', True)}`",
+        f"- Execution eligible: `{payload.get('execution_eligible', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        "",
+        "## Records",
+        "",
+    ]
+    if records:
+        for record in records:
+            lines.append(
+                f"- `{record.get('evidence_id')}:{record.get('revision')}` "
+                f"source=`{record.get('source_class')}` "
+                f"kind=`{record.get('evidence_kind')}` "
+                f"first_available=`{record.get('first_available_at')}` "
+                f"rights=`{record.get('rights_status')}` "
+                f"archived=`{record.get('archived', False)}`"
+            )
+    else:
+        lines.append("- None")
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
+    return "\n".join(lines) + "\n"
+
+
+def research_evidence_audit_markdown(payload: Mapping[str, Any]) -> str:
+    """Render as-of availability and integrity for evidence revisions."""
+
+    request = payload.get("request") or {}
+    records = payload.get("records", [])
+    lines = [
+        f"# {payload.get('title', 'Point-in-Time Research Evidence Audit')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- As of: `{request.get('as_of')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Catalog: `{payload.get('catalog_path')}`",
+        f"- Total records: `{payload.get('total_record_count', 0)}`",
+        f"- Publicly available: `{payload.get('publicly_available_count', 0)}`",
+        f"- Locally retrieved: `{payload.get('locally_retrieved_count', 0)}`",
+        f"- Usable as of cutoff: `{payload.get('usable_as_of_count', 0)}`",
+        f"- Current as of cutoff: `{payload.get('current_as_of_count', 0)}`",
+        f"- Superseded as of cutoff: `{payload.get('superseded_as_of_count', 0)}`",
+        f"- Future evidence: `{payload.get('future_evidence_count', 0)}`",
+        f"- Late retrievals: `{payload.get('late_retrieval_count', 0)}`",
+        f"- Strategy feature eligible: `{payload.get('strategy_feature_eligible', True)}`",
+        f"- Promotion eligible: `{payload.get('promotion_eligible', True)}`",
+        f"- Execution eligible: `{payload.get('execution_eligible', True)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', True)}`",
+        "",
+        "## Revisions",
+        "",
+    ]
+    if records:
+        for record in records:
+            lines.append(
+                f"- `{record.get('evidence_id')}:{record.get('revision')}` "
+                f"public=`{record.get('publicly_available_as_of', False)}` "
+                f"local=`{record.get('locally_retrieved_as_of', False)}` "
+                f"usable=`{record.get('usable_as_of', False)}` "
+                f"superseded=`{record.get('superseded_as_of', False)}` "
+                f"archive_ok=`{record.get('archived_integrity_ok')}`"
+            )
     else:
         lines.append("- None")
     lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))

@@ -38,7 +38,7 @@ from trader.models import (
 
 DEFAULT_RESEARCH_DATA_ROOT = Path("D:/MarketData/Quant-System")
 CATALOG_RELATIVE_PATH = Path("catalog/research.sqlite3")
-CATALOG_SCHEMA_VERSION = 3
+CATALOG_SCHEMA_VERSION = 4
 _MASSIVE_REQUIRED_COLUMNS = frozenset(
     {
         "ticker",
@@ -420,7 +420,7 @@ def initialize_research_store(root: Path) -> Path:
     """Create the offline research-store layout and versioned SQLite catalog."""
 
     root.mkdir(parents=True, exist_ok=True)
-    for relative in ("raw", "curated", "catalog", "quarantine"):
+    for relative in ("raw", "curated", "catalog", "quarantine", "evidence/artifacts"):
         (root / relative).mkdir(parents=True, exist_ok=True)
     catalog_path = root / CATALOG_RELATIVE_PATH
     with _catalog_connection(catalog_path) as connection:
@@ -510,6 +510,9 @@ def initialize_research_store(root: Path) -> Path:
         if versions[-1] == 2:
             _install_catalog_v3(connection)
             versions.append(3)
+        if versions[-1] == 3:
+            _install_catalog_v4(connection)
+            versions.append(4)
         if versions != list(range(1, CATALOG_SCHEMA_VERSION + 1)):
             raise RuntimeError(f"unsupported research catalog schema versions: {versions}")
     return catalog_path
@@ -661,6 +664,61 @@ def _install_catalog_v3(connection: sqlite3.Connection) -> None:
         INSERT INTO schema_metadata(version, installed_at)
         VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
         RELEASE SAVEPOINT install_catalog_v3;
+        """
+    )
+
+
+def _install_catalog_v4(connection: sqlite3.Connection) -> None:
+    """Install immutable point-in-time research evidence metadata."""
+
+    connection.executescript(
+        """
+        SAVEPOINT install_catalog_v4;
+        CREATE TABLE research_evidence (
+            evidence_id TEXT NOT NULL,
+            revision TEXT NOT NULL,
+            supersedes_revision TEXT,
+            source_name TEXT NOT NULL,
+            source_class TEXT NOT NULL,
+            source_reference TEXT NOT NULL,
+            source_url TEXT,
+            official_source_urls_json TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            observed_start TEXT NOT NULL,
+            observed_end TEXT NOT NULL,
+            published_at TEXT NOT NULL,
+            publication_time_precision TEXT NOT NULL,
+            first_available_at TEXT NOT NULL,
+            retrieved_at TEXT NOT NULL,
+            vintage TEXT NOT NULL,
+            artifact_reference TEXT NOT NULL,
+            artifact_sha256 TEXT NOT NULL,
+            archived_path TEXT,
+            rights_status TEXT NOT NULL,
+            permitted_excerpt TEXT,
+            evidence_kind TEXT NOT NULL,
+            topics_json TEXT NOT NULL,
+            affected_instruments_json TEXT NOT NULL,
+            record_fingerprint TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (evidence_id, revision),
+            FOREIGN KEY (evidence_id, supersedes_revision)
+                REFERENCES research_evidence(evidence_id, revision),
+            CHECK (observed_start <= observed_end),
+            CHECK (published_at <= first_available_at),
+            CHECK (first_available_at <= retrieved_at)
+        );
+        CREATE UNIQUE INDEX one_research_evidence_successor
+        ON research_evidence(evidence_id, supersedes_revision)
+        WHERE supersedes_revision IS NOT NULL;
+        CREATE INDEX research_evidence_as_of_lookup
+        ON research_evidence(first_available_at, retrieved_at);
+        CREATE INDEX research_evidence_source_lookup
+        ON research_evidence(source_class, source_name);
+        INSERT INTO schema_metadata(version, installed_at)
+        VALUES (4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+        RELEASE SAVEPOINT install_catalog_v4;
         """
     )
 
