@@ -170,6 +170,15 @@ class IBKRSessionCompareStatus(StrEnum):
     FAILED = "failed"
 
 
+class AlpacaSessionCompareStatus(StrEnum):
+    """Offline comparison outcomes for two Alpaca session revisions."""
+
+    IDENTICAL = "identical"
+    REVISED = "revised"
+    INCOMPATIBLE = "incompatible"
+    FAILED = "failed"
+
+
 class ReportCompatibilityStatus(StrEnum):
     """Compatibility of ignored local evidence with the current report schema."""
 
@@ -1176,6 +1185,86 @@ class IBKRSessionCompareReport(SerializableModel):
             raise ValueError("ibkr-session-compare must not invoke order routing")
         if not self.no_order_guarantee:
             raise ValueError("ibkr-session-compare requires no_order_guarantee=true")
+        return self
+
+
+class AlpacaSessionBarRevision(SerializableModel):
+    """One timestamp-level Alpaca session difference."""
+
+    timestamp: str
+    classification: str
+    changed_fields: list[str] = Field(default_factory=list)
+    baseline: dict[str, Any] | None = None
+    candidate: dict[str, Any] | None = None
+
+
+class AlpacaSessionCompareRequest(SerializableModel):
+    """Offline request for two immutable Alpaca session manifests."""
+
+    baseline_manifest_path: str
+    candidate_manifest_path: str
+
+    @field_validator("baseline_manifest_path", "candidate_manifest_path")
+    @classmethod
+    def validate_manifest_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Alpaca session manifest paths must not be empty")
+        return normalized
+
+
+class AlpacaSessionCompareReport(SerializableModel):
+    """Broker-free correction comparison for two complete Alpaca sessions."""
+
+    title: str = "Alpaca Session Comparison"
+    report_type: str = "alpaca_session_compare"
+    command: str = "alpaca-session-compare"
+    schema_version: int = 1
+    ok: bool
+    request: AlpacaSessionCompareRequest
+    symbol: str | None = None
+    session_date: date | None = None
+    baseline_acquired_at: datetime | None = None
+    candidate_acquired_at: datetime | None = None
+    baseline_bar_count: int = 0
+    candidate_bar_count: int = 0
+    matching_bar_count: int = 0
+    revised_bar_count: int = 0
+    missing_bar_count: int = 0
+    added_bar_count: int = 0
+    parameters_compatible: bool = False
+    baseline_manifest_sha256: str | None = None
+    candidate_manifest_sha256: str | None = None
+    baseline_data_sha256: str | None = None
+    candidate_data_sha256: str | None = None
+    revisions: list[AlpacaSessionBarRevision] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    network_accessed: bool = False
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    order_api_invoked: bool = False
+    research_eligible: bool = False
+    promotion_eligible: bool = False
+    graduation_eligible: bool = False
+    final_status: AlpacaSessionCompareStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_alpaca_compare_safety(self) -> AlpacaSessionCompareReport:
+        unsafe = (
+            self.broker_contacted
+            or self.network_accessed
+            or self.submitted_orders
+            or self.paper_orders_enabled
+            or self.order_api_invoked
+            or self.research_eligible
+            or self.promotion_eligible
+            or self.graduation_eligible
+        )
+        if unsafe:
+            raise ValueError("alpaca-session-compare must remain offline and non-promoting")
         return self
 
 

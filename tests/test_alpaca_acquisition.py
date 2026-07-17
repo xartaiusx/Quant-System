@@ -150,6 +150,12 @@ def test_retries_rate_limit_without_exposing_credentials(tmp_path: Path) -> None
 
     assert result.ok is True
     assert 2.0 in sleeps
+    manifest = json.loads(Path(result.manifest_paths[0]).read_text(encoding="utf-8"))
+    assert [item["http_status"] for item in manifest["response_attempts"]] == [429, 200]
+    assert [item["outcome"] for item in manifest["response_attempts"]] == [
+        "rejected_http",
+        "accepted",
+    ]
 
 
 def test_interrupted_run_resumes_from_next_page(tmp_path: Path) -> None:

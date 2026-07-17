@@ -876,6 +876,16 @@ python scripts/acquire_alpaca_spy.py `
   --start 2016-01-01 --end 2025-12-31 `
   --output-root D:\MarketData\Quant-System\incoming\alpaca_sip `
   --plan-only
+
+python scripts/acquire_alpaca_spy.py `
+  --session-date 2026-07-16 `
+  --output-root D:\MarketData\Quant-System\incoming\alpaca_sip `
+  --plan-only
+
+pwsh scripts/manage-alpaca-spy-eod-task.ps1 `
+  -Mode Plan `
+  -OutputRoot D:\MarketData\Quant-System\incoming\alpaca_sip `
+  -CaptureStartDate 2026-07-16
 ```
 
 The manifest must cover a normal session, early close, ex-dividend date,
@@ -883,6 +893,24 @@ before/after correction, cross-vendor daily overlap, synthetic split, expected
 checksums, and written rights for storage, training, derived data, corrections,
 and retention after cancellation. The command reads no credentials and performs
 no network request.
+
+Session capture uses exact XNYS regular-session one-minute labels and is blocked
+until the official close plus 20 minutes. It retains every failed HTTP response
+attempt and publishes no passing manifest for gaps, duplicates, malformed
+activity, off-grid timestamps, metadata drift, or checksum failure. Redirects
+are rejected before credential headers can leave the pinned host. Compare
+completed recaptures offline with
+`python -m trader.alpaca_session_compare_cli`; the process reads no credentials
+and imports no IBKR, execution, or network-capable acquisition code.
+
+The EOD runner scans immutable manifests, backfills missing sessions, and
+recaptures the prior two sessions once for correction detection. Its real run
+and task installation both require a clean committed release and an
+authoritatively validated vendor decision selecting `alpaca_sip` with passing
+rights, technical, and budget gates. Pending revision pairs remain required
+across retries until their comparison reports validate. Until then, run only
+the two plan commands above. Do not create DPAPI credentials from automation,
+install the task, or make an Alpaca request.
 
 Alpaca is data-only; IBKR remains the sole broker. A real Alpaca acquisition is
 kept outside Git and does not import or activate its output. Before import, send

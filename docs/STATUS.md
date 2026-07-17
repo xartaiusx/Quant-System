@@ -45,6 +45,18 @@
   execution eligibility.
 - Offline vendor decisions enforce written-rights and budget hard gates before
   weighted technical scoring; contracts and responses remain outside Git.
+- Gateway-independent Alpaca session capture resolves exact XNYS one-minute
+  grids, enforces close plus 20 minutes, retains failed raw pages, and publishes
+  immutable passing manifests only after completeness and checksum validation.
+- Offline `alpaca-session-compare` classifies immutable OHLCV, trade-count, and
+  VWAP corrections without credentials, network, broker, catalog, or execution
+  access. Rights-gated Windows EOD tooling plans catch-up and T+1/T+2 recapture,
+  stores both credential fields with DPAPI, and exposes an inert plan mode plus
+  guarded install/uninstall task modes.
+- Mocked acquisition, retry, correction, early-close, DST, DPAPI/ACL, redirect,
+  mixed-case/junction boundary, and plan-only acceptance pass. No production
+  credential, active Task Scheduler entry, Alpaca request, catalog activation,
+  or order path was created or used.
 - Dual research views are implemented: raw five-minute execution bars,
   split-adjusted five-minute signal bars, and a daily total-return benchmark.
 - Catalog loading fails closed on stale parents, inactive revisions, checksum
@@ -143,6 +155,9 @@
 - No vendor has yet supplied written rights and passing sample evidence for the
   required uses; standard published Massive/Norgate terms remain provisionally
   insufficient for post-cancellation retention.
+- The common five-vendor RFI is dispatch-ready, but the configured Gmail
+  connection required reauthentication on 2026-07-17; no message or vendor
+  response is recorded as sent.
 - The canonical catalog has not yet been populated with licensed 2016-2025 SPY
   minute data and approved inception-through-2025 daily/corporate-action data.
 - The preregistered development/final-holdout experiment cannot run until those
@@ -166,8 +181,10 @@
 - IB Gateway paper on `127.0.0.1:4002` accepted a read-only broker probe.
 - The July 13 dated Gateway baseline contains exactly `78` delayed SPY
   five-minute bars from `09:30` through `15:55` ET, passed OHLC/volume/hash
-  checks, and records every order flag false. Its T+1 comparison remains
-  scheduled and the evidence is non-graduating.
+  checks, and records every order flag false. The July 14 T+1 recapture retained
+  all 78 timestamps and classified `57` matching plus `21` revised bars, with no
+  baseline-only or candidate-only bars. Volume remains non-authoritative until
+  Gateway units are attested; the evidence is non-graduating.
 - The latest July 13 delayed Gateway daemon completed `5/5` clean cycles with
   broker/account verification and no order API use. It remains explicitly
   ineligible for strict-live graduation or paper-daemon implementation.
@@ -215,32 +232,42 @@
 - `ibkr-delayed-data-diagnostics` consumes only the delayed probe alias;
   `alpha-shadow-daemon-delayed` remains read-only and non-graduating while live
   SPY API data is unavailable.
+- The two weekday delayed-shadow Codex schedules were retired after preserving
+  their final evidence. Their late evening runs repeatedly failed the 30-minute
+  freshness gate and cannot support canonical research collection, strict-live
+  graduation, or paper-daemon eligibility.
 - Dated `history-snapshot` captures now support timezone-aware end times and
   volume-unit attestations. Offline `ibkr-session-compare` classifies T+1
   revisions without broker contact.
 
 ## Next Recommended Steps
 
-1. Complete the July 13 T+1 Gateway recapture and classify every session
-   revision without treating delayed evidence as graduating.
-2. Register current briefs as metadata-only secondary hypotheses, then add
+1. Reauthenticate the configured Gmail connection, then send the prepared common
+   RFI separately to the five verified public vendor routes in `VENDOR_RFI.md`.
+   Enable no recurring acquisition and make no purchase until written storage,
+   private automated research, derived-use, backup, correction-retention, and
+   post-cancellation rights pass.
+2. Review the completed mocked and plan-only acceptance evidence. Keep DPAPI
+   production credentials and the active Windows task absent until the written-
+   rights decision passes.
+3. Register current briefs as metadata-only secondary hypotheses, then add
    official EIA/NOAA/USDA/CFTC/FRED/SEC releases only with exact point-in-time
    provenance. Do not expose evidence to strategy code.
-3. Send the common RFI and complete the offline bake-off/vendor decision,
+4. Complete the offline bake-off/vendor decision,
    including written rights and trial/export validation, before purchasing.
-4. Import licensed 2016-2025 SPY minute files plus approved daily/action
+5. Import licensed 2016-2025 SPY minute files plus approved daily/action
    history, derive all views, and require passing catalog load/audit evidence.
-5. Run v2 development only. Do not use the final-holdout confirmation until
+6. Run v2 development only. Do not use the final-holdout confirmation until
    development, lineage, cost calibration, and independent review are complete.
-6. Fund/subscribe the IBKR account for live SPY API market data and complete the
+7. Fund/subscribe the IBKR account for live SPY API market data and complete the
    required API acknowledgement; delayed mode remains non-graduating.
-7. Collect five clean strict-live sessions on five XNYS dates to unlock a separate
+8. Collect five clean strict-live sessions on five XNYS dates to unlock a separate
    paper-daemon implementation milestone.
-8. Collect ten clean strict-live sessions across opening, midday, and closing
+9. Collect ten clean strict-live sessions across opening, midday, and closing
    windows before any lifecycle engineering pilot.
-9. Require `research_review_ready=true` in addition to operational evidence
+10. Require `research_review_ready=true` in addition to operational evidence
    before any strategy-driven paper alpha mode.
-10. Keep the paper daemon unimplemented until those gates pass. Continue manual
+11. Keep the paper daemon unimplemented until those gates pass. Continue manual
    reconciliation, summary, and ledger updates after every approved paper window.
-11. Keep GLD/USO research-only, DBA excluded, and direct futures blocked until a
+12. Keep GLD/USO research-only, DBA excluded, and direct futures blocked until a
    separate contract/roll/margin/liquidity/permission/delivery-risk program exists.

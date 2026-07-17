@@ -19,6 +19,8 @@ def markdown_summary(payload: Mapping[str, Any]) -> str:
         return history_snapshot_markdown(payload)
     if payload.get("report_type") == "ibkr_session_compare":
         return ibkr_session_compare_markdown(payload)
+    if payload.get("report_type") == "alpaca_session_compare":
+        return alpaca_session_compare_markdown(payload)
     if payload.get("report_type") == "history_readiness":
         return history_readiness_markdown(payload)
     if payload.get("report_type") == "ibkr_data_diagnostics":
@@ -477,6 +479,46 @@ def ibkr_session_compare_markdown(payload: Mapping[str, Any]) -> str:
     else:
         lines.append("- None")
     lines.extend(_warnings_and_errors(warnings, errors))
+    return "\n".join(lines) + "\n"
+
+
+def alpaca_session_compare_markdown(payload: Mapping[str, Any]) -> str:
+    """Render an offline Alpaca session correction comparison."""
+
+    revisions = payload.get("revisions", [])
+    lines = [
+        f"# {payload.get('title', 'Alpaca Session Comparison')}",
+        "",
+        f"- Timestamp: `{payload.get('timestamp', 'unknown')}`",
+        f"- Final status: `{payload.get('final_status', 'unknown')}`",
+        f"- Session date: `{payload.get('session_date') or 'n/a'}`",
+        f"- Parameters compatible: `{payload.get('parameters_compatible', False)}`",
+        f"- Baseline bars: `{payload.get('baseline_bar_count', 0)}`",
+        f"- Candidate bars: `{payload.get('candidate_bar_count', 0)}`",
+        f"- Matching bars: `{payload.get('matching_bar_count', 0)}`",
+        f"- Revised bars: `{payload.get('revised_bar_count', 0)}`",
+        f"- Missing bars: `{payload.get('missing_bar_count', 0)}`",
+        f"- Added bars: `{payload.get('added_bar_count', 0)}`",
+        f"- Network accessed: `{payload.get('network_accessed', False)}`",
+        f"- Broker contacted: `{payload.get('broker_contacted', False)}`",
+        f"- Order API invoked: `{payload.get('order_api_invoked', False)}`",
+        f"- Research eligible: `{payload.get('research_eligible', False)}`",
+        f"- Promotion eligible: `{payload.get('promotion_eligible', False)}`",
+        f"- Graduation eligible: `{payload.get('graduation_eligible', False)}`",
+        "",
+        "## Revisions",
+        "",
+    ]
+    if revisions:
+        for revision in revisions:
+            lines.append(
+                f"- `{revision.get('timestamp', 'unknown')}` "
+                f"classification=`{revision.get('classification', 'unknown')}` "
+                f"fields=`{', '.join(revision.get('changed_fields', []))}`"
+            )
+    else:
+        lines.append("- None")
+    lines.extend(_warnings_and_errors(payload.get("warnings", []), payload.get("errors", [])))
     return "\n".join(lines) + "\n"
 
 

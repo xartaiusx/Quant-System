@@ -37,6 +37,23 @@ Never put credentials in command arguments, manifests, logs, reports, shell
 history, or Git. The acquisition script does not load files from `Quant Creds`;
 the operator controls how the environment is populated.
 
+On Windows, create the user-and-machine-bound DPAPI file interactively:
+
+```powershell
+pwsh scripts/set-alpaca-spy-credentials.ps1
+```
+
+Both the key ID and secret are stored as `SecureString` fields under ignored
+`Quant Creds/Alpaca/credentials.clixml`. The EOD runner unwraps them only long
+enough to populate the acquisition child process environment and removes them
+from planner and comparator child environments. Task arguments, XML, reports,
+and logs contain no credential values.
+
+Microsoft references:
+
+- https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/export-clixml
+- https://learn.microsoft.com/en-us/windows/win32/taskschd/principal-logontype
+
 ## Plan Before Download
 
 The plan-only command reads no credentials and makes no network request:
@@ -51,6 +68,21 @@ python scripts/acquire_alpaca_spy.py `
 
 The expected result is 120 monthly closed-open partitions. The output root must
 be outside the Git worktree.
+
+Plan one completed XNYS session without reading credentials or using the
+network:
+
+```powershell
+python scripts/acquire_alpaca_spy.py `
+  --session-date 2026-07-16 `
+  --output-root D:\MarketData\Quant-System\incoming\alpaca_sip `
+  --plan-only
+```
+
+`--session-date` is mutually exclusive with the unchanged `--start/--end`
+monthly interface. It resolves the official XNYS open, close, final minute
+start, expected count, timestamp-grid hash, close-plus-20 eligibility time, and
+request fingerprint.
 
 ## Acquire
 
@@ -69,8 +101,115 @@ monthly payloads, and immutable final manifests. A repeated acquisition creates
 a separate run, allowing T+1 correction comparisons. Raw pages and acquisition
 manifests are never committed.
 
+The HTTP client rejects every redirect. Alpaca credential headers are sent only
+to the pinned HTTPS `data.alpaca.markets` request and are never forwarded to a
+redirect target.
+
 Download success is not import permission. It does not trigger catalog import,
 derivation, backtesting, experiment access, or paper execution.
+
+## Complete Session Capture
+
+After a passing rights decision, one EOD capture requests exactly the XNYS
+regular-session minute labels from the official open through the last minute
+start. Execution is rejected until at least 20 minutes after the official
+close. A normal session must contain exactly 390 timestamps; a standard early
+close must contain the calendar-derived 210 timestamps.
+
+```powershell
+python scripts/acquire_alpaca_spy.py `
+  --session-date 2026-07-16 `
+  --output-root D:\MarketData\Quant-System\incoming\alpaca_sip
+```
+
+Every HTTP response attempt, including rate-limit/error and malformed/drifted
+bodies, is stored immutably with a checksum, allowlisted request ID, retrieval
+time, HTTP status, and outcome. Interruption checkpoints retain those attempts;
+an incomplete terminal run is marked failed so a later invocation starts a new
+immutable run. A passing `acquisition_manifest.json` is published last and only
+after:
+
+- every raw-page checksum revalidates;
+- response symbol and any returned feed/adjustment/timeframe metadata match;
+- required OHLCV, trade-count, and VWAP values are valid;
+- timestamps are chronological, unique, and exactly equal the XNYS grid;
+- the deterministic compressed data file revalidates against its checksum.
+
+Each completed recapture creates a distinct immutable run. Manifests record
+session boundaries, expected and received counts, request fingerprint,
+allowlisted source response IDs, raw-page/data hashes, and false broker, order,
+catalog, research, promotion, and graduation flags.
+
+Compare two completed revisions offline:
+
+```powershell
+python -m trader.alpaca_session_compare_cli `
+  --baseline-manifest <earlier-acquisition-manifest.json> `
+  --candidate-manifest <later-acquisition-manifest.json>
+```
+
+The command is a dedicated broker-free process and imports neither IBKR/order
+modules nor the network-capable acquisition module. It revalidates both
+manifests, response attempts, contained paths, raw-to-data lineage, metadata,
+XNYS grids, and checksums before classifying OHLCV, trade-count, and VWAP
+differences. Passing same-session manifests necessarily have complete identical
+timestamp grids; a purported incomplete manifest fails closed before comparison
+instead of becoming valid correction evidence.
+
+## Rights-Gated EOD Task
+
+Preview the runner and Task Scheduler definition without reading rights,
+credentials, using the network, writing files, or changing scheduler state:
+
+```powershell
+pwsh scripts/run-alpaca-spy-eod.ps1 `
+  -OutputRoot D:\MarketData\Quant-System\incoming\alpaca_sip `
+  -CaptureStartDate 2026-07-16 -PlanOnly
+
+pwsh scripts/manage-alpaca-spy-eod-task.ps1 `
+  -Mode Plan `
+  -OutputRoot D:\MarketData\Quant-System\incoming\alpaca_sip `
+  -CaptureStartDate 2026-07-16
+```
+
+Installation and every real run require a clean committed release plus an
+authoritatively parsed `ResearchVendorDecisionReport` whose selected
+`alpaca_sip` candidate passes written-rights, bake-off, and budget gates. Each
+orchestration report records the decision SHA-256, commit, configuration
+fingerprint, and comparison-report hashes.
+The task runs at 13:30 Pacific Monday-Friday in the logged-on current-user
+context. Its runner uses XNYS—not weekdays—to skip holidays, identify the latest
+completed session, backfill every missing date since `CaptureStartDate`, and
+recapture the prior two sessions once for T+1/T+2 correction detection.
+An unmatched newest revision pair remains pending across retries until a valid
+offline comparison report exists; capture success alone cannot advance health.
+
+The installed settings are `StartWhenAvailable=true`, network required, three
+retries at 15-minute intervals, `IgnoreNew`, two-hour execution limit, and
+`WakeToRun=false`. The local no-offset start boundary follows Pacific DST.
+Missed work catches up when the logged-on machine is next available. Successful
+runs write immutable external orchestration reports plus a convenience-only
+health pointer; failures preserve diagnostics and never advance success state.
+
+Microsoft references:
+
+- https://learn.microsoft.com/en-us/windows/win32/taskschd/tasksettings-startwhenavailable
+- https://learn.microsoft.com/en-us/windows/win32/api/taskschd/nf-taskschd-itrigger-put_startboundary
+
+Install or remove only after rights approval:
+
+```powershell
+pwsh scripts/manage-alpaca-spy-eod-task.ps1 `
+  -Mode Install `
+  -OutputRoot D:\MarketData\Quant-System\incoming\alpaca_sip `
+  -CaptureStartDate 2026-07-16 `
+  -RightsDecisionReport <passing-alpaca-vendor-decision.json>
+
+pwsh scripts/manage-alpaca-spy-eod-task.ps1 -Mode Uninstall
+```
+
+Uninstall removes only a repository-owned task and leaves credentials, raw
+data, correction history, reports, and exported task XML intact.
 
 ## Rights Gate And Import
 

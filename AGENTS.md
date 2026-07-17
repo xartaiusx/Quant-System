@@ -22,6 +22,11 @@ The current project is infrastructure only. It must support research, signal gen
 - `ibkr-session-compare` must remain offline-only and broker-free. It may compare
   ignored IBKR snapshot revisions and volume-unit attestations, but it must not
   contact IBKR, evaluate signals, calculate P&L, or route execution.
+- `alpaca-session-compare` must remain offline-only and broker-free. It may load
+  only checksum-valid complete Alpaca session manifests and classify OHLCV,
+  trade-count, and VWAP corrections. It must not read credentials, use the
+  network, import acquisition or broker clients, activate catalog data, evaluate
+  signals, calculate P&L, promote research, or route execution.
 - Offline data commands must not import broker clients or contact IBKR.
 - Backtest data adapter commands must remain broker-free and must not evaluate strategies, simulate orders, or compute P&L.
 - Backtest engine skeleton commands must remain broker-free and must not evaluate strategies, simulate orders, or calculate P&L until explicitly approved in a future milestone.
@@ -30,6 +35,11 @@ The current project is infrastructure only. It must support research, signal gen
 - Research data-store commands must remain offline-only, SPY-only, and broker-free. They may register immutable instrument identity, run operator-supplied vendor bake-off/decision reports, archive licensed approved exports, create immutable raw and derived Parquet revisions, maintain catalog-v4 lineage, evidence, and experiment records, and load only passing active revisions. They must never download data implicitly, read credentials, contact IBKR, route orders, or activate failed/incomplete partitions.
 - Point-in-time research evidence commands may register immutable operator-supplied metadata, hashes, permitted excerpts, and rights-approved full documents under the external research root. They must distinguish publication, first-availability, and local-retrieval times; accept only approved official-source domains for primary evidence; keep secondary briefs hypothesis-only; and always report strategy-feature, promotion, and execution eligibility false. They must not download sources, read credentials, import broker/execution modules, evaluate signals, access sealed holdouts, or route orders.
 - `scripts/acquire_alpaca_spy.py` is the only approved Alpaca network path. It must remain SPY historical-data-only, pin `data.alpaca.markets`, read credentials from environment only, require SIP/raw/ascending one-minute bars older than the free-access boundary, write outside Git, and never import, derive, backtest, promote, or route orders. Alpaca catalog import requires a passing written-rights vendor-decision report.
+- Alpaca EOD task installation and every non-plan runner invocation require a
+  passing Alpaca vendor-decision report with written-rights, bake-off, and budget
+  gates. Plan-only modes must read no credentials, use no network, write no
+  files, and change no scheduler state. The runner may inject DPAPI-protected
+  credentials only into the acquisition child process.
 - Strategy interface scaffold commands must remain broker-free and must not generate real signals, simulate orders, or calculate P&L until explicitly approved in a future milestone.
 - Strategy runner commands must remain inert/no-op until a future milestone explicitly approves real signal generation. They must not generate orders, simulate fills, calculate P&L, or contact brokers.
 - Offline stress tests may generate synthetic fixture data only and must remain broker-free.
@@ -171,6 +181,14 @@ Compare two ignored IBKR session revisions offline:
 
 ```bash
 python -m trader.cli ibkr-session-compare --baseline-manifest <path> --candidate-manifest <path>
+python -m trader.alpaca_session_compare_cli --baseline-manifest <path> --candidate-manifest <path>
+```
+
+Plan one complete Gateway-independent SPY session and its inert Windows task:
+
+```powershell
+python scripts/acquire_alpaca_spy.py --session-date 2026-07-16 --output-root D:\MarketData\Quant-System\incoming\alpaca_sip --plan-only
+scripts/manage-alpaca-spy-eod-task.ps1 -Mode Plan -OutputRoot D:\MarketData\Quant-System\incoming\alpaca_sip -CaptureStartDate 2026-07-16
 ```
 
 Run repository safety scans:

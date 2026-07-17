@@ -12,9 +12,12 @@ from pathlib import Path
 from trader.data.alpaca_acquisition import (
     AcquisitionError,
     HistoricalDataRequest,
+    SessionDataRequest,
     acquire_historical_spy,
+    acquire_spy_session,
     acquisition_result_json,
     plan_monthly_partitions,
+    session_plan_payload,
 )
 
 
@@ -25,8 +28,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbol", default="SPY")
     parser.add_argument("--feed", default="sip")
     parser.add_argument("--timeframe", default="1Min")
-    parser.add_argument("--start", type=date.fromisoformat, required=True)
-    parser.add_argument("--end", type=date.fromisoformat, required=True)
+    parser.add_argument("--start", type=date.fromisoformat)
+    parser.add_argument("--end", type=date.fromisoformat)
+    parser.add_argument(
+        "--session-date",
+        type=date.fromisoformat,
+        help="Capture one exact completed XNYS regular session.",
+    )
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument(
         "--plan-only",
@@ -37,16 +45,48 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    request = HistoricalDataRequest(
-        symbol=args.symbol,
-        feed=args.feed,
-        timeframe=args.timeframe,
-        start=args.start,
-        end=args.end,
-        output_root=args.output_root,
-    )
+    parser = _parser()
+    args = parser.parse_args(argv)
+    session_mode = args.session_date is not None
+    range_mode = args.start is not None or args.end is not None
+    if session_mode and range_mode:
+        parser.error("--session-date is mutually exclusive with --start/--end")
+    if not session_mode and (args.start is None or args.end is None):
+        parser.error("bulk mode requires both --start and --end")
     try:
+        if session_mode:
+            request = SessionDataRequest(
+                symbol=args.symbol,
+                feed=args.feed,
+                timeframe=args.timeframe,
+                session_date=args.session_date,
+                output_root=args.output_root,
+            )
+            if args.plan_only:
+                print(
+                    json.dumps(
+                        session_plan_payload(request, now=datetime.now(UTC)),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            result = acquire_spy_session(
+                request,
+                api_key_id=os.environ.get("APCA_API_KEY_ID", ""),
+                api_secret_key=os.environ.get("APCA_API_SECRET_KEY", ""),
+            )
+            print(acquisition_result_json(result))
+            return 0
+
+        request = HistoricalDataRequest(
+            symbol=args.symbol,
+            feed=args.feed,
+            timeframe=args.timeframe,
+            start=args.start,
+            end=args.end,
+            output_root=args.output_root,
+        )
         if args.plan_only:
             plans = plan_monthly_partitions(request, now=datetime.now(UTC))
             print(
