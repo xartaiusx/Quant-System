@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import gzip
+import json
 import sqlite3
 from datetime import date
 from decimal import Decimal
@@ -18,6 +19,7 @@ from trader.data.research_store import (
 )
 from trader.models import ResearchDataAuditRequest, ResearchDataIngestRequest
 from trader.reporting.reports import markdown_summary
+from vendor_rights_helpers import write_authoritative_vendor_decision
 
 _FIELDNAMES = [
     "ticker",
@@ -147,6 +149,85 @@ def test_missing_source_fails_with_structured_evidence(tmp_path: Path) -> None:
     assert any(finding.code == "source_not_found" for finding in report.findings)
 
 
+def test_legacy_massive_ingest_requires_evidence_before_catalog_write(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "store"
+    source = _write_massive_file(
+        tmp_path / "downloads/2026-07-02.csv.gz",
+        date(2026, 7, 2),
+    )
+
+    with pytest.raises(ValidationError, match="vendor-decision report"):
+        ResearchDataIngestRequest(
+            source_path=source.as_posix(),
+            root_path=root.as_posix(),
+        )
+
+    assert root.exists() is False
+
+
+def test_legacy_massive_ingest_rejects_lookalike_before_catalog_write(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "store"
+    source = _write_massive_file(
+        tmp_path / "downloads/2026-07-02.csv.gz",
+        date(2026, 7, 2),
+    )
+    lookalike = tmp_path / "lookalike.json"
+    lookalike.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "manifest_path": "missing-manifest.json",
+                "candidate_results": [],
+                "selected_vendor": "massive",
+                "procurement_blocked": False,
+                "final_status": "selected",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = ingest_massive_minute_file(
+        ResearchDataIngestRequest(
+            source_path=source.as_posix(),
+            root_path=root.as_posix(),
+            vendor_decision_report_path=lookalike.as_posix(),
+        )
+    )
+
+    assert report.ok is False
+    assert report.findings[0].code == "vendor_rights_gate_failed"
+    assert root.exists() is False
+
+
+def test_legacy_massive_ingest_binds_exact_decision_checksum(tmp_path: Path) -> None:
+    root = tmp_path / "store"
+    source = _write_massive_file(
+        tmp_path / "downloads/2026-07-02.csv.gz",
+        date(2026, 7, 2),
+    )
+    decision = write_authoritative_vendor_decision(
+        tmp_path / "massive-rights",
+        vendor="massive",
+    )
+
+    report = ingest_massive_minute_file(
+        ResearchDataIngestRequest(
+            source_path=source.as_posix(),
+            root_path=root.as_posix(),
+            vendor_decision_report_path=decision.as_posix(),
+            vendor_decision_sha256="sha256:" + "b" * 64,
+        )
+    )
+
+    assert report.ok is False
+    assert "checksum does not match" in report.errors[0]
+    assert root.exists() is False
+
+
 def test_out_of_order_rows_fail_closed(tmp_path: Path) -> None:
     source = _write_massive_file(
         tmp_path / "downloads/2026-07-02.csv.gz",
@@ -261,9 +342,14 @@ def test_module_remains_broker_and_order_api_free() -> None:
 
 
 def _request(source: Path, root: Path) -> ResearchDataIngestRequest:
+    decision = write_authoritative_vendor_decision(
+        root.parent / f"{root.name}-massive-rights",
+        vendor="massive",
+    )
     return ResearchDataIngestRequest(
         source_path=source.as_posix(),
         root_path=root.as_posix(),
+        vendor_decision_report_path=decision.as_posix(),
     )
 
 

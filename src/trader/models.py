@@ -170,6 +170,15 @@ class IBKRSessionCompareStatus(StrEnum):
     FAILED = "failed"
 
 
+class AlpacaSessionCompareStatus(StrEnum):
+    """Offline comparison outcomes for two Alpaca session revisions."""
+
+    IDENTICAL = "identical"
+    REVISED = "revised"
+    INCOMPATIBLE = "incompatible"
+    FAILED = "failed"
+
+
 class ReportCompatibilityStatus(StrEnum):
     """Compatibility of ignored local evidence with the current report schema."""
 
@@ -1179,6 +1188,86 @@ class IBKRSessionCompareReport(SerializableModel):
         return self
 
 
+class AlpacaSessionBarRevision(SerializableModel):
+    """One timestamp-level Alpaca session difference."""
+
+    timestamp: str
+    classification: str
+    changed_fields: list[str] = Field(default_factory=list)
+    baseline: dict[str, Any] | None = None
+    candidate: dict[str, Any] | None = None
+
+
+class AlpacaSessionCompareRequest(SerializableModel):
+    """Offline request for two immutable Alpaca session manifests."""
+
+    baseline_manifest_path: str
+    candidate_manifest_path: str
+
+    @field_validator("baseline_manifest_path", "candidate_manifest_path")
+    @classmethod
+    def validate_manifest_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Alpaca session manifest paths must not be empty")
+        return normalized
+
+
+class AlpacaSessionCompareReport(SerializableModel):
+    """Broker-free correction comparison for two complete Alpaca sessions."""
+
+    title: str = "Alpaca Session Comparison"
+    report_type: str = "alpaca_session_compare"
+    command: str = "alpaca-session-compare"
+    schema_version: int = 1
+    ok: bool
+    request: AlpacaSessionCompareRequest
+    symbol: str | None = None
+    session_date: date | None = None
+    baseline_acquired_at: datetime | None = None
+    candidate_acquired_at: datetime | None = None
+    baseline_bar_count: int = 0
+    candidate_bar_count: int = 0
+    matching_bar_count: int = 0
+    revised_bar_count: int = 0
+    missing_bar_count: int = 0
+    added_bar_count: int = 0
+    parameters_compatible: bool = False
+    baseline_manifest_sha256: str | None = None
+    candidate_manifest_sha256: str | None = None
+    baseline_data_sha256: str | None = None
+    candidate_data_sha256: str | None = None
+    revisions: list[AlpacaSessionBarRevision] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    broker_contacted: bool = False
+    network_accessed: bool = False
+    submitted_orders: bool = False
+    paper_orders_enabled: bool = False
+    order_api_invoked: bool = False
+    research_eligible: bool = False
+    promotion_eligible: bool = False
+    graduation_eligible: bool = False
+    final_status: AlpacaSessionCompareStatus
+    timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_alpaca_compare_safety(self) -> AlpacaSessionCompareReport:
+        unsafe = (
+            self.broker_contacted
+            or self.network_accessed
+            or self.submitted_orders
+            or self.paper_orders_enabled
+            or self.order_api_invoked
+            or self.research_eligible
+            or self.promotion_eligible
+            or self.graduation_eligible
+        )
+        if unsafe:
+            raise ValueError("alpaca-session-compare must remain offline and non-promoting")
+        return self
+
+
 class HistoricalDataQualityIssue(SerializableModel):
     """One validation issue found in a historical snapshot."""
 
@@ -1782,6 +1871,11 @@ class BacktestRunReport(SerializableModel):
     timestamp: datetime = Field(default_factory=utc_now)
 
 
+_RESEARCH_DATA_RIGHTS_VENDORS = frozenset(
+    {"alpaca_sip", "massive", "algoseek", "databento", "norgate"}
+)
+
+
 class ResearchDataIngestRequest(SerializableModel):
     """Offline SPY SIP minute-aggregate ingestion request."""
 
@@ -1793,6 +1887,7 @@ class ResearchDataIngestRequest(SerializableModel):
     price_view: str = "raw"
     rth_only: bool = True
     vendor_decision_sha256: str | None = None
+    vendor_decision_report_path: str | None = None
 
     @field_validator("symbol", mode="before")
     @classmethod
@@ -1838,12 +1933,22 @@ class ResearchDataIngestRequest(SerializableModel):
             raise ValueError("vendor-decision evidence must be a SHA-256")
         return f"sha256:{digest}"
 
+    @field_validator("vendor_decision_report_path", mode="before")
+    @classmethod
+    def normalize_vendor_decision_report_path(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
     @model_validator(mode="after")
     def validate_scope(self) -> ResearchDataIngestRequest:
         if not self.rth_only:
             raise ValueError("research data ingestion requires XNYS regular hours")
-        if self.source_name == "alpaca_sip" and self.vendor_decision_sha256 is None:
-            raise ValueError("alpaca_sip ingestion requires a vendor-decision SHA-256")
+        if self.vendor_decision_report_path is None:
+            raise ValueError(
+                f"{self.source_name} ingestion requires a passing vendor-decision report"
+            )
         return self
 
 
@@ -2204,13 +2309,22 @@ class ResearchCanonicalDailyIngestRequest(SerializableModel):
     dataset: str = "daily_bars_v1"
     symbol: str = "SPY"
     price_view: str = "raw"
+    vendor_decision_report_path: str | None = None
 
-    @field_validator("source_path", "root_path", "source_name", "dataset")
+    @field_validator("source_path", "root_path", "dataset")
     @classmethod
     def validate_text(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
             raise ValueError("daily ingestion text fields must not be empty")
+        return normalized
+
+    @field_validator("source_name", mode="before")
+    @classmethod
+    def normalize_source_name(cls, value: object) -> str:
+        normalized = str(value).strip().lower()
+        if normalized not in _RESEARCH_DATA_RIGHTS_VENDORS:
+            raise ValueError("daily ingestion requires a supported rights-gated vendor")
         return normalized
 
     @field_validator("symbol")
@@ -2226,6 +2340,26 @@ class ResearchCanonicalDailyIngestRequest(SerializableModel):
         if value.strip().lower() != "raw":
             raise ValueError("canonical daily ingestion must preserve raw prices")
         return "raw"
+
+    @field_validator("vendor_decision_report_path", mode="before")
+    @classmethod
+    def normalize_vendor_decision_report_path(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_vendor_rights(self) -> ResearchCanonicalDailyIngestRequest:
+        if (
+            self.source_name in _RESEARCH_DATA_RIGHTS_VENDORS
+            and self.vendor_decision_report_path is None
+        ):
+            raise ValueError(
+                f"{self.source_name} daily ingestion requires a passing "
+                "vendor-decision report"
+            )
+        return self
 
 
 class ResearchCanonicalDailyIngestReport(SerializableModel):
@@ -2277,11 +2411,11 @@ class ResearchCorporateActionIngestRequest(SerializableModel):
     coverage_start: str
     coverage_end: str
     complete: bool = True
+    vendor_decision_report_path: str | None = None
 
     @field_validator(
         "source_path",
         "root_path",
-        "source_name",
         "dataset",
         "coverage_start",
         "coverage_end",
@@ -2293,12 +2427,30 @@ class ResearchCorporateActionIngestRequest(SerializableModel):
             raise ValueError("corporate-action ingestion text fields must not be empty")
         return normalized
 
+    @field_validator("source_name", mode="before")
+    @classmethod
+    def normalize_source_name(cls, value: object) -> str:
+        normalized = str(value).strip().lower()
+        if normalized not in _RESEARCH_DATA_RIGHTS_VENDORS:
+            raise ValueError(
+                "corporate-action ingestion requires a supported rights-gated vendor"
+            )
+        return normalized
+
     @field_validator("symbol")
     @classmethod
     def validate_spy(cls, value: str) -> str:
         if value.strip().upper() != "SPY":
             raise ValueError("corporate-action ingestion is SPY-only")
         return "SPY"
+
+    @field_validator("vendor_decision_report_path", mode="before")
+    @classmethod
+    def normalize_vendor_decision_report_path(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
 
     @model_validator(mode="after")
     def validate_coverage(self) -> ResearchCorporateActionIngestRequest:
@@ -2308,6 +2460,14 @@ class ResearchCorporateActionIngestRequest(SerializableModel):
             raise ValueError("corporate-action coverage_start must not exceed coverage_end")
         if not self.complete:
             raise ValueError("derived views require a complete corporate-action set")
+        if (
+            self.source_name in _RESEARCH_DATA_RIGHTS_VENDORS
+            and self.vendor_decision_report_path is None
+        ):
+            raise ValueError(
+                f"{self.source_name} corporate-action ingestion requires a passing "
+                "vendor-decision report"
+            )
         return self
 
 
@@ -2360,6 +2520,8 @@ class ResearchDataBatchImportRequest(SerializableModel):
     def validate_vendor_kind(self) -> ResearchDataBatchImportRequest:
         kind = str(self.kind)
         vendor = self.vendor.strip().lower()
+        if vendor not in _RESEARCH_DATA_RIGHTS_VENDORS:
+            raise ValueError("batch import requires a supported rights-gated vendor")
         if kind == ResearchSampleKind.FIVE_MINUTE_BARS:
             raise ValueError("five-minute samples are bake-off evidence only")
         if kind == ResearchSampleKind.MINUTE_BARS and vendor not in {
@@ -2367,13 +2529,9 @@ class ResearchDataBatchImportRequest(SerializableModel):
             "alpaca_sip",
         }:
             raise ValueError("minute-bar batch import requires massive or alpaca_sip")
-        if (
-            kind == ResearchSampleKind.MINUTE_BARS
-            and vendor == "alpaca_sip"
-            and not (self.vendor_decision_report_path or "").strip()
-        ):
+        if not (self.vendor_decision_report_path or "").strip():
             raise ValueError(
-                "alpaca_sip import requires a passing vendor-decision report"
+                f"{vendor} import requires a passing vendor-decision report"
             )
         if kind == ResearchSampleKind.CORPORATE_ACTIONS and (
             not self.coverage_start or not self.coverage_end

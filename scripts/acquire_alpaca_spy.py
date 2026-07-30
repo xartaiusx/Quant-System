@@ -12,9 +12,16 @@ from pathlib import Path
 from trader.data.alpaca_acquisition import (
     AcquisitionError,
     HistoricalDataRequest,
+    SessionDataRequest,
     acquire_historical_spy,
+    acquire_spy_session,
     acquisition_result_json,
     plan_monthly_partitions,
+    session_plan_payload,
+)
+from trader.data.alpaca_rights_gate import (
+    AlpacaRightsGateError,
+    load_passing_alpaca_rights_decision,
 )
 
 
@@ -25,9 +32,29 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbol", default="SPY")
     parser.add_argument("--feed", default="sip")
     parser.add_argument("--timeframe", default="1Min")
-    parser.add_argument("--start", type=date.fromisoformat, required=True)
-    parser.add_argument("--end", type=date.fromisoformat, required=True)
+    parser.add_argument("--start", type=date.fromisoformat)
+    parser.add_argument("--end", type=date.fromisoformat)
+    parser.add_argument(
+        "--session-date",
+        type=date.fromisoformat,
+        help="Capture one exact completed XNYS regular session.",
+    )
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument(
+        "--vendor-decision-report",
+        type=Path,
+        help=(
+            "Authoritative passing Alpaca vendor-decision report. Required for "
+            "every non-plan acquisition."
+        ),
+    )
+    parser.add_argument(
+        "--expected-vendor-decision-sha256",
+        help=(
+            "Pinned SHA-256 of the validated vendor-decision report. Required for "
+            "every non-plan acquisition."
+        ),
+    )
     parser.add_argument(
         "--plan-only",
         action="store_true",
@@ -36,17 +63,81 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _load_pinned_rights_evidence(
+    report_path: Path | None,
+    expected_sha256: str | None,
+) -> tuple[Path, str]:
+    if report_path is None:
+        raise AlpacaRightsGateError(
+            "--vendor-decision-report is required for non-plan acquisition"
+        )
+    if expected_sha256 is None:
+        raise AlpacaRightsGateError(
+            "--expected-vendor-decision-sha256 is required for non-plan acquisition"
+        )
+    expected = expected_sha256.strip().lower()
+    if len(expected) != 64 or any(
+        character not in "0123456789abcdef" for character in expected
+    ):
+        raise AlpacaRightsGateError("expected vendor-decision SHA-256 is invalid")
+    evidence = load_passing_alpaca_rights_decision(report_path)
+    actual = evidence.report_sha256.strip().lower()
+    if actual != expected:
+        raise AlpacaRightsGateError(
+            "vendor-decision report SHA-256 does not match the pinned digest"
+        )
+    return evidence.report_path, actual
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    request = HistoricalDataRequest(
-        symbol=args.symbol,
-        feed=args.feed,
-        timeframe=args.timeframe,
-        start=args.start,
-        end=args.end,
-        output_root=args.output_root,
-    )
+    parser = _parser()
+    args = parser.parse_args(argv)
+    session_mode = args.session_date is not None
+    range_mode = args.start is not None or args.end is not None
+    if session_mode and range_mode:
+        parser.error("--session-date is mutually exclusive with --start/--end")
+    if not session_mode and (args.start is None or args.end is None):
+        parser.error("bulk mode requires both --start and --end")
     try:
+        if session_mode:
+            request = SessionDataRequest(
+                symbol=args.symbol,
+                feed=args.feed,
+                timeframe=args.timeframe,
+                session_date=args.session_date,
+                output_root=args.output_root,
+            )
+            if args.plan_only:
+                print(
+                    json.dumps(
+                        session_plan_payload(request, now=datetime.now(UTC)),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            decision_path, decision_sha256 = _load_pinned_rights_evidence(
+                args.vendor_decision_report,
+                args.expected_vendor_decision_sha256,
+            )
+            result = acquire_spy_session(
+                request,
+                api_key_id=os.environ.get("APCA_API_KEY_ID", ""),
+                api_secret_key=os.environ.get("APCA_API_SECRET_KEY", ""),
+                vendor_decision_report=decision_path,
+                vendor_decision_sha256=decision_sha256,
+            )
+            print(acquisition_result_json(result))
+            return 0
+
+        request = HistoricalDataRequest(
+            symbol=args.symbol,
+            feed=args.feed,
+            timeframe=args.timeframe,
+            start=args.start,
+            end=args.end,
+            output_root=args.output_root,
+        )
         if args.plan_only:
             plans = plan_monthly_partitions(request, now=datetime.now(UTC))
             print(
@@ -71,16 +162,22 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
+        decision_path, decision_sha256 = _load_pinned_rights_evidence(
+            args.vendor_decision_report,
+            args.expected_vendor_decision_sha256,
+        )
         api_key_id = os.environ.get("APCA_API_KEY_ID", "")
         api_secret_key = os.environ.get("APCA_API_SECRET_KEY", "")
         result = acquire_historical_spy(
             request,
             api_key_id=api_key_id,
             api_secret_key=api_secret_key,
+            vendor_decision_report=decision_path,
+            vendor_decision_sha256=decision_sha256,
         )
         print(acquisition_result_json(result))
         return 0
-    except AcquisitionError as exc:
+    except (AcquisitionError, AlpacaRightsGateError) as exc:
         print(f"Acquisition failed closed: {exc}", file=sys.stderr)
         return 1
 

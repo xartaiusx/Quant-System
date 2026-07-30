@@ -30,6 +30,7 @@ dev = [
 
 [project.scripts]
 trader = "trader.cli:app"
+alpaca-session-compare = "trader.alpaca_session_compare_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

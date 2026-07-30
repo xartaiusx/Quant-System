@@ -22,14 +22,25 @@ The current project is infrastructure only. It must support research, signal gen
 - `ibkr-session-compare` must remain offline-only and broker-free. It may compare
   ignored IBKR snapshot revisions and volume-unit attestations, but it must not
   contact IBKR, evaluate signals, calculate P&L, or route execution.
+- `alpaca-session-compare` must remain offline-only and broker-free. It may load
+  only checksum-valid complete Alpaca session manifests and classify OHLCV,
+  trade-count, and VWAP corrections. It must not read credentials, use the
+  network, import acquisition or broker clients, activate catalog data, evaluate
+  signals, calculate P&L, promote research, or route execution.
 - Offline data commands must not import broker clients or contact IBKR.
 - Backtest data adapter commands must remain broker-free and must not evaluate strategies, simulate orders, or compute P&L.
 - Backtest engine skeleton commands must remain broker-free and must not evaluate strategies, simulate orders, or calculate P&L until explicitly approved in a future milestone.
 - `research-backtest` is the approved broker-free SPY simulator. Operator runs must load passing active catalog revisions: split-adjusted five-minute bars for signals, raw five-minute bars for simulated execution, and the daily total-return benchmark. It may use the shared SPY target-state policy, simulate price-protected `LMT DAY` orders, partial fills, cancellations, capital events, explicit costs, portfolio accounting, and P&L. It must not import broker or execution modules, contact IBKR, invoke order APIs, expand beyond SPY, or report automatic promotion eligibility.
 - `research-walk-forward` may run predeclared SPY candidates over chronological folds, but tracked `research-experiment-register` plus `research-experiment-run` are the authoritative final-holdout gate. Registration requires a clean committed release and permanently seals holdout dates. Generic catalog loaders must reject sealed overlap. Final access requires the exact preregistered confirmation, records one append-only catalog access row before reading data, and uses only the capability-scoped final-holdout loader. A consumed experiment must never be rerun or tuned against.
 - Research data-store commands must remain offline-only, SPY-only, and broker-free. They may register immutable instrument identity, run operator-supplied vendor bake-off/decision reports, archive licensed approved exports, create immutable raw and derived Parquet revisions, maintain catalog-v4 lineage, evidence, and experiment records, and load only passing active revisions. They must never download data implicitly, read credentials, contact IBKR, route orders, or activate failed/incomplete partitions.
+- Every direct or batch import for Alpaca, Massive, AlgoSeek, Databento, or Norgate must authoritatively recompute a same-vendor, same-data-kind passing vendor-decision chain before any catalog, archive, or activation write. Minute imports additionally require that vendor's own locked normal-session, early-close, pre/post-DST, correction, and cross-vendor overlap cases.
 - Point-in-time research evidence commands may register immutable operator-supplied metadata, hashes, permitted excerpts, and rights-approved full documents under the external research root. They must distinguish publication, first-availability, and local-retrieval times; accept only approved official-source domains for primary evidence; keep secondary briefs hypothesis-only; and always report strategy-feature, promotion, and execution eligibility false. They must not download sources, read credentials, import broker/execution modules, evaluate signals, access sealed holdouts, or route orders.
 - `scripts/acquire_alpaca_spy.py` is the only approved Alpaca network path. It must remain SPY historical-data-only, pin `data.alpaca.markets`, read credentials from environment only, require SIP/raw/ascending one-minute bars older than the free-access boundary, write outside Git, and never import, derive, backtest, promote, or route orders. Alpaca catalog import requires a passing written-rights vendor-decision report.
+- Alpaca EOD task installation and every non-plan runner invocation require a
+  passing Alpaca vendor-decision report with written-rights, bake-off, and budget
+  gates. Plan-only modes must read no credentials, use no network, write no
+  files, and change no scheduler state. The runner may inject DPAPI-protected
+  credentials only into the acquisition child process.
 - Strategy interface scaffold commands must remain broker-free and must not generate real signals, simulate orders, or calculate P&L until explicitly approved in a future milestone.
 - Strategy runner commands must remain inert/no-op until a future milestone explicitly approves real signal generation. They must not generate orders, simulate fills, calculate P&L, or contact brokers.
 - Offline stress tests may generate synthetic fixture data only and must remain broker-free.
@@ -160,7 +171,7 @@ python -m trader.cli research-evidence-register --manifest <local-evidence.json>
 python -m trader.cli research-evidence-audit --as-of <timezone-aware-timestamp>
 python -m trader.cli research-instrument-register --manifest research/instruments/spy_v1.json
 python -m trader.cli research-experiment-register --spec research/experiments/spy_sma_2016_2025_v2.json --supersedes-spec research/experiments/spy_sma_2016_2025_v1.json
-python -m trader.cli research-data-import-batch --source-dir <licensed-files> --vendor massive --kind minute_bars
+python -m trader.cli research-data-import-batch --source-dir <licensed-files> --vendor massive --kind minute_bars --vendor-decision-report <passing-massive-decision-report.json>
 python -m trader.cli research-data-derive
 python -m trader.cli research-catalog-load --price-view split_adjusted_signal
 python -m trader.cli research-backtest --symbol SPY
@@ -171,6 +182,14 @@ Compare two ignored IBKR session revisions offline:
 
 ```bash
 python -m trader.cli ibkr-session-compare --baseline-manifest <path> --candidate-manifest <path>
+python -m trader.alpaca_session_compare_cli --baseline-manifest <path> --candidate-manifest <path>
+```
+
+Plan one complete Gateway-independent SPY session and its inert Windows task:
+
+```powershell
+python scripts/acquire_alpaca_spy.py --session-date 2026-07-16 --output-root D:\MarketData\Quant-System\incoming\alpaca_sip --plan-only
+scripts/manage-alpaca-spy-eod-task.ps1 -Mode Plan -OutputRoot D:\MarketData\Quant-System\incoming\alpaca_sip -CaptureStartDate 2026-07-16
 ```
 
 Run repository safety scans:

@@ -32,9 +32,9 @@
 - Milestone 19 implemented: broker-free analytical evaluator comparison diagnostics.
 - One versioned, fingerprinted, broker-free `SPYSmaPolicy` now supplies completed-
   bar FLAT/LONG target state to both research and alpha-shadow paths.
-- Offline SPY vendor bake-off validates manually supplied Massive/Norgate samples,
-  session alignment, corrections, overlap, corporate-action fixtures, checksums,
-  and written data rights without network or credential access.
+- Offline SPY vendor bake-off validates manually supplied provider/data-kind
+  samples, session alignment, corrections, overlap, corporate-action fixtures,
+  checksums, and written data rights without network or credential access.
 - Catalog schema v4 adds deterministic batch imports, corporate-action sets,
   immutable derived revisions, parent lineage, permanent holdout seals,
   experiment supersession/access records, versioned SPY identity, and immutable
@@ -45,6 +45,18 @@
   execution eligibility.
 - Offline vendor decisions enforce written-rights and budget hard gates before
   weighted technical scoring; contracts and responses remain outside Git.
+- Gateway-independent Alpaca session capture resolves exact XNYS one-minute
+  grids, enforces close plus 20 minutes, retains failed raw pages, and publishes
+  immutable passing manifests only after completeness and checksum validation.
+- Offline `alpaca-session-compare` classifies immutable OHLCV, trade-count, and
+  VWAP corrections without credentials, network, broker, catalog, or execution
+  access. Rights-gated Windows EOD tooling plans catch-up and T+1/T+2 recapture,
+  stores both credential fields with DPAPI, and exposes an inert plan mode plus
+  guarded install/uninstall task modes.
+- Mocked acquisition, retry, correction, early-close, DST, DPAPI/ACL, redirect,
+  mixed-case/junction boundary, and plan-only acceptance pass. No production
+  credential, active Task Scheduler entry, Alpaca request, catalog activation,
+  or order path was created or used.
 - Dual research views are implemented: raw five-minute execution bars,
   split-adjusted five-minute signal bars, and a daily total-return benchmark.
 - Catalog loading fails closed on stale parents, inactive revisions, checksum
@@ -140,9 +152,18 @@
 
 ## Current Blockers
 
-- No vendor has yet supplied written rights and passing sample evidence for the
-  required uses; standard published Massive/Norgate terms remain provisionally
-  insufficient for post-cancellation retention.
+- No vendor has yet supplied written rights and passing provider/data-kind sample
+  evidence for the required uses; standard published Massive/Norgate terms remain
+  provisionally insufficient for post-cancellation retention and private reuse
+  of raw observations, backups, correction revisions, and derived artifacts.
+- The common five-vendor RFI exists as five verified Gmail drafts held for the
+  final data-farm gate. No message or vendor response is recorded as sent.
+- Read-only dashboard review found Massive authenticated on its free Stocks
+  Basic tier with zero REST use, while Alpaca is authenticated in Paper Trading
+  but requires user-completed MFA before its entitlement can be verified. The
+  visible AlgoSeek Console remained on its public unauthenticated marketplace;
+  this audit started no trial, demo, download, API/SQL use, purchase, or direct
+  provider communication.
 - The canonical catalog has not yet been populated with licensed 2016-2025 SPY
   minute data and approved inception-through-2025 daily/corporate-action data.
 - The preregistered development/final-holdout experiment cannot run until those
@@ -166,8 +187,10 @@
 - IB Gateway paper on `127.0.0.1:4002` accepted a read-only broker probe.
 - The July 13 dated Gateway baseline contains exactly `78` delayed SPY
   five-minute bars from `09:30` through `15:55` ET, passed OHLC/volume/hash
-  checks, and records every order flag false. Its T+1 comparison remains
-  scheduled and the evidence is non-graduating.
+  checks, and records every order flag false. The July 14 T+1 recapture retained
+  all 78 timestamps and classified `57` matching plus `21` revised bars, with no
+  baseline-only or candidate-only bars. Volume remains non-authoritative until
+  Gateway units are attested; the evidence is non-graduating.
 - The latest July 13 delayed Gateway daemon completed `5/5` clean cycles with
   broker/account verification and no order API use. It remains explicitly
   ineligible for strict-live graduation or paper-daemon implementation.
@@ -215,32 +238,45 @@
 - `ibkr-delayed-data-diagnostics` consumes only the delayed probe alias;
   `alpha-shadow-daemon-delayed` remains read-only and non-graduating while live
   SPY API data is unavailable.
+- The two weekday delayed-shadow Codex schedules were retired after preserving
+  their final evidence. Their late evening runs repeatedly failed the 30-minute
+  freshness gate and cannot support canonical research collection, strict-live
+  graduation, or paper-daemon eligibility.
 - Dated `history-snapshot` captures now support timezone-aware end times and
   volume-unit attestations. Offline `ibkr-session-compare` classifies T+1
   revisions without broker contact.
 
 ## Next Recommended Steps
 
-1. Complete the July 13 T+1 Gateway recapture and classify every session
-   revision without treating delayed evidence as graduating.
-2. Register current briefs as metadata-only secondary hypotheses, then add
+1. Review the five prepared Gmail drafts, but keep them unsent until the user
+   explicitly opens the final data-farm gate. Enable no recurring acquisition
+   and make no purchase until written storage, private automated research,
+   derived-use, backup, correction-retention, and post-cancellation rights pass.
+2. Complete the offline provider-boundary hardening and review the mocked and
+   plan-only acceptance evidence. Use the provider-neutral immutable-manifest
+   and catalog contract in `docs/DATA_PROVIDER_SETUP.md`; do not add speculative
+   SDKs or generic runtime switching. Keep Massive MCP, provider API calls,
+   demos/trials, production credentials and the active Windows task absent until
+   written evidence first authorizes the exact provider/data-kind sample or use.
+3. Register current briefs as metadata-only secondary hypotheses, then add
    official EIA/NOAA/USDA/CFTC/FRED/SEC releases only with exact point-in-time
    provenance. Do not expose evidence to strategy code.
-3. Send the common RFI and complete the offline bake-off/vendor decision,
-   including written rights and trial/export validation, before purchasing.
-4. Import licensed 2016-2025 SPY minute files plus approved daily/action
+4. Only after written evidence authorizes the exact sample or trial, obtain the
+   applicable provider/data-kind files, complete the offline bake-off, and issue
+   the vendor decision before purchasing.
+5. Import licensed 2016-2025 SPY minute files plus approved daily/action
    history, derive all views, and require passing catalog load/audit evidence.
-5. Run v2 development only. Do not use the final-holdout confirmation until
+6. Run v2 development only. Do not use the final-holdout confirmation until
    development, lineage, cost calibration, and independent review are complete.
-6. Fund/subscribe the IBKR account for live SPY API market data and complete the
+7. Fund/subscribe the IBKR account for live SPY API market data and complete the
    required API acknowledgement; delayed mode remains non-graduating.
-7. Collect five clean strict-live sessions on five XNYS dates to unlock a separate
+8. Collect five clean strict-live sessions on five XNYS dates to unlock a separate
    paper-daemon implementation milestone.
-8. Collect ten clean strict-live sessions across opening, midday, and closing
+9. Collect ten clean strict-live sessions across opening, midday, and closing
    windows before any lifecycle engineering pilot.
-9. Require `research_review_ready=true` in addition to operational evidence
+10. Require `research_review_ready=true` in addition to operational evidence
    before any strategy-driven paper alpha mode.
-10. Keep the paper daemon unimplemented until those gates pass. Continue manual
+11. Keep the paper daemon unimplemented until those gates pass. Continue manual
    reconciliation, summary, and ledger updates after every approved paper window.
-11. Keep GLD/USO research-only, DBA excluded, and direct futures blocked until a
+12. Keep GLD/USO research-only, DBA excluded, and direct futures blocked until a
    separate contract/roll/margin/liquidity/permission/delivery-risk program exists.

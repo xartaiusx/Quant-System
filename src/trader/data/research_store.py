@@ -25,6 +25,10 @@ import exchange_calendars as xcals  # type: ignore[import-untyped]
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
+from trader.data.alpaca_rights_gate import (
+    VendorRightsGateError,
+    load_passing_vendor_rights_decision,
+)
 from trader.models import (
     ResearchDataArtifact,
     ResearchDataAuditReport,
@@ -88,7 +92,7 @@ def ingest_massive_minute_file(
 
     if request.source_name != "massive":
         raise ValueError("Massive ingestion requires source_name=massive")
-    return _ingest_minute_file(request)
+    return _ingest_rights_authorized_minute_file(request)
 
 
 def ingest_alpaca_sip_minute_file(
@@ -98,7 +102,44 @@ def ingest_alpaca_sip_minute_file(
 
     if request.source_name != "alpaca_sip":
         raise ValueError("Alpaca SIP ingestion requires source_name=alpaca_sip")
-    return _ingest_minute_file(request)
+    return _ingest_rights_authorized_minute_file(request)
+
+
+def _ingest_rights_authorized_minute_file(
+    request: ResearchDataIngestRequest,
+) -> ResearchDataIngestReport:
+    """Validate authoritative vendor evidence before initializing the catalog."""
+
+    root = Path(request.root_path).expanduser().resolve()
+    catalog_path = root / CATALOG_RELATIVE_PATH
+    try:
+        evidence = load_passing_vendor_rights_decision(
+            Path(request.vendor_decision_report_path or ""),
+            expected_vendor=request.source_name,
+            required_data_kind="minute_bars",
+        )
+        evidence_sha256 = f"sha256:{evidence.report_sha256}"
+        if (
+            request.vendor_decision_sha256 is not None
+            and request.vendor_decision_sha256 != evidence_sha256
+        ):
+            raise VendorRightsGateError(
+                "vendor-decision report checksum does not match the request"
+            )
+    except VendorRightsGateError as exc:
+        message = f"vendor-decision authorization failed: {exc}"
+        return _failed_ingest_report(
+            request,
+            root=root,
+            catalog_path=catalog_path,
+            warnings=["Offline research-data ingestion only; no broker contacted"],
+            errors=[message],
+            findings=[_finding("error", "vendor_rights_gate_failed", message)],
+        )
+    authorized_request = request.model_copy(
+        update={"vendor_decision_sha256": evidence_sha256}
+    )
+    return _ingest_minute_file(authorized_request)
 
 
 def _ingest_minute_file(

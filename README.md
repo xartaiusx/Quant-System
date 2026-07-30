@@ -24,6 +24,8 @@ This project is infrastructure-first. It is not a profitability claim or a live 
   checksum-valid catalog loading.
 - Standalone, resumable historical Alpaca SPY SIP acquisition with immutable
   checksums and a fail-closed written-rights import gate; Alpaca is data-only.
+- Calendar-exact Alpaca EOD session capture, offline T+1/T+2 revision comparison,
+  and rights-gated Windows Task Scheduler tooling that does not require IB Gateway.
 - Read-only IBKR TWS / IB Gateway broker probe with current-time diagnostics.
 - Masked managed-account discovery when the broker API is reachable.
 - Read-only IBKR market-data diagnostics for contract resolution, delayed quote capture,
@@ -155,15 +157,18 @@ python -m trader.cli backtest-feed --symbols SPY,AAPL
 python -m trader.cli backtest-feed --symbols SPY,AAPL --alignment intersection
 python -m trader.cli backtest-run --symbols SPY,AAPL
 python -m trader.cli backtest-run --symbols SPY,AAPL --alignment intersection
-python -m trader.cli research-data-ingest --source-file <licensed-massive.csv.gz>
+python -m trader.cli research-data-ingest --source-file <licensed-massive.csv.gz> --vendor-decision-report <passing-massive-decision-report.json>
 python -m trader.cli research-data-audit
 python -m trader.cli research-data-bakeoff --manifest <local-manifest.json>
 python -m trader.cli research-vendor-decision --manifest <local-decision.json>
 python -m trader.cli research-evidence-register --manifest <local-evidence.json>
 python -m trader.cli research-evidence-audit --as-of <timezone-aware-timestamp>
 python scripts/acquire_alpaca_spy.py --symbol SPY --feed sip --timeframe 1Min --start 2016-01-01 --end 2025-12-31 --output-root D:\MarketData\Quant-System\incoming\alpaca_sip --plan-only
+python scripts/acquire_alpaca_spy.py --session-date 2026-07-16 --output-root D:\MarketData\Quant-System\incoming\alpaca_sip --plan-only
+python -m trader.alpaca_session_compare_cli --baseline-manifest <earlier-manifest.json> --candidate-manifest <later-manifest.json>
+pwsh scripts/manage-alpaca-spy-eod-task.ps1 -Mode Plan -OutputRoot D:\MarketData\Quant-System\incoming\alpaca_sip -CaptureStartDate 2026-07-16
 python -m trader.cli research-instrument-register --manifest research/instruments/spy_v1.json
-python -m trader.cli research-data-import-batch --source-dir <licensed-files> --vendor massive --kind minute_bars
+python -m trader.cli research-data-import-batch --source-dir <licensed-files> --vendor massive --kind minute_bars --vendor-decision-report <passing-massive-decision-report.json>
 python -m trader.cli research-data-derive
 python -m trader.cli research-catalog-load --price-view split_adjusted_signal
 python -m trader.cli research-backtest --symbol SPY --short-window 5 --long-window 20
@@ -252,6 +257,15 @@ simulation work. `--end-datetime` accepts a timezone-aware ISO timestamp and
 ignored revisions offline and treats volume differences as authoritative only
 when both manifests attest the same non-unknown unit. The snapshots are
 generated artifacts and are ignored by Git.
+
+Gateway-independent research capture uses historical Alpaca SIP raw one-minute
+bars after XNYS close plus 20 minutes. Session mode requires the exact calendar
+grid (390 minutes normally or 210 on a standard early close), publishes its
+immutable manifest only after page/data checksum validation, and remains
+`research_eligible=false`. `alpaca-session-compare` validates two complete
+manifests and classifies OHLCV, trade-count, and VWAP corrections entirely
+offline. Windows task installation remains blocked until an Alpaca vendor
+decision passes written-rights, technical bake-off, and budget gates.
 
 `history-index`, `history-load`, and `history-inspect` are offline-only. They
 read local snapshot JSONL and manifest files, normalize bars into reusable

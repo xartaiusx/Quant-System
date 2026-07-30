@@ -8,6 +8,7 @@ from pathlib import Path
 _BLOCKED_SUFFIXES = (
     ".csv",
     ".csv.gz",
+    ".clixml",
     ".db",
     ".json.gz",
     ".jsonl",

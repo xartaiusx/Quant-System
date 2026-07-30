@@ -980,6 +980,13 @@ def research_data_ingest(
         Path,
         typer.Option("--source-file", help="Licensed Massive minute aggregate CSV or CSV.gz."),
     ],
+    vendor_decision_report: Annotated[
+        Path,
+        typer.Option(
+            "--vendor-decision-report",
+            help="Authoritative passing Massive rights-first decision report.",
+        ),
+    ],
     root: Annotated[
         Path,
         typer.Option("--root", help="External immutable research-data store root."),
@@ -1001,6 +1008,7 @@ def research_data_ingest(
         source_path=source_file.as_posix(),
         root_path=root.as_posix(),
         symbol=symbol,
+        vendor_decision_report_path=vendor_decision_report.as_posix(),
     )
     report = ingest_massive_minute_file(request)
     json_path, md_path = Journal().write_cycle("research_data_ingest", _report_dict(report))
@@ -1213,7 +1221,10 @@ def research_data_import_batch(
         Path | None,
         typer.Option(
             "--vendor-decision-report",
-            help="Passing rights-first decision report required for alpaca_sip imports.",
+            help=(
+                "Authoritative passing rights-first decision report required for "
+                "every supported provider import."
+            ),
         ),
     ] = None,
 ) -> None:
